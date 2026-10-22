@@ -98,6 +98,13 @@ public:
 	void setPlayerList (const std::vector<cPlayerBasicData>&);
 	const cPlayer* getActiveTurnPlayer() const;
 
+	/**
+	* True while a player's turn is active and the active player has not yet
+	* finished. Used by the headless deterministic tick to freeze unit movement/
+	* attacks while the AI is deciding (see cGameTimerServer::deterministicTick).
+	*/
+	bool isTurnActiveAndUnfinished() const;
+
 	std::shared_ptr<const cTurnCounter> getTurnCounter() const;
 	std::shared_ptr<const cTurnTimeClock> getTurnTimeClock() const;
 

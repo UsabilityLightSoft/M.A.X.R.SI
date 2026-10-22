@@ -63,6 +63,12 @@ public:
 	void loadGameState (int saveGameNumber);
 	void sendGuiInfoToClients (int saveGameNumber, int playerNr = -1);
 
+	/**
+	* Headless-only: enable deterministic turn ticking (see
+	* cGameTimerServer::deterministicTick). Must be called before start().
+	*/
+	void setDeterministicTick (bool value);
+
 	void resyncClientModel (int playerNr = -1) const;
 	void enableFreezeMode (eFreezeMode mode);
 	void disableFreezeMode (eFreezeMode mode);

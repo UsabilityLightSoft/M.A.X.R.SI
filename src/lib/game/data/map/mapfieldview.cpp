@@ -21,16 +21,6 @@
 
 #include "game/data/player/player.h"
 #include "map.h"
-#include "utility/listhelpers.h"
-
-namespace
-{
-	//--------------------------------------------------------------------------
-	auto makeFilterUnitSeenByPlayer (const cPlayer& player, const cMapField& mapField, const sTerrain& terrain)
-	{
-		return [&] (const cUnit* unit) { return player.canSeeUnit (*unit, mapField, terrain); };
-	}
-} // namespace
 
 //------------------------------------------------------------------------------
 cMapFieldView::cMapFieldView (const cMapField& mapField, const sTerrain& terrain, const cPlayer* player) :
@@ -170,7 +160,18 @@ std::vector<cBuilding*> cMapFieldView::getBuildings() const
 	{
 		return mapField.getBuildings();
 	}
-	return Filter (mapField.getBuildings(), makeFilterUnitSeenByPlayer (*player, mapField, terrain));
+	// Build the visible list directly. The old code used Filter(), which copies
+	// the raw vector and then erase_if()s it — that allocates even when the
+	// player sees nothing (e.g. a field with only unseen enemy buildings).
+	// push_back without a pre-reserve allocates nothing when the result is
+	// empty, which is the common case during pathfinding.
+	std::vector<cBuilding*> result;
+	for (cBuilding* building : mapField.getBuildings())
+	{
+		if (player->canSeeUnit (*building, mapField, terrain))
+			result.push_back (building);
+	}
+	return result;
 }
 
 //------------------------------------------------------------------------------
@@ -180,7 +181,13 @@ std::vector<cVehicle*> cMapFieldView::getVehicles() const
 	{
 		return mapField.getVehicles();
 	}
-	return Filter (mapField.getVehicles(), makeFilterUnitSeenByPlayer (*player, mapField, terrain));
+	std::vector<cVehicle*> result;
+	for (cVehicle* vehicle : mapField.getVehicles())
+	{
+		if (player->canSeeUnit (*vehicle, mapField, terrain))
+			result.push_back (vehicle);
+	}
+	return result;
 }
 
 //------------------------------------------------------------------------------
@@ -190,7 +197,13 @@ std::vector<cVehicle*> cMapFieldView::getPlanes() const
 	{
 		return mapField.getPlanes();
 	}
-	return Filter (mapField.getPlanes(), makeFilterUnitSeenByPlayer (*player, mapField, terrain));
+	std::vector<cVehicle*> result;
+	for (cVehicle* plane : mapField.getPlanes())
+	{
+		if (player->canSeeUnit (*plane, mapField, terrain))
+			result.push_back (plane);
+	}
+	return result;
 }
 
 //------------------------------------------------------------------------------
@@ -202,5 +215,12 @@ std::vector<cUnit*> cMapFieldView::getUnits() const
 	{
 		return visibleUnits;
 	}
-	return Filter (visibleUnits, makeFilterUnitSeenByPlayer (*player, mapField, terrain));
+	std::vector<cUnit*> result;
+	result.reserve (visibleUnits.size());
+	for (cUnit* unit : visibleUnits)
+	{
+		if (player->canSeeUnit (*unit, mapField, terrain))
+			result.push_back (unit);
+	}
+	return result;
 }

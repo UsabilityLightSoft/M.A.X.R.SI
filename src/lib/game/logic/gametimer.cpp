@@ -173,6 +173,15 @@ void cGameTimerServer::run (cModel& model, cServer& server)
 	{
 		if (!popEvent()) break;
 
+		if (deterministicTick && model.isTurnActiveAndUnfinished())
+		{
+			// Headless deterministic mode: freeze game time (no unit movement,
+			// no attacks) while the active player is still deciding. The tick is
+			// discarded; once the player finishes the turn, subsequent ticks play
+			// the turn out deterministically.
+			continue;
+		}
+
 		model.advanceGameTime();
 
 		uint32_t checksum = model.getChecksum();
@@ -219,6 +228,15 @@ void cGameTimerClient::handleSyncMessage (const cNetMessageSyncServer& message, 
 //------------------------------------------------------------------------------
 void cGameTimerClient::checkServerResponding (cClient& client)
 {
+	if (deterministicTick)
+	{
+		// Headless deterministic mode: the server intentionally freezes game time
+		// while a player is deciding, so no sync messages arrive. Never enter the
+		// WaitForServer freeze mode here — it would block cClient::endTurn and
+		// deadlock the AI.
+		return;
+	}
+
 	const auto& freezeModes = client.getFreezeModes();
 	if (syncMessageReceived)
 	{

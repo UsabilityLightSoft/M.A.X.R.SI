@@ -96,6 +96,14 @@ public:
 	void run (cModel&, cServer& server);
 	void handleSyncMessage (const cNetMessageSyncClient&, unsigned int gameTime);
 	void setPlayerNumbers (const std::vector<std::shared_ptr<cPlayer>>& playerList);
+
+	/**
+	* Headless-only deterministic tick: when true, the server does NOT advance
+	* the model (no unit movement/attacks) while a player's turn is active and
+	* the player has not finished. Once the player finishes, the turn is played
+	* out deterministically. Set via cServer::setDeterministicTick.
+	*/
+	bool deterministicTick = false;
 };
 
 class cGameTimerClient : public cGameTimer
@@ -128,6 +136,15 @@ public:
 	void sendSyncMessage (const cClient&, unsigned int gameTime, unsigned int tickPerFrame, unsigned int timeBuffer);
 
 	void handleSyncMessage (const cNetMessageSyncServer&, unsigned int gameTime);
+
+	/**
+	* Headless-only deterministic tick: when true, the client never enters the
+	* WaitForServer freeze mode (the server freezes game time during a player's
+	* turn, so sync messages are legitimately absent while the AI decides).
+	* Otherwise cClient::endTurn would be blocked by the freeze. Set via
+	* cClient::setDeterministicTick.
+	*/
+	bool deterministicTick = false;
 };
 
 #endif // game_logic_gametimerH

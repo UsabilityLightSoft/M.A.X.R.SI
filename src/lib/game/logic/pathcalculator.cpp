@@ -31,8 +31,46 @@
 #include <cassert>
 #include <forward_list>
 
-/* Size of a memory block while pathfinding */
-#define MEM_BLOCK_SIZE 10
+namespace
+{
+	//--------------------------------------------------------------------------
+	// Reusable per-thread scratch buffers for pathfinding.
+	//
+	// The old code allocated three flat W*H arrays of pointers AND a fresh
+	// vector<vector<sPathNode>> pool (one 10-node heap allocation per block) on
+	// EVERY cPathCalculator::calcPath() call. On a crowded turn the engine calls
+	// calcPath() hundreds/thousands of times (recalculatePath runs a full
+	// Dijkstra over the map for every blocked unit), so that malloc/free churn
+	// plus the 3 large memset()s were a major cost.
+	//
+	// These buffers are thread_local so that the server thread (move jobs) and
+	// the driver thread (AI brain) each keep their own — no data race, and the
+	// results are bit-identical: the buffers are pure storage, never part of the
+	// algorithm's state.
+	struct PathScratch
+	{
+		/* heaplist where all nodes are sorted by their costF value */
+		std::vector<sPathNode*> nodesHeap;
+		/* open nodes map (indexed by map offset) */
+		std::vector<sPathNode*> openList;
+		/* closed nodes map (indexed by map offset) */
+		std::vector<sPathNode*> closedList;
+		/* single contiguous node pool; grows once to W*H+1 and is reused */
+		std::vector<sPathNode> nodePool;
+		/* number of nodes handed out of nodePool in the current calcPath() */
+		std::size_t poolUsed = 0;
+	};
+	thread_local PathScratch pathScratch;
+
+	//--------------------------------------------------------------------------
+	void swapHeapNodes (int a, int b)
+	{
+		auto& heap = pathScratch.nodesHeap;
+		std::swap (heap[a], heap[b]);
+		heap[a]->heapIndex = a;
+		heap[b]->heapIndex = b;
+	}
+} // namespace
 
 //------------------------------------------------------------------------------
 cPathDestHandler::cPathDestHandler (ePathDestinationType type_, const cPosition& destination_, const cVehicle* srcVehicle_, const cUnit* destUnit_) :
@@ -105,10 +143,6 @@ void cPathCalculator::init (const cPosition& source, const cMapView& Map, const 
 	bPlane = Vehicle.getStaticUnitData().factorAir > 0;
 	bShip = Vehicle.getStaticUnitData().factorSea > 0 && Vehicle.getStaticUnitData().factorGround == 0;
 
-	MemBlocks.clear();
-
-	blocknum = 0;
-	blocksize = 0;
 	heapCount = 0;
 }
 
@@ -122,10 +156,21 @@ std::forward_list<cPosition> cPathCalculator::calcPath()
 {
 	std::forward_list<cPosition> path;
 
-	// generate open and closed list
-	nodesHeap.resize (Map->getSize().x() * Map->getSize().y() + 1, nullptr);
-	openList.resize (Map->getSize().x() * Map->getSize().y() + 1, nullptr);
-	closedList.resize (Map->getSize().x() * Map->getSize().y() + 1, nullptr);
+	// generate open and closed list (reused scratch buffers, cleared each run)
+	const int mapCells = Map->getSize().x() * Map->getSize().y();
+	auto& nodesHeap = pathScratch.nodesHeap;
+	auto& openList = pathScratch.openList;
+	auto& closedList = pathScratch.closedList;
+	auto& nodePool = pathScratch.nodePool;
+
+	nodesHeap.assign (mapCells + 1, nullptr);
+	openList.assign (mapCells + 1, nullptr);
+	closedList.assign (mapCells + 1, nullptr);
+	// reserve space for the maximum possible node count; never reallocates
+	// during the search, so node 'prev' pointers into the pool stay valid.
+	if (nodePool.size() < static_cast<std::size_t> (mapCells + 1))
+		nodePool.resize (mapCells + 1);
+	pathScratch.poolUsed = 0;
 
 	// generate startnode
 	sPathNode* StartNode = allocNode();
@@ -176,6 +221,9 @@ std::forward_list<cPosition> cPathCalculator::calcPath()
 //------------------------------------------------------------------------------
 void cPathCalculator::expandNodes (sPathNode* ParentNode)
 {
+	auto& openList = pathScratch.openList;
+	auto& closedList = pathScratch.closedList;
+
 	// add all nearby nodes
 	const int minx = std::max (ParentNode->position.x() - 1, 0);
 	const int maxx = std::min (ParentNode->position.x() + 1, Map->getSize().y() - 1);
@@ -204,9 +252,10 @@ void cPathCalculator::expandNodes (sPathNode* ParentNode)
 				else
 					continue;
 			}
-			if (closedList[Map->getOffset (currentPosition)] != nullptr) continue;
+			const int offset = Map->getOffset (currentPosition);
+			if (closedList[offset] != nullptr) continue;
 
-			if (openList[Map->getOffset (currentPosition)] == nullptr)
+			if (openList[offset] == nullptr)
 			{
 				// generate new node
 				sPathNode* NewNode = allocNode();
@@ -215,7 +264,7 @@ void cPathCalculator::expandNodes (sPathNode* ParentNode)
 				NewNode->costH = destHandler->heuristicCost (currentPosition);
 				NewNode->costF = NewNode->costG + NewNode->costH;
 				NewNode->prev = ParentNode;
-				openList[Map->getOffset (currentPosition)] = NewNode;
+				openList[offset] = NewNode;
 				insertToHeap (NewNode, false);
 			}
 			else
@@ -225,13 +274,13 @@ void cPathCalculator::expandNodes (sPathNode* ParentNode)
 				costG = calcNextCost (ParentNode->position, currentPosition, Vehicle, Map) + ParentNode->costG;
 				costH = destHandler->heuristicCost (currentPosition);
 				costF = costG + costH;
-				if (costF < openList[Map->getOffset (currentPosition)]->costF)
+				if (costF < openList[offset]->costF)
 				{
-					openList[Map->getOffset (currentPosition)]->costG = costG;
-					openList[Map->getOffset (currentPosition)]->costH = costH;
-					openList[Map->getOffset (currentPosition)]->costF = costF;
-					openList[Map->getOffset (currentPosition)]->prev = ParentNode;
-					insertToHeap (openList[Map->getOffset (currentPosition)], true);
+					openList[offset]->costG = costG;
+					openList[offset]->costH = costH;
+					openList[offset]->costF = costF;
+					openList[offset]->prev = ParentNode;
+					insertToHeap (openList[offset], true);
 				}
 			}
 		}
@@ -241,38 +290,30 @@ void cPathCalculator::expandNodes (sPathNode* ParentNode)
 //------------------------------------------------------------------------------
 sPathNode* cPathCalculator::allocNode()
 {
-	// allocate new memory block if necessary
-	if (blocksize <= 0)
-	{
-		MemBlocks.emplace_back (std::vector<sPathNode> (10));
-		blocksize = MEM_BLOCK_SIZE;
-		blocknum++;
-	}
-	blocksize--;
-	return &MemBlocks[blocknum - 1][blocksize];
+	// nodes are handed out of a single pre-sized pool; the pool is sized to the
+	// whole map up front in calcPath(), so these pointers never dangle.
+	assert (pathScratch.poolUsed < pathScratch.nodePool.size());
+	return &pathScratch.nodePool[pathScratch.poolUsed++];
 }
 
 //------------------------------------------------------------------------------
 void cPathCalculator::insertToHeap (sPathNode* Node, bool exists)
 {
+	auto& nodesHeap = pathScratch.nodesHeap;
 	int i = 0;
 	if (exists)
 	{
-		// get the number of the existing node
-		for (int j = 1; j <= heapCount; j++)
-		{
-			if (nodesHeap[j] == Node)
-			{
-				i = j;
-				break;
-			}
-		}
+		// O(1) lookup of the node's position (previously O(N) linear scan)
+		i = Node->heapIndex;
+		assert (i >= 1 && i <= heapCount);
+		assert (nodesHeap[i] == Node);
 	}
 	else
 	{
 		// add the new node in the end
 		heapCount++;
 		nodesHeap[heapCount] = Node;
+		Node->heapIndex = heapCount;
 		i = heapCount;
 	}
 	// resort the nodes
@@ -281,7 +322,7 @@ void cPathCalculator::insertToHeap (sPathNode* Node, bool exists)
 		assert (nodesHeap[i] == Node);
 		if (Node->costF < nodesHeap[i / 2]->costF)
 		{
-			std::swap (nodesHeap[i / 2], nodesHeap[i]);
+			swapHeapNodes (i / 2, i);
 			i = i / 2;
 		}
 		else
@@ -292,8 +333,10 @@ void cPathCalculator::insertToHeap (sPathNode* Node, bool exists)
 //------------------------------------------------------------------------------
 void cPathCalculator::deleteFirstFromHeap()
 {
+	auto& nodesHeap = pathScratch.nodesHeap;
 	// overwrite the first node by the last one
 	nodesHeap[1] = nodesHeap[heapCount];
+	nodesHeap[1]->heapIndex = 1;
 	nodesHeap[heapCount] = nullptr;
 	heapCount--;
 	int v = 1;
@@ -312,7 +355,7 @@ void cPathCalculator::deleteFirstFromHeap()
 		// do the resort
 		if (u != v)
 		{
-			std::swap (nodesHeap[u], nodesHeap[v]);
+			swapHeapNodes (u, v);
 		}
 		else
 			break;

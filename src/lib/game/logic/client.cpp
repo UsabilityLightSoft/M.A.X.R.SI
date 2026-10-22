@@ -97,6 +97,12 @@ void cClient::setPlayers (const std::vector<cPlayerBasicData>& splayers, size_t 
 }
 
 //------------------------------------------------------------------------------
+void cClient::setDeterministicTick (bool value)
+{
+	gameTimer->deterministicTick = value;
+}
+
+//------------------------------------------------------------------------------
 void cClient::pushMessage (std::unique_ptr<cNetMessage> message)
 {
 	if (message->getType() == eNetMessageType::GAMETIME_SYNC_SERVER)

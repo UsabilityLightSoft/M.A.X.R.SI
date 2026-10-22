@@ -102,6 +102,12 @@ const cModel& cServer::getModel() const
 }
 
 //------------------------------------------------------------------------------
+void cServer::setDeterministicTick (bool value)
+{
+	gameTimer.deterministicTick = value;
+}
+
+//------------------------------------------------------------------------------
 void cServer::saveGameState (int saveGameNumber, const std::string& saveName) const
 {
 	if (SDL_ThreadID() != SDL_GetThreadID (serverThread))

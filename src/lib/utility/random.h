@@ -22,9 +22,47 @@
 
 #include <array>
 #include <cassert>
+#include <cstdint>
 #include <random>
 #include <stdexcept>
 #include <type_traits>
+
+/**
+ * Fixed default seed used when setRandomSeed() is never called.
+ *
+ * Previously every run pulled a seed from std::random_device (a different
+ * value each launch) and, worse, each instantiation of random<T>() held its
+ * OWN static std::mt19937. That meant multiple independent generators and a
+ * non-reproducible run. Now there is ONE shared generator (see
+ * getRandomGenerator below); this constant makes even unseeded runs
+ * reproducible.
+ */
+constexpr uint32_t kDefaultRandomSeed = 0x9E3779B9u;
+
+/**
+ * The single shared PRNG for the whole game.
+ *
+ * Every random<T>(...) instantiation draws from this ONE generator, so all
+ * calls consume one common number stream and a single seed fully determines
+ * the sequence. (Previously each template instantiation T had its own static
+ * std::mt19937 seeded from std::random_device — several independent,
+ * non-reproducible streams.)
+ */
+inline std::mt19937& getRandomGenerator()
+{
+	static std::mt19937 gen (kDefaultRandomSeed);
+	return gen;
+}
+
+/**
+ * Reseed the shared PRNG. Call BEFORE any random() use (i.e. before the game
+ * starts) to make a run reproducible. If never called, the generator uses
+ * kDefaultRandomSeed, so unseeded runs are still deterministic.
+ */
+inline void setRandomSeed (uint32_t seed)
+{
+	getRandomGenerator().seed (seed);
+}
 
 /**
  * Creates a uniform distributed random number in the interval [min, max).
@@ -49,8 +87,7 @@ T random (const T min, const T max)
 		std::uniform_int_distribution<T>,
 		std::uniform_real_distribution<T>>;
 
-	static std::random_device rd;
-	static std::mt19937 gen (rd());
+	std::mt19937& gen = getRandomGenerator();
 
 	DistributionType distribution (min, std::is_integral<T>::value ? max - 1 : max);
 

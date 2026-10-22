@@ -66,6 +66,12 @@ public:
 	void setMap (std::shared_ptr<cStaticMap>);
 	void setPlayers (const std::vector<cPlayerBasicData>&, size_t activePlayerNr);
 
+	/**
+	* Headless-only: enable deterministic turn ticking (see
+	* cGameTimerClient::deterministicTick). Must be called before the game starts.
+	*/
+	void setDeterministicTick (bool value);
+
 	void pushMessage (std::unique_ptr<cNetMessage>) override;
 
 	//

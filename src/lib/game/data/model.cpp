@@ -93,6 +93,14 @@ unsigned int cModel::getGameTime() const
 }
 
 //------------------------------------------------------------------------------
+bool cModel::isTurnActiveAndUnfinished() const
+{
+	return turnEndState == eTurnEndState::TurnActive
+		&& activeTurnPlayer != nullptr
+		&& !activeTurnPlayer->getHasFinishedTurn();
+}
+
+//------------------------------------------------------------------------------
 uint32_t cModel::getChecksum() const
 {
 	uint32_t crc = 0;

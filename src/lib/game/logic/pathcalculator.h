@@ -42,6 +42,11 @@ struct sPathNode
 	int costH = 0;
 	/* previous node of this one in the hole path */
 	sPathNode* prev = nullptr;
+	/* current index in the heap; 0 = not in heap. Lets insertToHeap find the
+	 * node in O(1) instead of scanning the whole heap (O(N)) on every cost
+	 * update. Purely an accelerator for the heap bookkeeping — the resulting
+	 * heap ordering is identical. */
+	int heapIndex = 0;
 };
 
 enum class ePathDestinationType
@@ -103,19 +108,6 @@ public:
 	std::unique_ptr<cPathDestHandler> destHandler;
 
 private:
-	/* memoryblocks for the nodes */
-	std::vector<std::vector<sPathNode>> MemBlocks;
-	/* number of blocks */
-	int blocknum = 0;
-	/* restsize of the last block */
-	int blocksize = 0;
-
-	/* heaplist where all nodes are sorted by there costF value */
-	std::vector<sPathNode*> nodesHeap;
-	/* open nodes map */
-	std::vector<sPathNode*> openList;
-	/* closed nodes map */
-	std::vector<sPathNode*> closedList;
 	/* number of nodes saved on the heaplist; equal to number of nodes in the openlist */
 	int heapCount = 0;
 	/**
@@ -148,15 +140,18 @@ int cPathCalculator::calcNextCost (const cPosition& source, const cPosition& des
 	int costs = 4;
 	// select base movement factor
 	const auto& unitData = vehicle->getStaticUnitData();
+	// fetch the destination field once; the field view construction (cMapView)
+	// used to be repeated up to three times per call.
+	const auto& field = map->getField (destination);
 	if (unitData.factorAir > 0)
 	{
 		costs = (int) (4 * unitData.factorAir);
 	}
-	else if (map->isWater (destination) && !(map->getField (destination).hasBridgeOrPlatform() && unitData.factorGround > 0))
+	else if (map->isWater (destination) && !(field.hasBridgeOrPlatform() && unitData.factorGround > 0))
 	{
 		costs = (int) (4 * unitData.factorSea);
 	}
-	else if (map->isCoast (destination) && !(map->getField (destination).hasBridgeOrPlatform() && unitData.factorGround > 0))
+	else if (map->isCoast (destination) && !(field.hasBridgeOrPlatform() && unitData.factorGround > 0))
 	{
 		costs = (int) (4 * unitData.factorCoast);
 	}
@@ -167,7 +162,7 @@ int cPathCalculator::calcNextCost (const cPosition& source, const cPosition& des
 
 	// moving on a road is cheaper
 	// assuming, only speed of ground units can be modified
-	const cBuilding* building = map->getField (destination).getBaseBuilding();
+	const cBuilding* building = field.getBaseBuilding();
 	if (building && building->getStaticData().modifiesSpeed != 0 && unitData.factorGround > 0)
 	{
 		costs = (int) (costs * building->getStaticData().modifiesSpeed);

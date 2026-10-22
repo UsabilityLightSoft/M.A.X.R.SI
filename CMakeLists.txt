@@ -137,6 +137,13 @@ add_executable(maxr_dedicatedserver ${maxr_dedicatedserver_SRCS}
 target_include_directories(maxr_lib PUBLIC src)
 target_link_libraries(maxr_dedicatedserver maxr_lib)
 
+# maxr ai headless runner (project AI, этап 1)
+file(GLOB_RECURSE maxr_ai_headless_SRCS "src/ai_headless/*.cpp"
+     "src/ai_headless/*.h")
+add_executable(ai_headless ${maxr_ai_headless_SRCS})
+target_include_directories(ai_headless PUBLIC src)
+target_link_libraries(ai_headless maxr_lib)
+
 # maxr
 file(GLOB_RECURSE maxr_SRCS "src/ui/*.cpp" "src/ui/*.h")
 add_executable(maxr ${maxr_SRCS} ${RESOURCE_FILE})
