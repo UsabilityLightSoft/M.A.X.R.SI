@@ -79,6 +79,10 @@ try
 	const int maxTurns = argc > 1 ? std::atoi (argv[1]) : 10;
 	const std::string mapFile = argc > 2 ? argv[2] : "Delta.wrl";
 	const std::string outDir = argc > 3 ? argv[3] : "ai_out";
+	// сторож: сколько мс без смены хода терпим до выхода. Дефолт 900000 (15 мин):
+	// на больших армиях проигрывание хода идёт в real-time (~9000 тиков × 10 мс ≈
+	// 90 с на ход), и 90-секундный лимит обрывал партию на ходе ~127.
+	const uint32_t watchdogMs = argc > 5 ? static_cast<uint32_t> (std::strtoul (argv[5], nullptr, 10)) : 900000u;
 
 	// --- сид RNG: argv[4] > MAXR_SEED > фиксированный дефолт (kDefaultRandomSeed) ---
 	// Вызываем ДО LoadData/сервера, чтобы ВСЕ случайные числа (в т.ч. при
@@ -271,15 +275,15 @@ try
 		if (turn >= maxTurns)
 			break;
 
-		// сторож: нет прогресса 90 с — выходим с диагностикой
-		if (SDL_GetTicks() - lastProgressTick > 90000)
+		// сторож: нет прогресса — выходим с диагностикой (лимит настраивается argv[5])
+		if (SDL_GetTicks() - lastProgressTick > watchdogMs)
 		{
-			Log.error ("ai_headless: WATCHDOG: no progress for 90s at turn " + std::to_string (turn));
+			Log.error ("ai_headless: WATCHDOG: no progress for " + std::to_string (watchdogMs) + "ms at turn " + std::to_string (turn));
 			break;
 		}
 
 		engine.run();
-		SDL_Delay (50);
+		SDL_Delay (2);
 	}
 
 	engine.finalize();
