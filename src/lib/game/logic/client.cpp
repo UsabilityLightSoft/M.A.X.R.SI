@@ -103,6 +103,18 @@ void cClient::setDeterministicTick (bool value)
 }
 
 //------------------------------------------------------------------------------
+void cClient::setFastTick (bool value)
+{
+	gameTimer->fastTick = value;
+}
+
+//------------------------------------------------------------------------------
+void cClient::setResolveStalledTurnEnd (bool value)
+{
+	model.setResolveStalledTurnEnd (value);
+}
+
+//------------------------------------------------------------------------------
 void cClient::pushMessage (std::unique_ptr<cNetMessage> message)
 {
 	if (message->getType() == eNetMessageType::GAMETIME_SYNC_SERVER)

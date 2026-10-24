@@ -72,6 +72,18 @@ public:
 	*/
 	void setDeterministicTick (bool value);
 
+	/**
+	* Headless-only: handle all sync messages received from the server without
+	* wall-clock pacing (see cGameTimerClient::fastTick). Must be called before the game starts.
+	*/
+	void setFastTick (bool value);
+
+	/**
+	* Headless-only: resolve stalled turn ends (see cModel::setResolveStalledTurnEnd).
+	* Must be set identically on the server and all clients before the game starts.
+	*/
+	void setResolveStalledTurnEnd (bool value);
+
 	void pushMessage (std::unique_ptr<cNetMessage>) override;
 
 	//

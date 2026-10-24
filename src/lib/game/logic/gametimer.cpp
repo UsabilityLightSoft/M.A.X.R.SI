@@ -26,6 +26,7 @@
 #include "utility/log.h"
 
 #include <SDL.h>
+#include <algorithm>
 
 //------------------------------------------------------------------------------
 Uint32 cGameTimer::gameTimerCallback (Uint32 interval, void* arg)
@@ -169,6 +170,11 @@ void cGameTimerServer::checkPlayersResponding (const std::vector<std::shared_ptr
 void cGameTimerServer::run (cModel& model, cServer& server)
 {
 	checkPlayersResponding (model.getPlayerList(), server);
+	if (fastTick)
+	{
+		runFast (model, server);
+		return;
+	}
 	for (unsigned int i = 0; i < maxEventQueueSize; i++)
 	{
 		if (!popEvent()) break;
@@ -182,19 +188,51 @@ void cGameTimerServer::run (cModel& model, cServer& server)
 			continue;
 		}
 
-		model.advanceGameTime();
+		advanceGameTime (model, server);
+	}
+}
 
-		uint32_t checksum = model.getChecksum();
-		for (auto player : model.getPlayerList())
-		{
-			cNetMessageSyncServer message;
-			message.checksum = checksum;
-			message.ping = static_cast<int> (clientDebugData[player->getId()].ping);
-			message.gameTime = model.getGameTime();
-			server.sendMessageToClients (message, player->getId());
+//------------------------------------------------------------------------------
+void cGameTimerServer::runFast (cModel& model, cServer& server)
+{
+	// Headless fast mode: the wall-clock timer only signals, that the game
+	// time is not paused (freeze modes Pause/WaitForClient stop it).
+	// Collected timer events are not needed.
+	while (popEvent()) {}
+	if (timerID == 0) return;
 
-			sentGameTime = model.getGameTime();
-		}
+	// Run as many ticks as the clients can follow: never more than
+	// FAST_TICK_WINDOW ticks ahead of the slowest client, so that
+	// checkPlayersResponding never sees a client lagging PAUSE_GAME_TIMEOUT.
+	unsigned int slowestClientTime = sentGameTime;
+	for (const auto& [playerNr, time] : receivedTime)
+	{
+		slowestClientTime = std::min (slowestClientTime, time);
+	}
+	while (sentGameTime < slowestClientTime + FAST_TICK_WINDOW)
+	{
+		// see run(): the model stands still, while the active player is deciding
+		if (deterministicTick && model.isTurnActiveAndUnfinished()) break;
+
+		advanceGameTime (model, server);
+	}
+}
+
+//------------------------------------------------------------------------------
+void cGameTimerServer::advanceGameTime (cModel& model, cServer& server)
+{
+	model.advanceGameTime();
+
+	uint32_t checksum = model.getChecksum();
+	for (auto player : model.getPlayerList())
+	{
+		cNetMessageSyncServer message;
+		message.checksum = checksum;
+		message.ping = static_cast<int> (clientDebugData[player->getId()].ping);
+		message.gameTime = model.getGameTime();
+		server.sendMessageToClients (message, player->getId());
+
+		sentGameTime = model.getGameTime();
 	}
 }
 
@@ -259,6 +297,12 @@ void cGameTimerClient::checkServerResponding (cClient& client)
 //------------------------------------------------------------------------------
 void cGameTimerClient::run (cClient& client, cModel& model)
 {
+	if (fastTick)
+	{
+		runFast (client, model);
+		return;
+	}
+
 	// maximum time before GUI update
 	const unsigned int maxWorkingTime = 500; // milliseconds
 	unsigned int startGameTime = SDL_GetTicks();
@@ -304,6 +348,47 @@ void cGameTimerClient::run (cClient& client, cModel& model)
 		//inject an extra timer event
 		for (unsigned i = 0; i < (getReceivedTime() - model.getGameTime()) / 2; i++)
 			pushEvent();
+	}
+}
+
+//------------------------------------------------------------------------------
+void cGameTimerClient::runFast (cClient& client, cModel& model)
+{
+	// Headless fast mode: the server paces the game (see cGameTimerServer::runFast).
+	// Handle all received net messages and advance the model for every received
+	// sync message, without waiting for wall-clock timer events. There is no
+	// WaitForServer detection: the server legitimately sends nothing while the
+	// active player is deciding.
+	const unsigned int maxWorkingTime = 500; // milliseconds
+	const unsigned int startTime = SDL_GetTicks();
+
+	while (popEvent()) {}
+
+	while (true)
+	{
+		if (!syncMessageReceived)
+		{
+			client.handleNetMessages();
+		}
+		if (!syncMessageReceived) break; // all received messages are handled
+
+		model.advanceGameTime();
+		client.runClientJobs();
+
+		//check crc
+		localChecksum = model.getChecksum();
+		debugRemoteChecksum = remoteChecksum;
+		if (localChecksum != remoteChecksum)
+		{
+			NetLog.error ("OUT OF SYNC @" + std::to_string (model.getGameTime()));
+		}
+
+		syncMessageReceived = false;
+
+		sendSyncMessage (client, model.getGameTime(), 0, getReceivedTime() - model.getGameTime());
+
+		if (SDL_GetTicks() - startTime >= maxWorkingTime)
+			break;
 	}
 }
 

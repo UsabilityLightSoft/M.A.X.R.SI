@@ -69,6 +69,18 @@ public:
 	*/
 	void setDeterministicTick (bool value);
 
+	/**
+	* Headless-only: advance the game as fast as the clients follow, instead of
+	* wall-clock pacing (see cGameTimerServer::fastTick). Must be called before start().
+	*/
+	void setFastTick (bool value);
+
+	/**
+	* Headless-only: resolve stalled turn ends (see cModel::setResolveStalledTurnEnd).
+	* Must be set identically on the server and all clients before start().
+	*/
+	void setResolveStalledTurnEnd (bool value);
+
 	void resyncClientModel (int playerNr = -1) const;
 	void enableFreezeMode (eFreezeMode mode);
 	void disableFreezeMode (eFreezeMode mode);

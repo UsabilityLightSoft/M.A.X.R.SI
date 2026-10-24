@@ -108,6 +108,18 @@ void cServer::setDeterministicTick (bool value)
 }
 
 //------------------------------------------------------------------------------
+void cServer::setFastTick (bool value)
+{
+	gameTimer.fastTick = value;
+}
+
+//------------------------------------------------------------------------------
+void cServer::setResolveStalledTurnEnd (bool value)
+{
+	model.setResolveStalledTurnEnd (value);
+}
+
+//------------------------------------------------------------------------------
 void cServer::saveGameState (int saveGameNumber, const std::string& saveName) const
 {
 	if (SDL_ThreadID() != SDL_GetThreadID (serverThread))
@@ -237,7 +249,8 @@ void cServer::run()
 		//TODO: gameinit: start timer, when all clients are ready
 		gameTimer.run (model, *this);
 
-		SDL_Delay (10);
+		// headless fast tick: only wait for the next client acknowledgements
+		SDL_Delay (gameTimer.fastTick ? 1 : 10);
 	}
 }
 

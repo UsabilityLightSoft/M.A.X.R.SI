@@ -105,6 +105,20 @@ public:
 	*/
 	bool isTurnActiveAndUnfinished() const;
 
+	/**
+	* Headless only: insurance against turn ends, whose remaining movements never
+	* finish. The known cause (a vehicle between two movement steps became the
+	* aggressor of a reaction fire: its move job and its attack job rotated it in
+	* turns forever) is fixed in cMoveJob::run. After a stall limit the move jobs of
+	* attacking vehicles are suspended until their attack is done; after a second
+	* limit the turn end is forced. Normal turn ends are not affected. Must be set
+	* identically on the server and all client models.
+	*/
+	void setResolveStalledTurnEnd (bool value) { resolveStalledTurnEnd = value; }
+	/** number of turn ends, that reached the stall limit / were forced (headless diagnostics) */
+	unsigned int getStalledTurnEnds() const { return stalledTurnEnds; }
+	unsigned int getForcedTurnEnds() const { return forcedTurnEnds; }
+
 	std::shared_ptr<const cTurnCounter> getTurnCounter() const;
 	std::shared_ptr<const cTurnTimeClock> getTurnTimeClock() const;
 
@@ -333,6 +347,13 @@ private:
 		ExecuteTurnStart
 	};
 	eTurnEndState turnEndState = eTurnEndState::TurnActive;
+
+	// headless stalled turn end handling (see setResolveStalledTurnEnd), not part of the game state
+	bool isTurnEndStalled() const;
+	bool resolveStalledTurnEnd = false;
+	unsigned int remainingMovementsStartTime = 0;
+	unsigned int stalledTurnEnds = 0;
+	unsigned int forcedTurnEnds = 0;
 
 	/** lists with all FX-Animation */
 	cFxContainer effectsList;

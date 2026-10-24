@@ -42,6 +42,8 @@ class cPlayer;
 											when there are more than MAX_SERVER_EVENT_COUNTER timer events pending */
 #define MAX_WAITING_FOR_SERVER 50 /** The client will display the "Waiting for Server message" when no sync messages are
 											received for MAX_WAITING_FOR_SERVER ticks */
+#define FAST_TICK_WINDOW 100 /** Headless fast tick: maximum ticks, the server may run ahead of the slowest client.
+										Must stay below PAUSE_GAME_TIMEOUT, otherwise the clients are marked as not responding */
 
 struct sGameTimerClientDebugData
 {
@@ -87,6 +89,8 @@ class cGameTimerServer : public cGameTimer
 
 private:
 	void checkPlayersResponding (const std::vector<std::shared_ptr<cPlayer>>& playerList, cServer&);
+	void advanceGameTime (cModel&, cServer&);
+	void runFast (cModel&, cServer&);
 	std::map<int, sGameTimerClientDebugData> clientDebugData;
 	std::map<int, unsigned int> receivedTime; // time that the client has reported to server in last sync message
 	unsigned int sentGameTime = 0; // time that has server has reported to clients in last sync message
@@ -104,6 +108,15 @@ public:
 	* out deterministically. Set via cServer::setDeterministicTick.
 	*/
 	bool deterministicTick = false;
+
+	/**
+	* Headless-only fast tick: when true, the server ignores the wall-clock timer
+	* events and advances the model as fast as the clients acknowledge the game
+	* time (at most FAST_TICK_WINDOW ticks ahead of the slowest client). Pausing
+	* (stopped timer) is still respected. Meant to be used together with
+	* deterministicTick. Set via cServer::setFastTick.
+	*/
+	bool fastTick = false;
 };
 
 class cGameTimerClient : public cGameTimer
@@ -124,6 +137,7 @@ private:
 	unsigned int ping = 0; // saved data for debug view only
 
 	void checkServerResponding (cClient&);
+	void runFast (cClient&, cModel&);
 
 public:
 	cGameTimerClient() = default;
@@ -145,6 +159,14 @@ public:
 	* cClient::setDeterministicTick.
 	*/
 	bool deterministicTick = false;
+
+	/**
+	* Headless-only fast tick: when true, the client does not wait for its
+	* wall-clock timer events, but processes every sync message received from
+	* the server so far (the server paces the game, see
+	* cGameTimerServer::fastTick). Set via cClient::setFastTick.
+	*/
+	bool fastTick = false;
 };
 
 #endif // game_logic_gametimerH

@@ -47,6 +47,11 @@ namespace
 	{
 		return [=] (const std::shared_ptr<cPlayer>& player) { return player->getId() == playerId; };
 	}
+
+	// headless stalled turn end (see cModel::setResolveStalledTurnEnd):
+	// remaining movements of a normal turn end take less than 300 ticks
+	constexpr unsigned int kStalledTurnEndTicks = 2000;
+	constexpr unsigned int kForcedTurnEndTicks = 10000;
 } // namespace
 
 //------------------------------------------------------------------------------
@@ -98,6 +103,14 @@ bool cModel::isTurnActiveAndUnfinished() const
 	return turnEndState == eTurnEndState::TurnActive
 		&& activeTurnPlayer != nullptr
 		&& !activeTurnPlayer->getHasFinishedTurn();
+}
+
+//------------------------------------------------------------------------------
+bool cModel::isTurnEndStalled() const
+{
+	return resolveStalledTurnEnd
+		&& turnEndState == eTurnEndState::ExecuteRemainingMovements
+		&& gameTime - remainingMovementsStartTime >= kStalledTurnEndTicks;
 }
 
 //------------------------------------------------------------------------------
@@ -602,8 +615,15 @@ void cModel::refreshMapPointer()
 //------------------------------------------------------------------------------
 void cModel::runMoveJobs()
 {
+	const bool turnEndStalled = isTurnEndStalled();
 	for (std::size_t i = 0; i != moveJobs.size(); ++i)
 	{
+		if (turnEndStalled)
+		{
+			// let the attack job of a moving aggressor finish its rotation and shot first
+			const cVehicle* vehicle = moveJobs[i]->getVehicleId() ? getVehicleFromID (*moveJobs[i]->getVehicleId()) : nullptr;
+			if (vehicle != nullptr && vehicle->isAttacking()) continue;
+		}
 		moveJobs[i]->run (*this); // this can add new items to 'moveJobs'
 		auto& moveJob = moveJobs[i];
 		if (moveJob->isFinished())
@@ -659,6 +679,7 @@ void cModel::handleTurnEnd()
 				}
 
 				turnEndState = eTurnEndState::ExecuteRemainingMovements;
+				remainingMovementsStartTime = gameTime;
 			}
 		}
 		break;
@@ -668,6 +689,21 @@ void cModel::handleTurnEnd()
 			if (!activeMoveJob)
 			{
 				turnEndState = eTurnEndState::ExecuteTurnStart;
+			}
+			else if (resolveStalledTurnEnd)
+			{
+				const unsigned int duration = gameTime - remainingMovementsStartTime;
+				if (duration == kStalledTurnEndTicks)
+				{
+					++stalledTurnEnds;
+					NetLog.warn (" cModel: turn end stalled, suspending move jobs of attacking vehicles @" + std::to_string (gameTime));
+				}
+				if (duration >= kForcedTurnEndTicks)
+				{
+					++forcedTurnEnds;
+					NetLog.warn (" cModel: turn end forced, move jobs still active @" + std::to_string (gameTime));
+					turnEndState = eTurnEndState::ExecuteTurnStart;
+				}
 			}
 		}
 		break;

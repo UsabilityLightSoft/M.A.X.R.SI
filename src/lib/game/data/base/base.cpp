@@ -25,6 +25,7 @@
 #include "game/logic/subbaseresourcedistribution.h"
 #include "utility/crc.h"
 #include "utility/listhelpers.h"
+#include "utility/log.h"
 
 namespace
 {
@@ -64,6 +65,42 @@ namespace
 			maxProd += building->getMaxProd();
 		}
 		return maxProd;
+	}
+
+	//--------------------------------------------------------------------------
+	/** calculates the resource consumption of the working buildings
+	 * the same way as cSubBase::addBuilding does */
+	sMiningResource calcNeeded (const std::vector<cBuilding*>& buildings)
+	{
+		sMiningResource needed;
+		for (const cBuilding* building : buildings)
+		{
+			if (!building->isUnitWorking()) continue;
+
+			const cStaticUnitData& staticUnitData = building->getStaticUnitData();
+			if (staticUnitData.produceEnergy) needed.oil += staticUnitData.needsOil;
+			if (staticUnitData.needsMetal) needed.metal += building->getMetalPerRound();
+			needed.gold += building->getStaticData().convertsGold;
+		}
+		return needed;
+	}
+
+	//--------------------------------------------------------------------------
+	/** Debug check of the bookkeeping of a subbase: the needed resources
+	 * must not be negative and must be equal to the consumption
+	 * of the working buildings. Only writes a warning to the net log,
+	 * the subbase is not changed. */
+	void checkNeeded (const cSubBase& subBase, int playerId)
+	{
+		const sMiningResource& needed = subBase.getResourcesNeeded();
+		const sMiningResource expected = calcNeeded (subBase.getBuildings());
+		if (needed == expected && needed.metal >= 0 && needed.oil >= 0 && needed.gold >= 0) return;
+
+		NetLog.warn (" cSubBase: needed resources do not match the working buildings, player " + std::to_string (playerId)
+		             + ", buildings " + std::to_string (subBase.getBuildings().size())
+		             + ": metal " + std::to_string (needed.metal) + " (expected " + std::to_string (expected.metal) + ")"
+		             + ", oil " + std::to_string (needed.oil) + " (expected " + std::to_string (expected.oil) + ")"
+		             + ", gold " + std::to_string (needed.gold) + " (expected " + std::to_string (expected.gold) + ")");
 	}
 
 	//--------------------------------------------------------------------------
@@ -660,6 +697,8 @@ void cSubBase::makeTurnStartBuild (cBuilding& building, sNewTurnPlayerReport& re
 //------------------------------------------------------------------------------
 void cSubBase::makeTurnStart (sNewTurnPlayerReport& report)
 {
+	checkNeeded (*this, base.owner.getId());
+
 	// produce resources
 	addOil (prod.oil - needed.oil);
 	addMetal (prod.metal - needed.metal);

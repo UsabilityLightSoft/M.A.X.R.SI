@@ -27,13 +27,40 @@
 #include "utility/string/tolower.h"
 #include "utility/string/utf-8.h"
 
+#include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <iostream>
 #include <locale>
 #include <string>
 
+#ifdef WIN32
+# include <process.h>
+#else
+# include <unistd.h>
+#endif
+
 namespace
 {
+	//--------------------------------------------------------------------------
+	/**
+	 * Unique name of the network log: date and time with milliseconds plus the
+	 * process id. With seconds only, two instances started within the same second
+	 * (e.g. parallel headless games) opened the same file with truncation.
+	 */
+	std::string makeNetLogName()
+	{
+		const auto ms = std::chrono::duration_cast<std::chrono::milliseconds> (std::chrono::system_clock::now().time_since_epoch()).count() % 1000;
+#ifdef WIN32
+		const long pid = static_cast<long> (_getpid());
+#else
+		const long pid = static_cast<long> (getpid());
+#endif
+		char suffix[64];
+		std::snprintf (suffix, sizeof (suffix), "-%03d_pid%ld_net.log", static_cast<int> (ms), pid);
+		return os::formattedNow ("%Y-%m-%d-%H%M%S") + suffix;
+	}
+
 	//--------------------------------------------------------------------------
 	/**
 	 * Platform dependent implementations.
@@ -176,7 +203,7 @@ void cSettings::setPaths()
 	logPath = homeDir / "maxr.log";
 	std::cout << "\n(II): Starting logging to: " << logPath << std::endl;
 	std::filesystem::create_directories (netLogDir);
-	netLogPath = netLogDir / os::formattedNow ("%Y-%m-%d-%H%M%S_net.log");
+	netLogPath = netLogDir / makeNetLogName();
 
 	Log.setLogPath (logPath);
 	NetLog.setLogPath (netLogPath);
