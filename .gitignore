@@ -1,4 +1,5 @@
 /build/
+/build_*/
 /config.*
 /data_resinstaller/
 /data/SDL2.dll

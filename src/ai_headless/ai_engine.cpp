@@ -22,8 +22,10 @@
 #include "game/logic/upgradecalculator.h"
 #include "utility/log.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <forward_list>
+#include <initializer_list>
 
 namespace ai
 {
@@ -31,8 +33,18 @@ namespace ai
 namespace
 {
 
+std::string typeIdText (const sTypeId& t)
+{
+	return std::to_string (t.firstPart) + "." + std::to_string (t.secondPart);
+}
+
+// Приказ целиком: поля, нужные его типу, всегда; прочие — если не по умолчанию.
+// По журналу ход можно восстановить без мозга (в т. ч. очереди фабрик и исследования).
 nlohmann::json orderToJson (const cOrder& o)
 {
+	const auto is = [&o] (std::initializer_list<eOrderType> types) {
+		return std::find (types.begin(), types.end(), o.type) != types.end();
+	};
 	nlohmann::json j;
 	j["type"] = toString (o.type);
 	j["player"] = o.playerId;
@@ -40,20 +52,34 @@ nlohmann::json orderToJson (const cOrder& o)
 	j["reason"] = o.reason;
 	j["unitId"] = o.unitId;
 	if (o.unitId2) j["unitId2"] = o.unitId2;
-	if (o.type == eOrderType::Move || o.type == eOrderType::Attack || o.type == eOrderType::Build
-		|| o.type == eOrderType::BuildPath || o.type == eOrderType::ActivateUnit)
+	if (is ({eOrderType::Move, eOrderType::Attack, eOrderType::Build, eOrderType::BuildPath, eOrderType::ActivateUnit, eOrderType::FinishBuild})
+		|| o.position != cPosition (0, 0))
 	{
 		j["pos"] = {{"x", o.position.x()}, {"y", o.position.y()}};
 	}
-	if (o.type == eOrderType::Build || o.type == eOrderType::BuildPath)
-		j["buildingType"] = o.buildingType.firstPart + "." + std::to_string (o.buildingType.secondPart);
-	if (o.type == eOrderType::Move)
+	if (o.type == eOrderType::BuildPath || o.position2 != cPosition (0, 0))
+		j["pos2"] = {{"x", o.position2.x()}, {"y", o.position2.y()}};
+	if (is ({eOrderType::Build, eOrderType::BuildPath}) || o.buildingType != sTypeId())
+		j["buildingType"] = typeIdText (o.buildingType);
+	if (o.type == eOrderType::Move || !o.path.empty())
 	{
 		nlohmann::json path = nlohmann::json::array();
 		for (const auto& p : o.path) path.push_back ({{"x", p.x()}, {"y", p.y()}});
 		j["path"] = std::move (path);
 	}
-	if (o.type == eOrderType::Transfer)
+	if (o.type == eOrderType::ChangeBuildList || !o.buildList.empty())
+	{
+		nlohmann::json list = nlohmann::json::array();
+		for (const auto& t : o.buildList) list.push_back (typeIdText (t));
+		j["buildList"] = std::move (list);
+	}
+	if (is ({eOrderType::Build, eOrderType::BuildPath, eOrderType::ChangeBuildList}) || o.buildSpeed != 0)
+		j["buildSpeed"] = o.buildSpeed;
+	if (o.type == eOrderType::ChangeBuildList || o.repeat)
+		j["repeat"] = o.repeat;
+	if (o.type == eOrderType::ChangeResearch || std::any_of (o.researchAreas.begin(), o.researchAreas.end(), [] (int n) { return n != 0; }))
+		j["researchAreas"] = o.researchAreas; // центров на область, порядок cResearch::eResearchArea
+	if (o.type == eOrderType::Transfer || o.transferValue != 0 || o.resType != eResourceType::None)
 	{
 		j["transferValue"] = o.transferValue;
 		j["resType"] = static_cast<int> (o.resType);
@@ -79,11 +105,36 @@ cAiEngine::~cAiEngine()
 
 void cAiEngine::addPlayer (int playerId, cClient* client, std::shared_ptr<cAiBrain> brain)
 {
-	players_.push_back ({playerId, client, std::move (brain), -1, false});
+	const std::size_t index = players_.size();
+	players_.push_back ({playerId, client, std::move (brain)});
+	if (index == 0) metrics_.attach (client->getModel()); // все модели синхронны — хватит одной
+
+	// cActionEndTurn не сдаёт ход, если base.checkTurnEnd() что-то выключил
+	// (нехватка энергии/топлива/металла/золота/людей) — как в GUI, где игрок
+	// жмёт «конец хода» ещё раз. Отказ виден по сигналам нехватки базы в нашей
+	// клиентской модели: она исполняет тот же EndTurn, что и сервер.
+	const cPlayer* player = client->getModel().getPlayer (playerId);
+	if (player == nullptr) return;
+	const auto onRefused = [this, index]() {
+		auto& ctx = players_[index];
+		if (ctx.endTurnSent) ctx.endTurnRefused = true;
+	};
+	signalConnections_.connect (player->base.metalLow, onRefused);
+	signalConnections_.connect (player->base.teamLow, onRefused);
+	signalConnections_.connect (player->base.goldLow, onRefused);
+	signalConnections_.connect (player->base.fuelLow, onRefused);
+	signalConnections_.connect (player->base.energyLow, onRefused);
 }
 
 void cAiEngine::run()
 {
+	// драйвер зовёт run() после высадки всех игроков: снимок до первого хода
+	if (!metricsStarted_ && !players_.empty())
+	{
+		metrics_.sampleStart (players_.front().client->getModel());
+		metricsStarted_ = true;
+	}
+
 	for (auto& ctx : players_)
 	{
 		const cModel& model = ctx.client->getModel();
@@ -92,21 +143,72 @@ void cAiEngine::run()
 		{
 			ctx.lastTurn = turn;
 			ctx.acted = false;
+			ctx.endTurnRetries = 0;
 		}
 
 		const cPlayer* active = model.getActiveTurnPlayer();
-		if (active == nullptr) continue;
-		if (active->getId() != ctx.playerId) continue;
 		// activeTurnPlayer выставляется оптимистично в setPlayerList ещё до
 		// высадки (initNewGame); landingPos ставится только при её применении.
 		// Ждём, пока модель реально получила высадку — иначе дайджест пустой.
-		if (active->getLandingPos() == cPosition (-1, -1)) continue;
-		if (active->getHasFinishedTurn()) continue;
-		if (ctx.acted) continue;
+		const bool myTurn = active != nullptr && active->getId() == ctx.playerId
+			&& active->getLandingPos() != cPosition (-1, -1) && !active->getHasFinishedTurn();
+		if (!myTurn)
+		{
+			ctx.endTurnSent = false;
+			ctx.endTurnRefused = false;
+			continue;
+		}
 
-		act (ctx);
-		ctx.acted = true;
+		if (!ctx.acted)
+		{
+			act (ctx);
+			ctx.acted = true;
+		}
+		else if (ctx.endTurnRefused)
+			retryEndTurn (ctx, turn);
 	}
+}
+
+bool cAiEngine::isAnyPlayerDefeated() const
+{
+	if (players_.empty()) return false;
+	const auto& list = players_.front().client->getModel().getPlayerList();
+	return std::any_of (list.begin(), list.end(), [] (const auto& player) { return player->isDefeated; });
+}
+
+void cAiEngine::sendEndTurn (sCtx& ctx)
+{
+	ctx.endTurnSent = true;
+	ctx.endTurnRefused = false;
+	// замороженный клиент молча не шлёт EndTurn (cClient::endTurn) — повторим позже
+	if (ctx.client->getFreezeModes().isFrozen())
+	{
+		ctx.endTurnRefused = true;
+		return;
+	}
+	ctx.client->endTurn();
+}
+
+void cAiEngine::retryEndTurn (sCtx& ctx, int turn)
+{
+	constexpr int kMaxEndTurnRetries = 20;
+
+	if (ctx.client->getFreezeModes().isFrozen()) return;
+	if (ctx.endTurnRetries >= kMaxEndTurnRetries)
+	{
+		if (ctx.endTurnRetries == kMaxEndTurnRetries)
+		{
+			++ctx.endTurnRetries;
+			Log.error ("ai_engine: EndTurn of player " + std::to_string (ctx.playerId) + " refused "
+				+ std::to_string (kMaxEndTurnRetries) + " times at turn " + std::to_string (turn));
+		}
+		ctx.endTurnRefused = false;
+		return;
+	}
+	++ctx.endTurnRetries;
+	journal_.log ({{"event", "end_turn_retry"}, {"player", ctx.playerId}, {"turn", turn},
+		{"retry", ctx.endTurnRetries}});
+	sendEndTurn (ctx);
 }
 
 void cAiEngine::act (sCtx& ctx)
@@ -133,6 +235,15 @@ void cAiEngine::act (sCtx& ctx)
 	// решение мозга
 	const auto orders = ctx.brain->decideTurn (ctx.playerId, model);
 
+	// решения мозга, которые не приказы (операции армии, шаг 8), — до приказов хода
+	for (auto& ev : ctx.brain->takeJournalEvents())
+	{
+		if (!ev.contains ("event")) ev["event"] = "decision";
+		ev["player"] = ctx.playerId;
+		ev["turn"] = turn;
+		journal_.log (ev);
+	}
+
 	// валидация + исполнение
 	for (const auto& order : orders)
 	{
@@ -150,13 +261,14 @@ void cAiEngine::act (sCtx& ctx)
 		else
 		{
 			entry["event"] = "rejected";
+			entry["orderReason"] = order.reason; // reason приказа — под причиной отказа
 			entry["reason"] = v.reason;
 			journal_.log (std::move (entry));
 			Log.info ("ai_engine: rejected " + std::string (toString (order.type)) + ": " + v.reason);
 		}
 	}
 
-	ctx.client->endTurn();
+	sendEndTurn (ctx);
 	journal_.log ({{"event", "turn_end"}, {"player", ctx.playerId}, {"turn", turn},
 		{"orders", orders.size()}});
 }
@@ -325,7 +437,7 @@ void cAiEngine::executeOrder (cClient& client, const cOrder& o)
 	}
 }
 
-void cAiEngine::writeMetrics()
+void cAiEngine::writeMetrics (const sGameResult& result)
 {
 	if (players_.empty()) return;
 
@@ -335,6 +447,15 @@ void cAiEngine::writeMetrics()
 	nlohmann::json m;
 	m["turn"] = model.getTurnCounter() ? model.getTurnCounter()->getTurn() : 0;
 	m["gameTime"] = model.getGameTime();
+	// исход партии (см. decideGameResult)
+	m["winner"] = result.winner;
+	m["winReason"] = result.winReason;
+	m["endReason"] = result.endReason;
+	m["endTurn"] = result.endTurn;
+	m["materialWinRatio"] = kMaterialWinRatio;
+	// зависшие концы хода, развязанные движком (cModel::setResolveStalledTurnEnd)
+	m["stalledTurnEnds"] = model.getStalledTurnEnds();
+	m["forcedTurnEnds"] = model.getForcedTurnEnds();
 
 	nlohmann::json players = nlohmann::json::array();
 	for (const auto& player : model.getPlayerList())
@@ -355,6 +476,9 @@ void cAiEngine::writeMetrics()
 		p["builtVehicles"] = s.builtVehiclesCount;
 		p["lostVehicles"] = s.lostVehiclesCount;
 		p["totalUpgradeCost"] = s.totalUpgradeCost;
+		// для D-score: стоимость живого, пик юнитов, потери за окна, собранные ресурсы
+		p["material"] = materialValue (*player);
+		p.update (metrics_.playerSummary (player->getId()));
 		players.push_back (std::move (p));
 	}
 	m["players"] = std::move (players);
@@ -371,10 +495,21 @@ void cAiEngine::writeMetrics()
 		Log.error ("ai_engine: cannot write metrics " + path);
 }
 
-void cAiEngine::finalize()
+sGameResult cAiEngine::finalize (eGameEnd end, int endTurn)
 {
-	writeMetrics();
+	sGameResult result;
+	if (!players_.empty())
+	{
+		const cModel& model = players_.front().client->getModel();
+		result = decideGameResult (model, end, endTurn);
+		metrics_.finish (model, endTurn);
+		writeMetrics (result);
+		const std::string turnsPath = outDir_ + "/metrics_turns.jsonl";
+		if (!metrics_.writeTurns (turnsPath))
+			Log.error ("ai_engine: cannot write " + turnsPath);
+	}
 	journal_.close();
+	return result;
 }
 
 } // namespace ai

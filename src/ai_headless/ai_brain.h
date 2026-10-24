@@ -11,6 +11,8 @@
 
 #include "ai_types.h"
 
+#include <nlohmann/json.hpp>
+
 #include <vector>
 
 class cModel;
@@ -28,6 +30,11 @@ public:
 
 	// Решить ход: вернуть приказы. Движок валидирует, исполняет, завершает ход.
 	virtual std::vector<cOrder> decideTurn (int playerId, const cModel& model) = 0;
+
+	// Решения мозга за последний decideTurn, которые не приказы (шаг 8: операции
+	// армии — создана, состояние, цель, сила/нужно, отход): движок пишет их в
+	// journal.jsonl до приказов хода. По умолчанию — нет.
+	virtual std::vector<nlohmann::json> takeJournalEvents() { return {}; }
 };
 
 // Заглушка этапа 2: ничего не делает, ход просто завершается движком.

@@ -1,12 +1,15 @@
 /***************************************************************************
- * ai_rule_brain.cpp — алгоритмический мозг: микро (этап 3) + заглушки
- * оперативки/стратегии (этап 4).
+ * ai_rule_brain.cpp — алгоритмический мозг: микро (этап 3), оперативка и
+ * стратегия (этап 4), экономика без даровой подпитки движка (шаг 5 PLAN.md),
+ * память о враге, карта угроз и тревога у базы (шаг 7 PLAN.md), операции
+ * армии (шаг 8 PLAN.md, ai_army_ops).
  ***************************************************************************/
 
 #include "ai_rule_brain.h"
 
 #include "ai_types.h"
 
+#include "game/data/base/base.h"
 #include "game/data/map/map.h"
 #include "game/data/map/mapview.h"
 #include "game/data/model.h"
@@ -20,9 +23,12 @@
 #include "utility/log.h"
 #include "utility/mathtools.h"
 
+#include "game/logic/turncounter.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <tuple>
 #include <unordered_map>
 
 namespace ai
@@ -414,13 +420,13 @@ bool repairMoreUrgent (const cVehicle* a, const cVehicle* b)
 }
 
 // --- кэш разведки за ход ---------------------------------------------------
-// Узкое место: findNearestUnexplored делал ПОЛНЫЙ скан карты (O(клетки)) на
+// Узкое место: поиск неразведанной клетки делал ПОЛНЫЙ скан карты (O(клетки)) на
 // КАЖДЫЙ боевой юнит и разведчика КАЖДЫЙ ход — O(юниты×клетки). Здесь список
 // неразведанных клеток строится ОДИН раз за ход (общий для всех юнитов игрока),
 // а проходимость кэшируется по типу стат. данных юнита (cMap::possiblePlace
 // зависит только от стат. данных + владельца + состояния карты — у всех юнитов
 // игрока владелец один, поэтому по указателю стат. данных кэш корректен).
-// Результат findNearestUnexplored БАЙТ-В-БАЙТ совпадает со старым полным
+// Выбор ближайшей клетки (pathToUnexplored) БАЙТ-В-БАЙТ совпадает со старым полным
 // сканом: тот же порядок обхода (x-major), те же проверки, то же строгое
 // сравнение дистанции (<, поэтому ничьи — за первой клеткой в порядке скана).
 
@@ -445,7 +451,7 @@ void buildScoutCache (const cPlayer& owner, const cMap& map, sScoutCache& cache)
 	cache.passable.clear();
 }
 
-const std::vector<char>& scoutPassable (sScoutCache& cache, const cVehicle& unit, const cMapView& view)
+std::vector<char>& scoutPassable (sScoutCache& cache, const cVehicle& unit, const cMapView& view)
 {
 	auto it = cache.passable.find (&unit.getStaticUnitData());
 	if (it == cache.passable.end())
@@ -458,31 +464,84 @@ const std::vector<char>& scoutPassable (sScoutCache& cache, const cVehicle& unit
 	return it->second;
 }
 
-// ближайшая неразведанная проходимая клетка (для surveyor и боевого «скаута»)
-cPosition findNearestUnexplored (const cVehicle& surveyor, const cMapView& view,
-	sScoutCache& cache, bool& found)
+constexpr int kSurveyorHome = 20;   // разведчик сначала разведывает этот радиус вокруг высадки
+
+// Путь к ближайшей неразведанной проходимой клетке (для surveyor и боевого «скаута»);
+// home — только клетки не дальше radius (Чебышёв) от home. Ближайшая может быть
+// недостижима (вода, отрезанный берег): такая помечается в кэше хода и берётся
+// следующая — до tries попыток (раньше юнит в этом случае стоял на месте).
+// Шаг 7: только клетки без угрозы и путь в обход опасных клеток; если обойти
+// нельзя — клетка отбрасывается (только для этого юнита) и берётся следующая.
+std::vector<cPosition> pathToUnexplored (const cVehicle& v, const cMapView& view,
+	sScoutCache& cache, const cWorldModel& world, eThreatLayer layer, const cPosition* home = nullptr, int radius = 0, int tries = 3)
 {
-	const auto& pass = scoutPassable (cache, surveyor, view);
-	found = false;
-	cPosition best;
-	int bestDist = std::numeric_limits<int>::max();
-	const cPosition from = surveyor.getPosition();
-	for (size_t i = 0; i < cache.unexplored.size(); ++i)
+	auto& pass = scoutPassable (cache, v, view);
+	const cPosition from = v.getPosition();
+	std::vector<int> unsafe; // клетки без безопасного пути — для этого юнита
+	for (int t = 0; t < tries; ++t)
 	{
-		if (!pass[i]) continue;
-		const cPosition& p = cache.unexplored[i];
-		const int d = (p - from).l2NormSquared();
-		if (d < bestDist)
+		int bestI = -1;
+		int bestDist = std::numeric_limits<int>::max();
+		for (size_t i = 0; i < cache.unexplored.size(); ++i)
 		{
-			bestDist = d;
-			best = p;
-			found = true;
+			if (!pass[i]) continue;
+			const cPosition& p = cache.unexplored[i];
+			if (home && std::max (std::abs (p.x() - home->x()), std::abs (p.y() - home->y())) > radius) continue;
+			const int d = (p - from).l2NormSquared();
+			if (d < bestDist)
+			{
+				if (world.threatFor (v, p, layer) > 0) continue;
+				if (std::find (unsafe.begin(), unsafe.end(), static_cast<int> (i)) != unsafe.end()) continue;
+				bestDist = d;
+				bestI = static_cast<int> (i);
+			}
 		}
+		if (bestI < 0) return {};
+		cPathCalculator pc (v, view, cache.unexplored[bestI], false);
+		auto path = pathToVector (pc.calcPath());
+		if (path.empty())
+		{
+			pass[bestI] = 0;
+			continue;
+		}
+		if (!world.pathUnsafe (v, path, layer)) return path;
+		auto safe = world.safePath (v, view, cache.unexplored[bestI], layer);
+		if (!safe.empty() && !world.pathUnsafe (v, safe, layer)) return safe;
+		unsafe.push_back (bestI);
 	}
-	return best;
+	return {};
 }
 
-// --- оперативка/стратегия (этап 4) -----------------------------------------
+// путь к dest: как у движка, а если он идёт через клетки под угрозой — в обход
+// (A* со штрафом за опасные клетки), если обход есть. safe — путь без угрозы.
+std::vector<cPosition> threatAwarePath (const cVehicle& v, const cMapView& view, const cPosition& dest,
+	const cWorldModel& world, eThreatLayer layer = eThreatLayer::Reach)
+{
+	cPathCalculator pc (v, view, dest, false);
+	auto path = pathToVector (pc.calcPath());
+	if (!path.empty() && world.pathUnsafe (v, path, layer))
+	{
+		auto alt = world.safePath (v, view, dest, layer);
+		if (!alt.empty()) path = std::move (alt);
+	}
+	return path;
+}
+
+// угроза клетки без привязки к машине (наземная)
+int cellThreat (const cWorldModel& world, const cPosition& c, eThreatLayer layer)
+{
+	if (layer == eThreatLayer::None) return 0;
+	return layer == eThreatLayer::Fire ? world.groundFire (c) : world.groundThreat (c);
+}
+
+// боевая наземная машина для операций армии
+bool isGroundFighter (const cVehicle& v)
+{
+	const auto& sd = v.getStaticUnitData();
+	return isCombatUnit (v) && sd.factorAir == 0 && sd.factorGround > 0 && !v.isDisabled() && !v.isUnitLoaded();
+}
+
+// --- оперативка/стратегия (этап 4; экономика без даров — шаг 8 этапа 5) -----
 
 // число своих зданий данного типа
 int countBuildings (const cPlayer& player, const sID& type)
@@ -500,55 +559,6 @@ int countVehicles (const cPlayer& player, const sID& type)
 	for (const auto& v : player.getVehicles())
 		if (v->getStaticUnitData().ID == type) ++n;
 	return n;
-}
-
-// свободная клетка для здания возле точки near (расширяющееся кольцо)
-// big-здания занимают 2x2 — проверяем весь след.
-cPosition findBuildSpot (const cModel& model, const cPlayer& player,
-	const cStaticUnitData& buildingData, const cPosition& near)
-{
-	const auto& map = model.getMap();
-	const cPosition size = map->getSize();
-	const bool big = buildingData.buildingData.isBig;
-	for (int r = 0; r < 40; ++r)
-	{
-		for (int dy = -r; dy <= r; ++dy)
-		{
-			for (int dx = -r; dx <= r; ++dx)
-			{
-				if (std::max (std::abs (dx), std::abs (dy)) != r) continue; // только кольцо
-				const cPosition p = near + cPosition (dx, dy);
-				if (!map->isValidPosition (p)) continue;
-				if (!map->possiblePlaceBuilding (buildingData, p, &player)) continue;
-				if (big)
-				{
-					if (!map->possiblePlaceBuilding (buildingData, p + cPosition (1, 0), &player)) continue;
-					if (!map->possiblePlaceBuilding (buildingData, p + cPosition (0, 1), &player)) continue;
-					if (!map->possiblePlaceBuilding (buildingData, p + cPosition (1, 1), &player)) continue;
-				}
-				return p;
-			}
-		}
-	}
-	return cPosition (-1, -1);
-}
-
-// своё здание-источник ресурса (для пополнения конструктора)
-const cBuilding* findResourceSource (const cPlayer& player, eResourceType resType)
-{
-	const cBuilding* best = nullptr;
-	int bestAmt = -1;
-	for (const auto& b : player.getBuildings())
-	{
-		if (b->getStaticUnitData().storeResType != resType) continue;
-		const int amt = b->getStoredResources();
-		if (amt > bestAmt)
-		{
-			bestAmt = amt;
-			best = b.get();
-		}
-	}
-	return best;
 }
 
 // клетка «зажата» — ни один из 4 ортогональных соседей не проходим (юнит не выедет)
@@ -584,7 +594,8 @@ cPosition findVehicleEscape (const cModel& model, const cVehicle& v)
 
 // соседняя свободная клетка для выезда юнита из фабрики
 cPosition findFactoryEscape (const cModel& model, const cBuilding& factory,
-	const cStaticUnitData& vehicleData, const cPlayer& player)
+	const cStaticUnitData& vehicleData, const cPlayer& player,
+	const std::vector<std::pair<cPosition, bool>>* avoid = nullptr)
 {
 	const auto& map = model.getMap();
 	for (int r = 1; r <= 3; ++r)
@@ -595,6 +606,11 @@ cPosition findFactoryEscape (const cModel& model, const cBuilding& factory,
 				if (!map->isValidPosition (p)) continue;
 				if (!factory.isNextTo (p)) continue;
 				if (!map->possiblePlaceVehicle (vehicleData, p, &player)) continue;
+				// не на площадку запланированной стройки
+				if (avoid && std::any_of (avoid->begin(), avoid->end(), [&] (const auto& f) {
+						const int fs = f.second ? 2 : 1;
+						return p.x() >= f.first.x() && p.y() >= f.first.y() && p.x() < f.first.x() + fs && p.y() < f.first.y() + fs;
+					})) continue;
 				// не выдавать юнит в запертую клетку: нужен свободный сосед для выезда
 				bool hasFreeNeighbor = false;
 				const cPosition dirs[4] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
@@ -610,18 +626,46 @@ cPosition findFactoryEscape (const cModel& model, const cBuilding& factory,
 	return cPosition (-1, -1);
 }
 
-// --- экономика: константы типов и чистые хелперы (этап 4) -------------------
+// --- экономика: константы типов и чистые хелперы ---------------------------
 
 const sID kIdFactory (1, 11);
 const sID kIdMine (1, 22);
-const sID kIdEnergy (1, 7);   // energy_big (6 энергии); energy_small (1) всегда в базе
+const sID kIdEnergy (1, 7);       // energy_big: 6 энергии за 6 нефти
+const sID kIdEnergySmall (1, 8);  // energy_small: 1 энергия за 2 нефти (строит пионер)
+const sID kIdConnector (1, 4);
+const sID kIdStorageMetal (1, 32);
 const sID kIdHabitat (1, 19);
 const sID kIdResearch (1, 27);
 const sID kIdTank (0, 32);
 const sID kIdKonstrukt (0, 19);
 
-constexpr int kTargetMines = 3;
-constexpr int kTargetConstructors = 3; // конструкторов в парке (для параллельной экономики)
+constexpr int kMinMineMetal = 3;   // шахта ради металла — от 3 металла в ход
+constexpr int kMinMineOil = 4;     // шахта ради нефти (когда энергию не из чего делать)
+constexpr int kMaxChain = 10;      // соединителей от базы до шахты — не больше
+constexpr int kMaxSiteRadius = 18; // площадки шахт — не дальше от высадки (Чебышёв)
+constexpr int kBaseRadius = 14;    // здания базы — не дальше от высадки
+constexpr int kMaxFactories = 6;
+constexpr int kFactoryRingMin = 4; // свободных клеток вокруг фабрики — для выезда машин
+constexpr int kMaxStorages = 3;
+constexpr int kStuckTurns = 3;     // ходов без пути к площадке — план снимается
+
+// шаг 7: тревога у базы и угрозы
+const sID kIdFighter (0, 16);      // эталон воздушной машины для карты угроз по воздуху
+constexpr int kEvacuateRadius = 15; // стройщик под угрозой ищет безопасную клетку не дальше (Чебышёв)
+constexpr int kAlarmRadius = 6;    // враг ближе (евклидово) к ключевому зданию или стройке — тревога
+constexpr int kAlarmFresh = 2;     // машина из памяти, виденная не раньше стольких ходов назад, — ещё угроза
+constexpr int kAlarmGroup = 6;     // враги ближе друг к другу — одна группа (один ответ)
+constexpr int kAlarmMaxDist = 30;  // защитники — не дальше от группы врагов
+constexpr int kAlarmMarginNum = 3; // ожидаемый урон защитников ≥ 3/2 hp группы
+constexpr int kAlarmMarginDen = 2;
+constexpr int kSafeSnap = 8;       // отход: безопасная клетка не дальше от точки отхода
+// слои угроз (подобраны турниром против base, отчёт шага 7 §4): стройщики, геолог и
+// разведка танками обходят «дальность + ход» врага, отход раненых — его зону огня с места
+constexpr eThreatLayer kBuilderLayer = eThreatLayer::Reach;
+constexpr eThreatLayer kScoutLayer = eThreatLayer::Reach;
+constexpr eThreatLayer kRetreatLayer = eThreatLayer::Fire;
+
+using tFootprints = std::vector<std::pair<cPosition, bool>>; // левый верхний угол + big
 
 // число конструкторов, прямо сейчас строящих здание данного типа (ещё не завершили)
 int countConstructorsBuilding (const cPlayer& player, const sID& type)
@@ -632,26 +676,54 @@ int countConstructorsBuilding (const cPlayer& player, const sID& type)
 	return n;
 }
 
-// Чистая функция выбора следующего здания по эффективным счётчикам
-// (построено + строится + назначено в текущем проходе). Детерминирована, без RNG.
-// Порядок: 1 фабрика → 3 шахты (нужна нефть) → энергия → до 3 фабрик (рост потока
-// танков) → жильё → исследование → фабрики 4-5+ с энергобалансом
-// (1 energy_small + 6·energy_big покрывает шахты+исслед.+фабрики).
-sID chooseNextBuilding (int nFactory, int nMine, int nEnergy, int nHabitat, int nResearch)
+// Сколько нефти сожгут станции и генераторы, чтобы дать need энергии, — тот же
+// расчёт, что cSubBase::checkOil (сначала станции по 6, остаток — генераторами).
+int oilForEnergy (int need, int stations, int generators)
 {
-	if (nFactory < 1) return kIdFactory;
-	if (nMine < kTargetMines) return kIdMine;   // 3 шахты ДО энергии: нужна нефть (иначе engine зависает в checkOil/checkEnergy)
-	if (nEnergy < 1) return kIdEnergy;
-	if (nFactory < 3) return kIdFactory;         // наращиваем до 3 фабрик ДО жилья/исследования (рост потока танков)
-	if (nHabitat < 1) return kIdHabitat;
-	if (nResearch < 1) return kIdResearch;
+	int s = std::min ((need + 3) / 6, stations);
+	int g = std::max (need - s * 6, 0);
+	if (g > generators)
+	{
+		if (s < stations)
+		{
+			++s;
+			g = 0;
+		}
+		else
+			g = generators;
+	}
+	return s * 6 + g * 2;
+}
 
-	// дальше фабрики 4-5+ с энергобалансом (1 energy_small + 6·energy_big
-	// покрывает шахты+исслед.+фабрики; следующая фабрика не влезет — добавить энергии)
-	const int energyTotal = 1 + 6 * nEnergy;
-	const int consumers = nMine + nResearch + nFactory;
-	if (consumers + 1 > energyTotal) return kIdEnergy;
-	return kIdFactory;
+// хватит ли станций/генераторов и нефти на need энергии
+bool energyFeasible (int need, int stations, int generators, int oil)
+{
+	if (need <= 0) return true;
+	if (need > stations * 6 + generators) return false;
+	return oilForEnergy (need, stations, generators) <= oil;
+}
+
+// Металл стройщика на скорость 1 — как cVehicle::calcTurboBuild при металле до
+// вместимости cap (каждые +4 металла — минус 1 ход); 0 — турбо недоступно.
+int builderTurboCost (int cost, int needsMetal, int cap)
+{
+	const int nm = needsMetal == 0 ? 1 : needsMetal;
+	const int turns0 = (cost + nm - 1) / nm;
+	int a = cost, rounds = turns0, costs = cost;
+	while (a >= 4 && cap >= costs + 4)
+	{
+		--rounds;
+		costs += 4;
+		a -= 4;
+	}
+	return (rounds < turns0 && rounds > 0) ? costs : 0;
+}
+
+// металл в ход фабрики на скорости speed (как cActionChangeBuildList)
+int factoryMetalPerRound (const cBuilding& f, int speed)
+{
+	static constexpr int k[3] = {1, 4, 12};
+	return k[std::clamp (speed, 0, 2)] * f.getStaticUnitData().needsMetal;
 }
 
 // Максимальная скорость стройки, которую конструктор может себе позволить ПРЯМО
@@ -669,15 +741,590 @@ int maxFeasibleBuildSpeed (const cVehicle& constructor, int buildCost)
 	return 0;
 }
 
+// Главная подбаза: где больше всего зданий (при равенстве — первая по id зданий).
+const cSubBase* findMainSubBase (const cPlayer& player)
+{
+	std::vector<std::pair<const cSubBase*, int>> counts; // в порядке первого здания — детерминированно
+	for (const auto& b : player.getBuildings())
+	{
+		if (b->subBase == nullptr) continue;
+		auto it = std::find_if (counts.begin(), counts.end(), [&] (const auto& c) { return c.first == b->subBase; });
+		if (it == counts.end())
+			counts.emplace_back (b->subBase, 1);
+		else
+			++it->second;
+	}
+	const cSubBase* best = nullptr;
+	int bestN = 0;
+	for (const auto& c : counts)
+		if (c.second > bestN)
+		{
+			bestN = c.second;
+			best = c.first;
+		}
+	return best;
+}
+
+// Экономика главной подбазы на начало хода.
+struct sEcon
+{
+	const cSubBase* sb = nullptr;
+	int metalProd = 0, metalMaxProd = 0, metalStored = 0, metalMaxStored = 0, metalNeeded = 0;
+	int oil = 0;           // нефть: максимум добычи + склад
+	int oilFree = 0;       // нефть без среза добычи металла (у шахты общий предел 16 в ход)
+	int energyDemand = 0;  // потребность всех потребителей подбазы (работают или нет)
+	int energyNeedWorking = 0;
+	int stations = 0, generators = 0;
+	int humanFree = 0;
+	int free = 0;          // металл хода: stored + prod - needed (к концу хода не уйти в минус)
+};
+
+sEcon readEcon (const cPlayer& player)
+{
+	sEcon e;
+	e.sb = findMainSubBase (player);
+	if (e.sb == nullptr) return e;
+	const cSubBase& sb = *e.sb;
+	e.metalProd = sb.getProd().metal;
+	e.metalMaxProd = sb.getMaxProd().metal;
+	e.metalStored = sb.getResourcesStored().metal;
+	e.metalMaxStored = sb.getMaxResourcesStored().metal;
+	e.metalNeeded = sb.getResourcesNeeded().metal;
+	e.oil = sb.getResourcesStored().oil;
+	e.energyNeedWorking = sb.getEnergyNeed();
+	e.humanFree = sb.getHumanProd() - sb.getHumanNeed();
+	e.oilFree = sb.getResourcesStored().oil;
+	for (const cBuilding* b : sb.getBuildings())
+	{
+		const auto& sd = b->getStaticUnitData();
+		e.energyDemand += sd.needsEnergy;
+		if (sd.ID == kIdEnergy) ++e.stations;
+		else if (sd.ID == kIdEnergySmall) ++e.generators;
+		if (sd.buildingData.canMineMaxRes > 0)
+		{
+			// по ресурсу под шахтой, а не по подбазе: та считает только работающие шахты
+			const auto& mp = b->getMaxProd();
+			e.oil += mp.oil;
+			// золото у движка важнее металла при нехватке нефти — его доля тоже не свободна
+			e.oilFree += std::clamp (sd.buildingData.canMineMaxRes - mp.metal - mp.gold, 0, mp.oil);
+		}
+	}
+	e.free = std::max (0, e.metalStored + e.metalProd - e.metalNeeded);
+	// станции сверх «свободной» нефти заберут мощность шахт у металла — не тратить его заранее
+	const int cut = std::max (0, oilForEnergy (e.energyDemand, e.stations, e.generators) - e.oilFree);
+	e.free = std::max (0, e.free - std::min (cut, e.metalProd));
+	return e;
+}
+
+// разведанный ресурс клетки (0 — нет или ещё не разведан)
+int exploredResource (const cMap& map, const cPlayer& player, const cPosition& p, eResourceType type)
+{
+	if (!map.isValidPosition (p) || !player.hasResourceExplored (p)) return 0;
+	const auto& r = map.getResource (p);
+	return r.typ == type ? r.value : 0;
+}
+
+// клетки под зданием (1 или 2×2)
+std::vector<cPosition> footprintCells (const cPosition& q, bool big)
+{
+	if (!big) return {q};
+	return {q, q + cPosition (1, 0), q + cPosition (0, 1), q + cPosition (1, 1)};
+}
+
+// соседи по стороне — через них здание соединяется в подбазу (как cBase::addBuilding)
+std::vector<cPosition> sideNeighbours (const cPosition& q, bool big)
+{
+	if (big)
+		return {q.relative (0, -1), q.relative (1, -1), q.relative (2, 0), q.relative (2, 1),
+			q.relative (0, 2), q.relative (1, 2), q.relative (-1, 0), q.relative (-1, 1)};
+	return {q.relative (0, -1), q.relative (1, 0), q.relative (0, 1), q.relative (-1, 0)};
+}
+
+// кольцо клеток вокруг здания (с углами) — куда выезжают машины
+std::vector<cPosition> ringCells (const cPosition& q, bool big)
+{
+	const int s = big ? 2 : 1;
+	std::vector<cPosition> r;
+	for (int dy = -1; dy <= s; ++dy)
+		for (int dx = -1; dx <= s; ++dx)
+			if (dx < 0 || dy < 0 || dx >= s || dy >= s) r.push_back (q + cPosition (dx, dy));
+	return r;
+}
+
+bool inFootprint (const cPosition& p, const cPosition& q, bool big)
+{
+	const int s = big ? 2 : 1;
+	return p.x() >= q.x() && p.y() >= q.y() && p.x() < q.x() + s && p.y() < q.y() + s;
+}
+
+bool overlapsAny (const cPosition& q, bool big, const tFootprints& reserved)
+{
+	const int qs = big ? 2 : 1;
+	for (const auto& r : reserved)
+	{
+		const int rs = r.second ? 2 : 1;
+		if (q.x() < r.first.x() + rs && r.first.x() < q.x() + qs
+			&& q.y() < r.first.y() + rs && r.first.y() < q.y() + qs) return true;
+	}
+	return false;
+}
+
+// на клетке стоит здание главной подбазы
+bool hasMainBuilding (const cMap& map, const cPlayer& player, const cSubBase* main, const cPosition& p)
+{
+	if (main == nullptr || !map.isValidPosition (p)) return false;
+	for (const cBuilding* b : map.getField (p).getBuildings())
+		if (b->getOwner() == &player && b->subBase == main) return true;
+	return false;
+}
+
+// клетка проходима для наземной машины: суша, нет «наземного» здания (соединитель/дорога — можно)
+bool groundFree (const cMap& map, const cPosition& p)
+{
+	if (!map.isValidPosition (p) || map.isBlocked (p) || map.isWater (p)) return false;
+	for (const cBuilding* b : map.getField (p).getBuildings())
+	{
+		if (b->isRubble()) continue; // обломки проходимы
+		const auto sp = b->getStaticUnitData().surfacePosition;
+		if (sp != eSurfacePosition::Above && sp != eSurfacePosition::Base && sp != eSurfacePosition::AboveBase) return false;
+	}
+	return true;
+}
+
+// можно ли поставить здание, не считая машин на клетках (они уедут); как проверка сервера
+bool canPlaceIgnoringVehicles (const cMap& map, const cPlayer& player, const cStaticUnitData& data, const cPosition& q)
+{
+	for (const auto& c : footprintCells (q, data.buildingData.isBig))
+	{
+		if (!map.isValidPosition (c)) return false;
+		if (!map.possiblePlaceBuilding (data, c, &player, map.getField (c).getVehicle())) return false;
+	}
+	return true;
+}
+
+// Стройщик заперт своими зданиями (высадка в угол карты): ни одной соседней клетки
+// без здания и ни одной площадки большого здания с его клеткой — выйти нельзя.
+// Тогда соседнее малое здание (генератор) мешает: его можно самоуничтожить (как в
+// GUI), пионер поставит новое. nullptr — не заперт.
+const cBuilding* trappingBuilding (const cMap& map, const cPlayer& player, const cStaticUnitData& bigData, const cVehicle& v)
+{
+	const cPosition pos = v.getPosition();
+	for (int dy = -1; dy <= 1; ++dy)
+		for (int dx = -1; dx <= 1; ++dx)
+			if ((dx != 0 || dy != 0) && groundFree (map, pos + cPosition (dx, dy))) return nullptr;
+	const cPosition offs[4] = {{0, 0}, {-1, 0}, {0, -1}, {-1, -1}};
+	for (const auto& off : offs)
+		if (canPlaceIgnoringVehicles (map, player, bigData, pos + off)) return nullptr;
+	for (int dy = -1; dy <= 1; ++dy)
+		for (int dx = -1; dx <= 1; ++dx)
+		{
+			const cPosition c = pos + cPosition (dx, dy);
+			if (!map.isValidPosition (c)) continue;
+			for (const cBuilding* b : map.getField (c).getBuildings())
+				if (b->getOwner() == &player && !b->getIsBig() && b->getStaticData().canSelfDestroy && !b->isBeingAttacked())
+					return b;
+		}
+	return nullptr;
+}
+
+// Сетка соединителей: 0 — клетка здания главной подбазы, k — сюда дойдёт k-й
+// соединитель от базы (клетки без зданий, где соединитель ставится), -1 — нет.
+struct sConnGrid
+{
+	int w = 0, h = 0;
+	std::vector<int> dist;
+	int at (const cPosition& p) const
+	{
+		if (p.x() < 0 || p.y() < 0 || p.x() >= w || p.y() >= h) return -1;
+		return dist[static_cast<size_t> (p.y()) * w + p.x()];
+	}
+	void set (const cPosition& p, int d) { dist[static_cast<size_t> (p.y()) * w + p.x()] = d; }
+};
+
+void buildConnGrid (const cModel& model, const cPlayer& player, const cSubBase* main, sConnGrid& g)
+{
+	const cMap& map = *model.getMap();
+	g.w = map.getSize().x();
+	g.h = map.getSize().y();
+	g.dist.assign (static_cast<size_t> (g.w) * g.h, -1);
+	if (main == nullptr) return;
+	const auto& connData = model.getUnitsData()->getStaticUnitData (kIdConnector);
+	std::vector<cPosition> queue;
+	for (const auto& b : player.getBuildings())
+	{
+		if (b->subBase != main) continue;
+		for (const auto& c : footprintCells (b->getPosition(), b->getIsBig()))
+			if (g.at (c) == -1)
+			{
+				g.set (c, 0);
+				queue.push_back (c);
+			}
+	}
+	const cPosition dirs[4] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
+	for (size_t i = 0; i < queue.size(); ++i)
+	{
+		const cPosition p = queue[i];
+		const int d = g.at (p);
+		if (d >= kMaxChain) continue;
+		for (const auto& dir : dirs)
+		{
+			const cPosition n = p + dir;
+			if (!map.isValidPosition (n) || g.at (n) != -1) continue;
+			if (!map.getField (n).getBuildings().empty()) continue;
+			// машина на клетке мешает соединителю (BuildPath прервётся); свой пионер — нет, он и строит
+			const cVehicle* onCell = map.getField (n).getVehicle();
+			const bool ownPionier = onCell != nullptr && onCell->getOwner() == &player
+				&& onCell->getStaticUnitData().canBuild == "SmallBuilding";
+			if (!map.possiblePlaceBuilding (connData, n, &player, ownPionier ? onCell : nullptr)) continue;
+			g.set (n, d + 1);
+			queue.push_back (n);
+		}
+	}
+}
+
+// сколько соединителей нужно до здания в q (0 — уже касается базы, -1 — не дотянуться)
+int chainTo (const sConnGrid& g, const cPosition& q, bool big, cPosition* side = nullptr)
+{
+	int best = -1;
+	for (const auto& s : sideNeighbours (q, big))
+	{
+		const int d = g.at (s);
+		if (d < 0) continue;
+		if (best < 0 || d < best)
+		{
+			best = d;
+			if (side) *side = s;
+		}
+	}
+	return best;
+}
+
+// путь соединителей от базы до клетки s: [клетка у базы, …, s]
+std::vector<cPosition> connectorPath (const sConnGrid& g, cPosition s)
+{
+	int d = g.at (s);
+	if (d < 1) return {};
+	std::vector<cPosition> rev {s};
+	const cPosition dirs[4] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
+	while (d > 1)
+	{
+		bool stepped = false;
+		for (const auto& dir : dirs)
+		{
+			const cPosition n = s + dir;
+			if (g.at (n) == d - 1)
+			{
+				s = n;
+				--d;
+				rev.push_back (s);
+				stepped = true;
+				break;
+			}
+		}
+		if (!stepped) return {};
+	}
+	std::reverse (rev.begin(), rev.end());
+	return rev;
+}
+
+// клетки здания под наземной угрозой врага (шаг 7)
+bool footprintThreatened (const cWorldModel& world, const cPosition& q, bool big, eThreatLayer layer)
+{
+	for (const auto& c : footprintCells (q, big))
+		if (cellThreat (world, c, layer) > 0) return true;
+	return false;
+}
+
+// площадка шахты на разведанном ресурсе
+struct sSite
+{
+	cPosition pos {-1, -1};
+	int metal = 0;
+	int oil = 0;
+	int chain = -1;
+	long long score = std::numeric_limits<long long>::min();
+	bool valid() const { return pos.x() >= 0; }
+};
+
+// Лучшая площадка шахты: металл под шахтой (и нефть, если энергию не из чего
+// делать), ближе к базе и короче цепочка соединителей. Только разведанные клетки.
+sSite findMineSite (const cModel& model, const cPlayer& player, const sConnGrid& g,
+	const tFootprints& reserved, bool wantOil, const cWorldModel& world, eThreatLayer layer)
+{
+	const cMap& map = *model.getMap();
+	const auto& mineData = model.getUnitsData()->getStaticUnitData (kIdMine);
+	const int cap = mineData.buildingData.canMineMaxRes;
+	const cPosition landing = player.getLandingPos();
+	const cPosition offs[4] = {{0, 0}, {-1, 0}, {0, -1}, {-1, -1}};
+	sSite best;
+	for (int y = landing.y() - kMaxSiteRadius; y <= landing.y() + kMaxSiteRadius; ++y)
+		for (int x = landing.x() - kMaxSiteRadius; x <= landing.x() + kMaxSiteRadius; ++x)
+		{
+			const cPosition c (x, y);
+			if (!map.isValidPosition (c) || !player.hasResourceExplored (c)) continue;
+			const auto& r = map.getResource (c);
+			const bool metalSpot = r.typ == eResourceType::Metal && r.value >= kMinMineMetal;
+			const bool oilSpot = wantOil && r.typ == eResourceType::Oil && r.value >= kMinMineOil;
+			if (!metalSpot && !oilSpot) continue;
+			for (const auto& off : offs)
+			{
+				const cPosition q = c + off;
+				if (overlapsAny (q, true, reserved)) continue;
+				if (!canPlaceIgnoringVehicles (map, player, mineData, q)) continue;
+				if (footprintThreatened (world, q, true, layer)) continue; // под угрозой врага — не строить
+				const int chain = chainTo (g, q, true);
+				if (chain < 0) continue;
+				int m = 0, o = 0;
+				for (const auto& f : footprintCells (q, true))
+				{
+					m += exploredResource (map, player, f, eResourceType::Metal);
+					o += exploredResource (map, player, f, eResourceType::Oil);
+				}
+				const int metal = std::min (m, cap);
+				const int oil = std::min (o, cap - metal);
+				if (metal < kMinMineMetal && !(wantOil && oil >= kMinMineOil)) continue;
+				const int far = std::max (std::abs (q.x() - landing.x()), std::abs (q.y() - landing.y()));
+				const long long score = metal * 100LL + oil * (wantOil ? 100LL : 25LL) - chain * 40LL - far * 3LL;
+				if (score > best.score)
+				{
+					best.pos = q;
+					best.metal = metal;
+					best.oil = oil;
+					best.chain = chain;
+					best.score = score;
+				}
+			}
+		}
+	return best;
+}
+
+// Сколько клеток (до limit) доступно наземной машине из start, если клетки blocked
+// заняты: обход по сторонам через свободные клетки (соединители и дороги — можно).
+int freeRegion (const cMap& map, const cPosition& start, const std::vector<cPosition>& blocked, int limit)
+{
+	auto isBlocked = [&] (const cPosition& c) { return std::find (blocked.begin(), blocked.end(), c) != blocked.end(); };
+	if (isBlocked (start)) return 0;
+	std::vector<cPosition> seen {start};
+	const cPosition dirs[4] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
+	for (size_t i = 0; i < seen.size() && static_cast<int> (seen.size()) < limit; ++i)
+		for (const auto& d : dirs)
+		{
+			const cPosition n = seen[i] + d;
+			if (!groundFree (map, n) || isBlocked (n) || std::find (seen.begin(), seen.end(), n) != seen.end()) continue;
+			seen.push_back (n);
+		}
+	return std::min (static_cast<int> (seen.size()), limit);
+}
+
+constexpr int kMinRegion = 8; // здание не должно замуровать машину в кармане меньше этого
+
+// Место для здания у главной базы: касается её стороной (иначе нет металла и
+// энергии), не занимает разведанных металла и нефти (они под шахты), оставляет
+// выезд фабрикам. Кольцами от высадки — детерминированно.
+cPosition findBaseSpot (const cModel& model, const cPlayer& player, const cSubBase* main,
+	const cStaticUnitData& data, const tFootprints& reserved, const cWorldModel& world, eThreatLayer layer)
+{
+	if (main == nullptr) return cPosition (-1, -1);
+	const cMap& map = *model.getMap();
+	const bool big = data.buildingData.isBig;
+	const bool isFactory = !data.canBuild.empty();
+	const cPosition landing = player.getLandingPos();
+	std::vector<const cBuilding*> factories;
+	for (const auto& b : player.getBuildings())
+		if (b->subBase == main && !b->getStaticUnitData().canBuild.empty()) factories.push_back (b.get());
+
+	// второй проход (тесная база, угол карты) — мягче: ресурсы берегутся только
+	// шахтные, выезда достаточно одного, радиус больше
+	for (int pass = 0; pass < 2; ++pass)
+	{
+	const bool strict = pass == 0;
+	const int minMetal = strict ? 2 : kMinMineMetal;
+	const int minOil = strict ? 3 : kMinMineOil + 3;
+	const int ringSelf = isFactory ? (strict ? kFactoryRingMin + 1 : 3) : (strict ? (big ? 2 : 3) : 1);
+	const int ringFactory = strict ? kFactoryRingMin : 2;
+	for (int r = 1; r <= kBaseRadius + (strict ? 0 : 4); ++r)
+		for (int dy = -r; dy <= r; ++dy)
+			for (int dx = -r; dx <= r; ++dx)
+			{
+				if (std::max (std::abs (dx), std::abs (dy)) != r) continue;
+				const cPosition q = landing + cPosition (dx, dy);
+				if (overlapsAny (q, big, reserved)) continue;
+				if (footprintThreatened (world, q, big, layer)) continue; // под угрозой врага — не строить
+				const auto cells = footprintCells (q, big);
+				bool ok = true;
+				for (const auto& c : cells)
+				{
+					if (!map.isValidPosition (c)
+						|| !map.possiblePlaceBuilding (data, c, &player, map.getField (c).getVehicle())
+						|| exploredResource (map, player, c, eResourceType::Metal) >= minMetal
+						|| exploredResource (map, player, c, eResourceType::Oil) >= minOil)
+					{
+						ok = false;
+						break;
+					}
+				}
+				if (!ok) continue;
+				bool touches = false;
+				for (const auto& s : sideNeighbours (q, big))
+					if (hasMainBuilding (map, player, main, s))
+					{
+						touches = true;
+						break;
+					}
+				if (!touches) continue;
+				// не замуровать свои машины рядом (угол карты: конструктор в кармане у шахты)
+				for (const auto& vp : player.getVehicles())
+				{
+					const cPosition vpos = vp->getPosition();
+					if (vp->isUnitBuildingABuilding() || inFootprint (vpos, q, big)) continue;
+					if (std::max (std::abs (vpos.x() - q.x()), std::abs (vpos.y() - q.y())) > 3) continue;
+					if (freeRegion (map, vpos, {}, kMinRegion) >= kMinRegion && freeRegion (map, vpos, cells, kMinRegion) < kMinRegion)
+					{
+						ok = false;
+						break;
+					}
+				}
+				if (!ok) continue;
+				// стройщик выедет из готового здания на клетку, откуда есть куда ехать
+				bool exitOk = false;
+				for (const auto& c : ringCells (q, big))
+					if (groundFree (map, c) && freeRegion (map, c, cells, kMinRegion) >= kMinRegion)
+					{
+						exitOk = true;
+						break;
+					}
+				if (!exitOk) continue;
+				// свободные клетки вокруг здания fq с учётом нового здания
+				auto freeRing = [&] (const cPosition& fq, bool fbig) {
+					int n = 0;
+					for (const auto& c : ringCells (fq, fbig))
+						if (groundFree (map, c) && std::find (cells.begin(), cells.end(), c) == cells.end()) ++n;
+					return n;
+				};
+				// стройщику и машинам нужен выезд: фабрике — с запасом, прочим — хотя бы два
+				if (freeRing (q, big) < ringSelf) continue;
+				for (const cBuilding* f : factories)
+					if (freeRing (f->getPosition(), f->getIsBig()) < ringFactory)
+					{
+						ok = false;
+						break;
+					}
+				if (!ok) continue;
+				return q;
+			}
+	}
+	return cPosition (-1, -1);
+}
+
+// приказ Move по пути к dest (цель пути — в position, для журнала)
+bool pushMove (const cVehicle& v, const cMapView& view, const cPosition& dest, int playerId,
+	const char* level, const std::string& reason, std::vector<cOrder>& out)
+{
+	cPathCalculator pc (v, view, dest, false);
+	auto path = pc.calcPath();
+	if (path.empty()) return false;
+	cOrder o;
+	o.type = eOrderType::Move;
+	o.playerId = playerId;
+	o.unitId = v.getId();
+	o.path = pathToVector (path);
+	o.position = o.path.back();
+	o.level = level;
+	o.reason = reason;
+	out.push_back (std::move (o));
+	return true;
+}
+
+// то же, но мимо клеток под угрозой, если обход есть (стройщики, шаг 7)
+bool pushMoveSafe (const cVehicle& v, const cMapView& view, const cPosition& dest, const cWorldModel& world,
+	eThreatLayer layer, int playerId, const char* level, const std::string& reason, std::vector<cOrder>& out)
+{
+	auto path = threatAwarePath (v, view, dest, world, layer);
+	if (path.empty()) return false;
+	cOrder o;
+	o.type = eOrderType::Move;
+	o.playerId = playerId;
+	o.unitId = v.getId();
+	o.path = std::move (path);
+	o.position = o.path.back();
+	o.level = level;
+	o.reason = reason;
+	out.push_back (std::move (o));
+	return true;
+}
+
+// ближайшая свободная клетка рядом со зданием главной подбазы (там стройщик берёт металл)
+cPosition findBaseDock (const cMap& map, const cPlayer& player, const cSubBase* main, const cVehicle& v,
+	const cMapView& view, const tFootprints& reserved, const cWorldModel& world, eThreatLayer layer)
+{
+	cPosition best (-1, -1);
+	int bestDist = std::numeric_limits<int>::max();
+	for (const auto& b : player.getBuildings())
+	{
+		if (b->subBase != main) continue;
+		for (const auto& c : ringCells (b->getPosition(), b->getIsBig()))
+		{
+			if (!map.isValidPosition (c) || !view.possiblePlace (v, c) || overlapsAny (c, false, reserved)) continue;
+			if (world.threatFor (v, c, layer) > 0) continue; // под угрозой врага — не сюда
+			const int d = (c - v.getPosition()).l2NormSquared();
+			if (d < bestDist)
+			{
+				bestDist = d;
+				best = c;
+			}
+		}
+	}
+	return best;
+}
+
+// здание главной подбазы рядом со стройщиком — источник металла (как Transfer в GUI)
+const cBuilding* refillSource (const cPlayer& player, const cSubBase* main, const cVehicle& v)
+{
+	if (main == nullptr || main->getMaxResourcesStored().metal <= 0) return nullptr;
+	for (const auto& b : player.getBuildings())
+		if (b->subBase == main && b->isNextTo (v.getPosition())) return b.get();
+	return nullptr;
+}
+
 } // namespace
 
 //------------------------------------------------------------------------------
 std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 {
 	std::vector<cOrder> orders;
+	stats_ = {};
+	// события операций, не взятые движком (мозг внутри советника), — не копить без конца;
+	// директива, заданная до хода, остаётся и уходит в журнал с событиями этого хода
+	if (ops_.pendingEvents() > 200) ops_.takeEvents();
+	// память о враге и карта угроз — до всех решений хода (шаг 7)
+	if (const cPlayer* player = model.getPlayer (playerId); player != nullptr && !player->isDefeated)
+	{
+		const int turn = model.getTurnCounter() ? model.getTurnCounter()->getTurn() : 0;
+		world_.update (model, *player, turn);
+		const auto* tank = player->getLastUnitData (kIdTank);
+		const auto* fighter = player->getLastUnitData (kIdFighter);
+		world_.buildThreat (*model.getMap(), tank ? tank->getArmor() : 0, fighter ? fighter->getArmor() : 0);
+	}
 	strategicDecisions (playerId, model, orders);
 	operationalDecisions (playerId, model, orders);
 	microDecisions (playerId, model, orders);
+	// поведенческие цифры шага 7 — в журнал движка (maxr.log партии), только когда есть что сказать
+	if (stats_.alarms > 0 || stats_.retreats > 0 || stats_.evacuations > 0 || stats_.holds > 0 || stats_.opMoves > 0 || stats_.opHolds > 0)
+	{
+		int visible = 0;
+		for (const auto& kv : world_.enemies())
+			if (kv.second.visible) ++visible;
+		Log.info ("ai_rule p" + std::to_string (playerId) + " t" + std::to_string (world_.turn())
+			+ ": alarm " + std::to_string (stats_.alarms) + " intruders " + std::to_string (stats_.intruders)
+			+ " defenders " + std::to_string (stats_.defenders) + " reserve " + std::to_string (stats_.reserve)
+			+ " uncovered " + std::to_string (stats_.uncovered)
+			+ " holds " + std::to_string (stats_.holds)
+			+ " retreats " + std::to_string (stats_.retreats) + " unsafe " + std::to_string (stats_.unsafeRetreats)
+			+ " infire " + std::to_string (stats_.fireRetreats)
+			+ " evac " + std::to_string (stats_.evacuations)
+			+ " memory " + std::to_string (visible) + "/" + std::to_string (world_.enemies().size())
+			+ " opmoves " + std::to_string (stats_.opMoves) + " opholds " + std::to_string (stats_.opHolds));
+	}
 	return orders;
 }
 
@@ -715,187 +1362,693 @@ void cRuleBrain::strategicDecisions (int playerId, const cModel& model, std::vec
 }
 
 //------------------------------------------------------------------------------
-// Оперативка (этап 4): стройка, производство, снабжение конструкторов.
+// Оперативка: стройка, производство, снабжение стройщиков — без даровой подпитки.
+//
+// Металл хода (бюджет) — stored + prod - needed главной подбазы: столько можно
+// забрать, не заглушив к концу хода работающие фабрики (иначе движок
+// отказывает в сдаче хода). Сначала пополняются стройщики (шахты, энергия,
+// фабрики — вложения), остаток — фабрикам. Порядок приказов: пополнение →
+// производство → стройка → запуск шахт; сервер исполняет их по порядку.
 void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::vector<cOrder>& out)
 {
 	const cPlayer* player = model.getPlayer (playerId);
 	if (player == nullptr || player->isDefeated) return;
 
 	const auto& unitsData = model.getUnitsData();
+	const cMap& map = *model.getMap();
+	const cMapView view (model.getMap(), sharedPlayerOf (model, playerId));
 
-	// 1) запустить все свои здания, что могут работать, но не работают
-	for (const auto& b : player->getBuildings())
+	const sEcon econ = readEcon (*player);
+	const cSubBase* main = econ.sb;
+	opMoved_.clear();
+	const eThreatLayer bl = kBuilderLayer; // слой угроз для стройщиков (шаг 7)
+
+	sConnGrid grid;
+	buildConnGrid (model, *player, main, grid);
+
+	// планы машин, которых больше нет, которые уже строят или застряли без пути, — забыть
+	const int turn = model.getTurnCounter() ? model.getTurnCounter()->getTurn() : 0;
+	for (auto it = stuck_.begin(); it != stuck_.end();)
 	{
-		if (b->getStaticData().canWork && !b->isUnitWorking())
+		const cVehicle* v = model.getVehicleFromID (it->first);
+		if (v == nullptr || v->getOwner() != player || (it->second >= kStuckTurns && turn % 10 == 0))
+			it = stuck_.erase (it); // раз в 10 ходов — попробовать снова (карман мог открыться)
+		else
+			++it;
+	}
+	auto isStuck = [&] (const cVehicle& v) {
+		const auto it = stuck_.find (v.getId());
+		return it != stuck_.end() && it->second >= kStuckTurns;
+	};
+	for (auto it = plans_.begin(); it != plans_.end();)
+	{
+		const cVehicle* v = model.getVehicleFromID (it->first);
+		if (v == nullptr || v->getOwner() != player || v->isUnitBuildingABuilding() || isStuck (*v))
+			it = plans_.erase (it);
+		else
+			++it;
+	}
+
+	auto planType = [] (const sBuildPlan& p) { return sID (p.typeFirst, p.typeSecond); };
+	// построено + строится + в планах
+	auto totalOf = [&] (const sID& id) {
+		int n = countBuildings (*player, id) + countConstructorsBuilding (*player, id);
+		for (const auto& kv : plans_)
+			if (planType (kv.second) == id) ++n;
+		return n;
+	};
+	// энергия главной базы с учётом строящегося и запланированного: {спрос, станции, генераторы}
+	auto energyState = [&] () {
+		int demand = econ.energyDemand, stations = econ.stations, generators = econ.generators;
+		auto add = [&] (const sID& id) {
+			demand += unitsData->getStaticUnitData (id).needsEnergy;
+			if (id == kIdEnergy) ++stations;
+			else if (id == kIdEnergySmall) ++generators;
+		};
+		for (const auto& v : player->getVehicles())
+			if (v->isUnitBuildingABuilding()) add (v->getBuildingType());
+		for (const auto& kv : plans_) add (planType (kv.second));
+		return std::array<int, 3> {demand, stations, generators};
+	};
+	// строящееся сейчас (стройщик стоит на площадке) — его площадки тоже заняты
+	tFootprints inProgress;
+	for (const auto& v : player->getVehicles())
+		if (v->isUnitBuildingABuilding()) inProgress.emplace_back (v->getPosition(), v->getIsBig());
+	auto reservedFootprints = [&] () {
+		tFootprints r = inProgress;
+		for (const auto& kv : plans_)
+			r.emplace_back (kv.second.pos, unitsData->getStaticUnitData (planType (kv.second)).buildingData.isBig);
+		return r;
+	};
+	// план ещё выполним: площадка свободна от зданий и чужой стройки и не под угрозой врага
+	auto planValid = [&] (const sBuildPlan& p) {
+		const auto& sd = unitsData->getStaticUnitData (planType (p));
+		return canPlaceIgnoringVehicles (map, *player, sd, p.pos) && !overlapsAny (p.pos, sd.buildingData.isBig, inProgress)
+			&& !footprintThreatened (world_, p.pos, sd.buildingData.isBig, bl);
+	};
+
+	const bool rich = econ.metalMaxStored > 0 && econ.metalStored * 5 >= econ.metalMaxStored * 4; // склад ≥ 80%
+	// фабрик — по добыче металла; склад полон — ещё одна (металл есть, мощностей нет)
+	const int factoryTarget = std::clamp ((econ.metalMaxProd + 5) / 8 + (rich ? 1 : 0), 1, kMaxFactories);
+
+	struct sRefill
+	{
+		const cVehicle* v;
+		const cBuilding* src;
+		int want;
+	};
+	std::vector<sRefill> refills;
+	std::vector<cOrder> builderOrders; // стройка и движение стройщиков — до производства (выезд не займёт площадку)
+
+	auto pushFinishBuild = [&] (const cVehicle& v) {
+		const cPosition esc = findVehicleEscape (model, v);
+		if (esc.x() < 0) return;
+		cOrder o;
+		o.type = eOrderType::FinishBuild;
+		o.playerId = playerId;
+		o.unitId = v.getId();
+		o.position = esc;
+		o.level = "op";
+		o.reason = "finish building";
+		builderOrders.push_back (std::move (o));
+	};
+	// стройщику не хватает металла: у базы — пополнить, иначе — к базе
+	auto needMetal = [&] (const cVehicle& v, int want) {
+		if (const cBuilding* src = refillSource (*player, main, v))
+			refills.push_back ({&v, src, want});
+		else
+		{
+			const cPosition dock = findBaseDock (map, *player, main, v, view, reservedFootprints(), world_, bl);
+			if (dock.x() >= 0) pushMoveSafe (v, view, dock, world_, bl, playerId, "op", "to base for metal", builderOrders);
+		}
+	};
+	// план стройщика: стоит на площадке — строит, иначе идёт к ней
+	auto executePlan = [&] (const cVehicle& v, sBuildPlan& plan) {
+		const sID what = planType (plan);
+		const auto& bdata = unitsData->getStaticUnitData (what);
+		const bool big = bdata.buildingData.isBig;
+		const int buildCost = player->getLastUnitData (what)->getBuildCost();
+		if (v.getStoredResources() < plan.cost)
+		{
+			// вдали от базы на турбо не хватает, но на обычную скорость есть — строить сейчас
+			const int gap = plan.cost - v.getStoredResources();
+			const bool refillSoon = refillSource (*player, main, v) != nullptr
+				&& econ.metalStored + 3 * std::max (0, econ.metalProd - econ.metalNeeded) >= gap;
+			if (plan.speed > 0 && v.getStoredResources() >= buildCost && !refillSoon)
+			{
+				plan.speed = 0;
+				plan.cost = buildCost;
+			}
+			else
+			{
+				needMetal (v, std::min (plan.cost, v.getStaticUnitData().storageResMax) - v.getStoredResources());
+				return;
+			}
+		}
+		if (!inFootprint (v.getPosition(), plan.pos, big))
+		{
+			// ближайшая к стройщику клетка площадки, куда можно встать
+			cPosition best (-1, -1);
+			int bestDist = std::numeric_limits<int>::max();
+			for (const auto& c : footprintCells (plan.pos, big))
+			{
+				if (!view.possiblePlace (v, c)) continue;
+				const int d = (c - v.getPosition()).l2NormSquared();
+				if (d < bestDist)
+				{
+					bestDist = d;
+					best = c;
+				}
+			}
+			if (best.x() >= 0 && pushMoveSafe (v, view, best, world_, bl, playerId, "op", "to build site: " + bdata.getDefaultName(), builderOrders))
+				stuck_.erase (v.getId());
+			else
+				++stuck_[v.getId()]; // пути нет — после трёх ходов план снимается
+			return;
+		}
+		for (const auto& c : footprintCells (plan.pos, big))
+			if (!map.possiblePlaceBuilding (bdata, c, player, &v)) return; // площадку заняли — ждём
+		const int speed = std::min (plan.speed, maxFeasibleBuildSpeed (v, buildCost));
+		cOrder o;
+		o.type = eOrderType::Build;
+		o.playerId = playerId;
+		o.unitId = v.getId();
+		o.buildingType = {what.firstPart, what.secondPart};
+		o.position = plan.pos;
+		o.buildSpeed = speed;
+		o.level = "op";
+		o.reason = "build " + bdata.getDefaultName() + (speed > 0 ? " (turbo)" : "");
+		builderOrders.push_back (std::move (o));
+	};
+	// turbo: скорость 1 за ×2 металла — когда металл всё равно лишний (или это первая фабрика)
+	auto makePlan = [&] (const cVehicle& v, const sID& what, const cPosition& pos, bool turbo) -> sBuildPlan& {
+		const int cost0 = player->getLastUnitData (what)->getBuildCost();
+		const int cost1 = builderTurboCost (cost0, v.getStaticUnitData().needsMetal, v.getStaticUnitData().storageResMax);
+		const bool fast = cost1 > 0 && (turbo || rich || econ.free >= cost1 + 12);
+		sBuildPlan p;
+		p.typeFirst = what.firstPart;
+		p.typeSecond = what.secondPart;
+		p.pos = pos;
+		p.speed = fast ? 1 : 0;
+		p.cost = fast ? cost1 : cost0;
+		return plans_.insert_or_assign (v.getId(), p).first->second;
+	};
+	// своя машина без дела мешает (площадка, выезд фабрики) — отогнать на 3–6 клеток от center
+	std::vector<unsigned int> shooed;
+	auto shooAway = [&] (const cVehicle& u, const cPosition& center, const char* reason) {
+		if (u.getOwner() != player || !isIdle (u)) return;
+		if (std::find (shooed.begin(), shooed.end(), u.getId()) != shooed.end()) return;
+		for (const auto& o : builderOrders)
+			if (o.unitId == u.getId()) return;
+		const tFootprints reserved = reservedFootprints();
+		cPosition dest (-1, -1);
+		int bestDist = std::numeric_limits<int>::max();
+		for (int dy = -6; dy <= 6; ++dy)
+			for (int dx = -6; dx <= 6; ++dx)
+			{
+				const cPosition n = center + cPosition (dx, dy);
+				if (std::max (std::abs (dx), std::abs (dy)) < 3) continue;
+				if (!map.isValidPosition (n) || !view.possiblePlace (u, n) || overlapsAny (n, false, reserved)) continue;
+				const int d = (n - u.getPosition()).l2NormSquared();
+				if (d < bestDist)
+				{
+					bestDist = d;
+					dest = n;
+				}
+			}
+		if (dest.x() >= 0 && pushMove (u, view, dest, playerId, "op", reason, builderOrders))
+		{
+			shooed.push_back (u.getId());
+			opMoved_.push_back (u.getId());
+		}
+	};
+	// стройщик под угрозой врага — уйти в ближайшую безопасную клетку (ближе к высадке)
+	auto evacuate = [&] (const cVehicle& v) {
+		if (world_.threatFor (v, v.getPosition(), bl) <= 0) return false;
+		cPosition dest;
+		if (!world_.nearestSafeCell (v, view, v.getPosition(), kEvacuateRadius, player->getLandingPos(), dest, bl)) return false;
+		if (!pushMoveSafe (v, view, dest, world_, bl, playerId, "op", "builder evacuates (threat)", builderOrders)) return false;
+		++stats_.evacuations;
+		return true;
+	};
+	// без дела вдали от базы — вернуться (не стоять на пути соединителей и выезде фабрик)
+	auto idleToBase = [&] (const cVehicle& v) {
+		if (refillSource (*player, main, v) != nullptr) return;
+		const cPosition dock = findBaseDock (map, *player, main, v, view, reservedFootprints(), world_, bl);
+		if (dock.x() >= 0) pushMoveSafe (v, view, dock, world_, bl, playerId, "op", "idle builder to base", builderOrders);
+	};
+
+	// 1) конструкторы: каждый строит своё здание, по нужде экономики
+	const auto& factoryData = unitsData->getStaticUnitData (kIdFactory);
+	for (const auto& vp : player->getVehicles())
+	{
+		const cVehicle& v = *vp;
+		if (v.getStaticUnitData().canBuild != "BigBuilding" || v.isDisabled()) continue;
+		if (v.isUnitBuildingABuilding())
+		{
+			if (v.getBuildTurns() == 0) pushFinishBuild (v); // иначе здание не появится
+			continue;
+		}
+		if (v.isUnitMoving() || v.getMoveJob() != nullptr) continue;
+
+		// заперт своими зданиями (высадка в угол) — освободить проход, как в GUI
+		if (const cBuilding* blocker = trappingBuilding (map, *player, factoryData, v))
+		{
+			cOrder o;
+			o.type = eOrderType::SelfDestroy;
+			o.playerId = playerId;
+			o.unitId = blocker->getId();
+			o.level = "op";
+			o.reason = "free trapped constructor";
+			builderOrders.push_back (std::move (o));
+			continue;
+		}
+
+		if (evacuate (v)) continue; // под угрозой — не строить, уйти
+
+		if (isStuck (v)) continue; // заперт без пути — его стройку не ждать
+
+		auto it = plans_.find (v.getId());
+		if (it != plans_.end() && !planValid (it->second))
+		{
+			plans_.erase (it); // площадку заняли
+			it = plans_.end();
+		}
+		if (it == plans_.end())
+		{
+			// энергия — по нефти, которую шахты дают без среза металла
+			const auto e = energyState();
+			const bool energyShort = !energyFeasible (e[0] + 1, e[1], e[2], econ.oilFree);
+			const bool stationHelps = energyFeasible (e[0] + 1, e[1] + 1, e[2], econ.oilFree);
+			const bool generatorHelps = energyFeasible (e[0] + 1, e[1], e[2] + 1, econ.oilFree);
+			const bool needOil = energyShort && !stationHelps && !generatorHelps;
+			const tFootprints reserved = reservedFootprints();
+			const sSite site = findMineSite (model, *player, grid, reserved, needOil, world_, bl);
+			// нефти рядом нет — станция ценой среза металла у шахт (лучше, чем стоять без энергии)
+			const bool cutFeasible = energyFeasible (e[0] + 1, e[1], e[2], econ.oil); // хватает и так, ценой среза
+			const bool stationByCut = needOil && !(site.valid() && site.oil >= kMinMineOil) && !cutFeasible
+				&& energyFeasible (e[0] + 1, e[1] + 1, e[2], econ.oil);
+			// новые потребители без энергии только стоят
+			const bool consumersOk = !energyShort || generatorHelps || cutFeasible;
+			const int nFactory = totalOf (kIdFactory);
+			std::vector<sID> wants; // по приоритету; нет места — берём следующее
+			if (nFactory < 1) wants.push_back (kIdFactory);
+			if (energyShort && (stationHelps || stationByCut)) wants.push_back (kIdEnergy);
+			if (site.valid()) wants.push_back (kIdMine);
+			if (consumersOk && nFactory >= 1 && nFactory < factoryTarget) wants.push_back (kIdFactory);
+			if (consumersOk && nFactory >= 3 && econ.metalMaxProd >= 20 && totalOf (kIdHabitat) < 1) wants.push_back (kIdHabitat);
+			if (consumersOk && totalOf (kIdHabitat) >= 1 && totalOf (kIdResearch) < 1) wants.push_back (kIdResearch);
+			sID what;
+			cPosition pos (-1, -1);
+			for (const sID& w : wants)
+			{
+				pos = w == kIdMine ? site.pos : findBaseSpot (model, *player, main, unitsData->getStaticUnitData (w), reserved, world_, bl);
+				if (pos.x() >= 0)
+				{
+					what = w;
+					break;
+				}
+			}
+			if (pos.x() < 0)
+			{
+				idleToBase (v); // строить нечего — металл остаётся фабрикам
+				continue;
+			}
+			executePlan (v, makePlan (v, what, pos, what == kIdFactory && countBuildings (*player, kIdFactory) == 0));
+			continue;
+		}
+		executePlan (v, it->second);
+	}
+
+	// 2) пионеры: генератор при нехватке энергии, соединители до отрезанных зданий, склад
+	for (const auto& vp : player->getVehicles())
+	{
+		const cVehicle& v = *vp;
+		if (v.getStaticUnitData().canBuild != "SmallBuilding" || v.isDisabled()) continue;
+		if (v.isUnitBuildingABuilding())
+		{
+			if (v.getBuildTurns() == 0 && !v.bandPosition) pushFinishBuild (v);
+			continue;
+		}
+		if (v.isUnitMoving() || v.getMoveJob() != nullptr || v.bandPosition) continue;
+		if (evacuate (v)) continue; // под угрозой — не строить, уйти
+		if (isStuck (v)) continue;
+
+		auto it = plans_.find (v.getId());
+		if (it != plans_.end() && !planValid (it->second))
+		{
+			plans_.erase (it);
+			it = plans_.end();
+		}
+		if (it != plans_.end())
+		{
+			executePlan (v, it->second);
+			continue;
+		}
+
+		// а) энергии не хватает уже на построенное и строящееся — генератор (2 нефти)
+		const auto e = energyState();
+		const int capNow = e[1] * 6 + e[2];
+		if (!energyFeasible (e[0], e[1], e[2], econ.oilFree)
+			&& energyFeasible (std::min (e[0], capNow + 1), e[1], e[2] + 1, econ.oilFree))
+		{
+			const cPosition pos = findBaseSpot (model, *player, main, unitsData->getStaticUnitData (kIdEnergySmall), reservedFootprints(), world_, bl);
+			if (pos.x() >= 0)
+			{
+				executePlan (v, makePlan (v, kIdEnergySmall, pos, false));
+				continue;
+			}
+		}
+
+		// б) соединители до своего здания вне главной подбазы (шахта на ресурсе)
+		std::vector<cPosition> path;
+		for (const auto& b : player->getBuildings())
+		{
+			if (!b->getStaticData().connectsToBase || b->subBase == main) continue;
+			cPosition side;
+			if (chainTo (grid, b->getPosition(), b->getIsBig(), &side) < 1) continue;
+			auto p = connectorPath (grid, side);
+			if (!p.empty() && (path.empty() || p.size() < path.size())) path = std::move (p);
+		}
+		for (const auto& ov : player->getVehicles()) // большое здание строится вдали от базы
+		{
+			if (!ov->isUnitBuildingABuilding() || !ov->getIsBig()) continue;
+			cPosition side;
+			if (chainTo (grid, ov->getPosition(), true, &side) < 1) continue;
+			auto p = connectorPath (grid, side);
+			if (!p.empty() && (path.empty() || p.size() < path.size())) path = std::move (p);
+		}
+		// цепочка под угрозой врага — не тянуть (пионер погибнет на ней)
+		if (std::any_of (path.begin(), path.end(), [&] (const cPosition& c) { return cellThreat (world_, c, bl) > 0; }))
+			path.clear();
+		if (!path.empty())
+		{
+			// прямой отрезок от первой клетки: BuildPath кладёт соединитель за ходом по прямой
+			size_t run = 0;
+			if (path.size() > 1)
+			{
+				const cPosition dir = path[1] - path[0];
+				while (run + 1 < path.size() && path[run + 1] - path[run] == dir) ++run;
+			}
+			const int perConnector = player->getLastUnitData (kIdConnector)->getBuildCost();
+			const int need = std::min (v.getStaticUnitData().storageResMax, perConnector * static_cast<int> (run + 1));
+			if (v.getStoredResources() < need)
+			{
+				needMetal (v, std::min (v.getStaticUnitData().storageResMax, perConnector * static_cast<int> (path.size())) - v.getStoredResources());
+				continue;
+			}
+			if (v.getPosition() != path[0])
+			{
+				pushMoveSafe (v, view, path[0], world_, bl, playerId, "op", "to connector path", builderOrders);
+				continue;
+			}
+			cOrder o;
+			o.type = run > 0 ? eOrderType::BuildPath : eOrderType::Build;
+			o.playerId = playerId;
+			o.unitId = v.getId();
+			o.buildingType = {kIdConnector.firstPart, kIdConnector.secondPart};
+			o.position = path[0];
+			o.position2 = path[run];
+			o.buildSpeed = 0;
+			o.level = "op";
+			o.reason = "connect remote building (" + std::to_string (path.size()) + " connectors)";
+			builderOrders.push_back (std::move (o));
+			continue;
+		}
+
+		// в) склад металла: добыча переливается через край
+		if (main != nullptr && econ.metalStored + econ.metalProd - econ.metalNeeded > econ.metalMaxStored
+			&& totalOf (kIdStorageMetal) < kMaxStorages)
+		{
+			const cPosition pos = findBaseSpot (model, *player, main, unitsData->getStaticUnitData (kIdStorageMetal), reservedFootprints(), world_, bl);
+			if (pos.x() >= 0)
+			{
+				executePlan (v, makePlan (v, kIdStorageMetal, pos, false));
+				continue;
+			}
+		}
+		idleToBase (v);
+	}
+
+	// 3) металл хода: сначала стройщикам (под их стройку), остаток — фабрикам
+	int budget = econ.free;
+	int storedLeft = econ.metalStored;
+	for (const auto& r : refills)
+	{
+		const int give = std::min ({r.want, budget, storedLeft});
+		if (give <= 0) continue;
+		cOrder o;
+		o.type = eOrderType::Transfer;
+		o.playerId = playerId;
+		o.unitId = r.src->getId();
+		o.unitId2 = r.v->getId();
+		o.transferValue = give;
+		o.resType = eResourceType::Metal;
+		o.level = "op";
+		o.reason = "refill constructor";
+		out.push_back (std::move (o));
+		budget -= give;
+		storedLeft -= give;
+	}
+
+	// 4) фабрики главной базы: очередь, выезд, запуск, скорость по металлу.
+	std::vector<cOrder> prodOrders; // после стройки: выехавший юнит не займёт площадку
+	// добыча металла упала (движок отдал мощность шахт нефти или золоту) и работающим
+	// фабрикам не хватит — остановить лишние сразу, иначе движок откажет в сдаче хода
+	std::vector<unsigned int> stopped;
+	{
+		int deficit = econ.metalNeeded - econ.metalProd - econ.metalStored;
+		for (const auto& bp : player->getBuildings())
+		{
+			if (deficit <= 0) break;
+			const cBuilding& b = *bp;
+			if (b.getStaticUnitData().ID != kIdFactory || b.subBase != main || !b.isUnitWorking()) continue;
+			cOrder o;
+			o.type = eOrderType::StopWork;
+			o.playerId = playerId;
+			o.unitId = b.getId();
+			o.level = "op";
+			o.reason = "stop factory (metal income dropped)";
+			prodOrders.push_back (std::move (o));
+			deficit -= b.getMetalPerRound();
+			stopped.push_back (b.getId());
+		}
+	}
+	//    Скорость 0 — танк за 12 металла, 1 — вдвое быстрее, но за 24: быстрая —
+	//    только когда металл всё равно копится на складе.
+	const bool richNow = econ.metalMaxStored > 0 && storedLeft * 5 >= econ.metalMaxStored * 4;
+	int energyStarted = 0; // энергия фабрик, запущенных в этом ходу
+	// ускорять (×2 металла за юнит) — только когда ни одна фабрика не стоит без металла
+	bool allWorking = true;
+	for (const auto& bp : player->getBuildings())
+		if (bp->getStaticUnitData().ID == kIdFactory && bp->subBase == main && !bp->isBuildListEmpty()
+			&& bp->getBuildListItem (0).getRemainingMetal() > 0 && !bp->isUnitWorking())
+			allWorking = false;
+	const bool speedUp = richNow && allWorking;
+	const int nKonstrukt = countVehicles (*player, kIdKonstrukt);
+	const int konstruktTarget = econ.metalMaxProd >= 20 ? 3 : 2;
+	int konstruktQueued = 0;
+	for (const auto& b : player->getBuildings())
+		if (b->getStaticUnitData().ID == kIdFactory && !b->isBuildListEmpty()
+			&& b->getBuildListItem (0).getType() == kIdKonstrukt)
+			++konstruktQueued;
+
+	for (const auto& bp : player->getBuildings())
+	{
+		const cBuilding& b = *bp;
+		if (b.getStaticUnitData().ID != kIdFactory || b.isDisabled()) continue;
+		if (main == nullptr || b.subBase != main) continue; // вне главной базы металла нет
+		if (std::find (stopped.begin(), stopped.end(), b.getId()) != stopped.end()) continue;
+
+		if (b.isBuildListEmpty())
+		{
+			const int speed = (speedUp && budget >= factoryMetalPerRound (b, 1)) ? 1 : 0;
+			cOrder o;
+			o.type = eOrderType::ChangeBuildList;
+			o.playerId = playerId;
+			o.unitId = b.getId();
+			o.buildSpeed = speed;
+			if (nKonstrukt + konstruktQueued < konstruktTarget)
+			{
+				o.buildList = {{kIdKonstrukt.firstPart, kIdKonstrukt.secondPart}};
+				o.repeat = false;
+				o.reason = "produce constructor";
+				++konstruktQueued;
+			}
+			else
+			{
+				o.buildList = {{kIdTank.firstPart, kIdTank.secondPart}};
+				o.repeat = true;
+				o.reason = "produce tanks";
+			}
+			o.level = "op";
+			prodOrders.push_back (std::move (o));
+			const int mpr = factoryMetalPerRound (b, speed);
+			if (budget >= mpr)
+			{
+				budget -= mpr; // ChangeBuildList сам запускает фабрику
+				energyStarted += b.getStaticUnitData().needsEnergy;
+			}
+			continue;
+		}
+
+		if (b.getBuildListItem (0).getRemainingMetal() <= 0)
+		{
+			// готовый юнит — выезд; при повторе движок сам запускает следующее задание
+			const auto& vehicleData = unitsData->getStaticUnitData (b.getBuildListItem (0).getType());
+			const tFootprints reservedNow = reservedFootprints();
+			cPosition esc = findFactoryEscape (model, b, vehicleData, *player, &reservedNow);
+			if (esc.x() < 0) esc = findFactoryEscape (model, b, vehicleData, *player);
+			if (esc.x() < 0)
+			{
+				// выезд заставлен своими машинами без дела — отогнать их
+				for (const auto& c : ringCells (b.getPosition(), b.getIsBig()))
+					if (map.isValidPosition (c))
+						if (const cVehicle* u = map.getField (c).getVehicle())
+							shooAway (*u, b.getPosition(), "clear factory exit");
+				continue;
+			}
+			cOrder o;
+			o.type = eOrderType::FinishBuild;
+			o.playerId = playerId;
+			o.unitId = b.getId();
+			o.position = esc;
+			o.level = "op";
+			o.reason = "roll out vehicle";
+			prodOrders.push_back (std::move (o));
+			const int mpr = factoryMetalPerRound (b, b.getBuildSpeed());
+			if (b.getRepeatBuild() && budget >= mpr)
+			{
+				budget -= mpr;
+				energyStarted += b.getStaticUnitData().needsEnergy;
+			}
+			continue;
+		}
+
+		if (b.isUnitWorking())
+		{
+			// металл копится — ускорить работающую фабрику
+			if (speedUp && b.getBuildSpeed() == 0)
+			{
+				const int extra = factoryMetalPerRound (b, 1) - b.getMetalPerRound();
+				if (budget >= extra)
+				{
+					cOrder o;
+					o.type = eOrderType::ChangeBuildList;
+					o.playerId = playerId;
+					o.unitId = b.getId();
+					for (size_t i = 0; i < b.getBuildListSize(); ++i)
+						o.buildList.push_back ({b.getBuildListItem (i).getType().firstPart, b.getBuildListItem (i).getType().secondPart});
+					o.buildSpeed = 1;
+					o.repeat = b.getRepeatBuild();
+					o.level = "op";
+					o.reason = "speed up factory (metal piles up)";
+					prodOrders.push_back (std::move (o));
+					budget -= extra;
+				}
+			}
+			continue;
+		}
+
+		// стоит с недостроенным заданием (не хватило металла или энергии)
+		const int mpr = b.getMetalPerRound();
+		const bool energyOk = energyFeasible (econ.energyNeedWorking + energyStarted + b.getStaticUnitData().needsEnergy,
+			econ.stations, econ.generators, econ.oil);
+		if (b.buildingCanBeStarted() && budget >= mpr && energyOk)
 		{
 			cOrder o;
 			o.type = eOrderType::StartWork;
 			o.playerId = playerId;
-			o.unitId = b->getId();
+			o.unitId = b.getId();
 			o.level = "op";
-			o.reason = "start work";
-			out.push_back (std::move (o));
+			o.reason = "start factory";
+			prodOrders.push_back (std::move (o));
+			budget -= mpr;
+			energyStarted += b.getStaticUnitData().needsEnergy;
 		}
-	}
-
-	// 2) конструкторы: каждый строит СВОЁ здание (параллельно), пополняясь металлом
-	//    под турбо-стройку. Приоритет — чистая функция chooseNextBuilding.
-	const int nFactory = countBuildings (*player, kIdFactory);
-	const int nMine = countBuildings (*player, kIdMine);
-	const int nEnergy = countBuildings (*player, kIdEnergy);
-	const int nHabitat = countBuildings (*player, kIdHabitat);
-	const int nResearch = countBuildings (*player, kIdResearch);
-
-	// уже строящиеся (не завершённые) здания — чтобы свободные конструкторы
-	// не дублировали их и не простаивали
-	const int ipFactory = countConstructorsBuilding (*player, kIdFactory);
-	const int ipMine = countConstructorsBuilding (*player, kIdMine);
-	const int ipEnergy = countConstructorsBuilding (*player, kIdEnergy);
-	const int ipHabitat = countConstructorsBuilding (*player, kIdHabitat);
-	const int ipResearch = countConstructorsBuilding (*player, kIdResearch);
-
-	// назначенные в этом проходе (для параллельных конструкторов — разные здания)
-	int asFactory = 0, asMine = 0, asEnergy = 0, asHabitat = 0, asResearch = 0;
-
-	for (const auto& v : player->getVehicles())
-	{
-		if (!v->getStaticUnitData().canBuild.empty() && v->getStaticUnitData().canBuild == "BigBuilding")
+		else if (b.getBuildSpeed() > 0)
 		{
-			// конструктор в процессе стройки
-			if (v->isUnitBuildingABuilding())
-			{
-				// постройка завершена — выбираем точку выезда (иначе здание не появится)
-				if (v->getBuildTurns() == 0)
-				{
-					const cPosition esc = findVehicleEscape (model, *v);
-					if (esc.x() >= 0)
-					{
-						cOrder o;
-						o.type = eOrderType::FinishBuild;
-						o.playerId = playerId;
-						o.unitId = v->getId();
-						o.position = esc;
-						o.level = "op";
-						o.reason = "finish building";
-						out.push_back (std::move (o));
-					}
-				}
-				continue;
-			}
-			if (v->isUnitMoving() || v->getMoveJob() != nullptr) continue;
-
-			// выбрать следующее здание по эффективным счётчикам
-			// (построено + строится + назначено) — детерминированно, без RNG
-			const sID buildWhat = chooseNextBuilding (
-				nFactory + ipFactory + asFactory,
-				nMine + ipMine + asMine,
-				nEnergy + ipEnergy + asEnergy,
-				nHabitat + ipHabitat + asHabitat,
-				nResearch + ipResearch + asResearch);
-
-			const auto& bdata = unitsData->getStaticUnitData (buildWhat);
-			const int buildCost = player->getLastUnitData (buildWhat)->getBuildCost();
-			const int cap = v->getStaticUnitData().storageResMax;
-
-			// Пополняемся ДО ПОЛНОЙ вместимости (60) — это (а) гарантирует
-			// корректность cVehicle::calcTurboBuild (нужен stored >= buildCost) и
-			// (б) включает турбо-режим (каждые +4 металла — минус 1 ход).
-			if (v->getStoredResources() < cap)
-			{
-				const cBuilding* src = findResourceSource (*player, eResourceType::Metal);
-				if (src != nullptr && src->getStoredResources() > 0)
-				{
-					cOrder o;
-					o.type = eOrderType::Transfer;
-					o.playerId = playerId;
-					o.unitId = src->getId();
-					o.unitId2 = v->getId();
-					o.transferValue = std::min (src->getStoredResources(),
-						cap - v->getStoredResources());
-					o.resType = eResourceType::Metal;
-					o.level = "op";
-					o.reason = "refill constructor";
-					out.push_back (std::move (o));
-				}
-				continue;
-			}
-
-			// стройка: турбо (1/2) берётся по текущему металлу конструктора
-			const int speed = maxFeasibleBuildSpeed (*v, buildCost);
-			const cPosition spot = findBuildSpot (model, *player, bdata, player->getLandingPos());
-			if (spot.x() < 0) continue;
+			// не тянем быструю скорость — перейти на дешёвую, задел сохраняется
 			cOrder o;
-			o.type = eOrderType::Build;
+			o.type = eOrderType::ChangeBuildList;
 			o.playerId = playerId;
-			o.unitId = v->getId();
-			o.buildingType = {buildWhat.firstPart, buildWhat.secondPart};
-			o.position = spot;
-			o.buildSpeed = speed;
+			o.unitId = b.getId();
+			for (size_t i = 0; i < b.getBuildListSize(); ++i)
+				o.buildList.push_back ({b.getBuildListItem (i).getType().firstPart, b.getBuildListItem (i).getType().secondPart});
+			o.buildSpeed = 0;
+			o.repeat = b.getRepeatBuild();
 			o.level = "op";
-			o.reason = "build " + bdata.getDefaultName() + (speed > 0 ? " (turbo)" : "");
+			o.reason = "slow down factory (metal short)";
+			prodOrders.push_back (std::move (o));
+			const int mpr0 = factoryMetalPerRound (b, 0);
+			if (budget >= mpr0) budget -= mpr0;
+		}
+	}
+
+	// 5) площадки планов заняты своими машинами без дела — отогнать (иначе стройка ждёт вечно)
+	{
+		const tFootprints reserved = reservedFootprints();
+		std::vector<unsigned int> busy; // уже получили приказ стройщика
+		for (const auto& o : builderOrders) busy.push_back (o.unitId);
+		for (const auto& kv : plans_)
+		{
+			const bool big = unitsData->getStaticUnitData (planType (kv.second)).buildingData.isBig;
+			for (const auto& c : footprintCells (kv.second.pos, big))
+			{
+				if (!map.isValidPosition (c)) continue;
+				const cVehicle* u = map.getField (c).getVehicle();
+				if (u == nullptr || u->getOwner() != player || u->getId() == kv.first || !isIdle (*u)) continue;
+				if (std::find (busy.begin(), busy.end(), u->getId()) != busy.end()) continue;
+				cPosition dest (-1, -1); // ближайшая свободная клетка вне площадок
+				for (int r = 1; r <= 4 && dest.x() < 0; ++r)
+					for (int dy = -r; dy <= r && dest.x() < 0; ++dy)
+						for (int dx = -r; dx <= r && dest.x() < 0; ++dx)
+						{
+							if (std::max (std::abs (dx), std::abs (dy)) != r) continue;
+							const cPosition n = c + cPosition (dx, dy);
+							if (map.isValidPosition (n) && view.possiblePlace (*u, n) && !overlapsAny (n, false, reserved)) dest = n;
+						}
+				if (dest.x() >= 0 && pushMove (*u, view, dest, playerId, "op", "clear build site", builderOrders))
+				{
+					busy.push_back (u->getId());
+					opMoved_.push_back (u->getId());
+				}
+			}
+		}
+	}
+
+	// 6) стройка и движение стройщиков, затем производство
+	for (auto& o : builderOrders)
+		out.push_back (std::move (o));
+	for (auto& o : prodOrders)
+		out.push_back (std::move (o));
+
+	// 7) шахты и исследования главной базы, что стоят, — запустить, если хватит энергии
+	//    (генераторы не трогаем: движок сам включает их под потребителей)
+	if (main != nullptr)
+	{
+		int energyNeed = econ.energyNeedWorking + energyStarted;
+		int humanFree = econ.humanFree;
+		for (const auto& bp : player->getBuildings())
+		{
+			const cBuilding& b = *bp;
+			if (b.subBase != main || b.isDisabled() || b.isUnitWorking() || !b.buildingCanBeStarted()) continue;
+			const auto& sd = b.getStaticUnitData();
+			const bool isMine = sd.buildingData.canMineMaxRes > 0;
+			const bool isResearch = sd.buildingData.canResearch;
+			if (!isMine && !isResearch) continue;
+			if (sd.needsHumans > humanFree) continue;
+			if (!energyFeasible (energyNeed + sd.needsEnergy, econ.stations, econ.generators, econ.oil)) continue;
+			cOrder o;
+			o.type = eOrderType::StartWork;
+			o.playerId = playerId;
+			o.unitId = b.getId();
+			o.level = "op";
+			o.reason = isMine ? "start mine" : "start research";
 			out.push_back (std::move (o));
-
-			// отметить назначение, чтобы следующий свободный конструктор выбрал другое
-			if (buildWhat == kIdFactory) ++asFactory;
-			else if (buildWhat == kIdMine) ++asMine;
-			else if (buildWhat == kIdEnergy) ++asEnergy;
-			else if (buildWhat == kIdHabitat) ++asHabitat;
-			else if (buildWhat == kIdResearch) ++asResearch;
+			energyNeed += sd.needsEnergy;
+			humanFree -= sd.needsHumans;
 		}
-	}
-
-	// 3) очереди производства на фабриках: сначала конструкторы (параллельная
-	//    экономика), затем танки (повтор)
-	const int nConstructors = countVehicles (*player, kIdKonstrukt);
-	int constructorsQueued = 0;
-	for (const auto& b : player->getBuildings())
-		if (b->getStaticUnitData().ID == kIdFactory && !b->isBuildListEmpty()
-			&& b->getBuildListItem (0).getType() == kIdKonstrukt)
-			++constructorsQueued;
-
-	for (const auto& b : player->getBuildings())
-	{
-		if (b->getStaticUnitData().ID != kIdFactory) continue;
-		if (!b->isBuildListEmpty()) continue;
-		cOrder o;
-		o.type = eOrderType::ChangeBuildList;
-		o.playerId = playerId;
-		o.unitId = b->getId();
-		o.buildSpeed = 1;
-		if (nConstructors + constructorsQueued < kTargetConstructors)
-		{
-			o.buildList = {{kIdKonstrukt.firstPart, kIdKonstrukt.secondPart}};
-			o.repeat = false;
-			o.reason = "produce constructor";
-			++constructorsQueued;
-		}
-		else
-		{
-			o.buildList = {{kIdTank.firstPart, kIdTank.secondPart}};
-			o.repeat = true;
-			o.reason = "produce tanks";
-		}
-		o.level = "op";
-		out.push_back (std::move (o));
-	}
-
-	// 4) выезд готовых юнитов из фабрик (иначе они не появляются)
-	for (const auto& b : player->getBuildings())
-	{
-		if (b->getStaticUnitData().ID != kIdFactory) continue;
-		if (b->isBuildListEmpty()) continue;
-		if (b->getBuildListItem (0).getRemainingMetal() > 0) continue;
-		const auto& vehicleData = unitsData->getStaticUnitData (b->getBuildListItem (0).getType());
-		const cPosition esc = findFactoryEscape (model, *b, vehicleData, *player);
-		if (esc.x() < 0) continue;
-		cOrder o;
-		o.type = eOrderType::FinishBuild;
-		o.playerId = playerId;
-		o.unitId = b->getId();
-		o.position = esc;
-		o.level = "op";
-		o.reason = "roll out vehicle";
-		out.push_back (std::move (o));
 	}
 }
 
@@ -923,9 +2076,158 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 			attackers.push_back (vehicle.get());
 	const std::vector<int> focus = coordinateFocusFire (attackers, enemies, view);
 
+	// --- операции армии (шаг 8): состав, роли, цели, силы, переходы — до тревоги ---
+	cArmyOps::sContext opCtx;
+	opCtx.model = &model;
+	opCtx.player = player;
+	opCtx.view = &view;
+	opCtx.world = &world_;
+	opCtx.turn = world_.turn();
+	for (const auto& v : player->getVehicles())
+		if (isGroundFighter (*v)) opCtx.fighters.push_back (v.get());
+	ops_.refresh (opCtx);
+
+	// --- тревога у базы (шаг 7): вооружённый враг у ключевого здания или стройки ---
+	// Ответ — ближайшими свободными бойцами, пока их ожидаемый урон за ход не
+	// покроет hp группы врагов с запасом; остальная армия занята своим. Защитники
+	// и резерв подходят, как и все, только до края зоны огня врага (§4 отчёта
+	// шага 7: полное сближение отдавало первый выстрел врагу и стоило 0.07 D).
+	std::map<unsigned int, cPosition> defend; // защитник → клетка врага, к которому идти
+	std::vector<unsigned int> covered;        // враги, на которых сил хватило: прочим к ним не идти
+	std::vector<cPosition> alarmTargets;      // клетки всех врагов тревоги — для резерва без дела
+	{
+		// ключевые клетки: шахты, фабрики, электростанции, центры исследований, идущая стройка
+		std::vector<cPosition> keys;
+		for (const auto& b : player->getBuildings())
+		{
+			const auto& bsd = b->getStaticUnitData();
+			if (bsd.buildingData.canMineMaxRes > 0 || !bsd.canBuild.empty() || bsd.produceEnergy > 0 || bsd.buildingData.canResearch)
+				for (const auto& c : footprintCells (b->getPosition(), b->getIsBig()))
+					keys.push_back (c);
+		}
+		for (const auto& v : player->getVehicles())
+			if (v->isUnitBuildingABuilding())
+				for (const auto& c : footprintCells (v->getPosition(), v->getIsBig()))
+					keys.push_back (c);
+
+		// враги у базы: вооружены; машины — видны сейчас или недавно (память)
+		std::vector<std::vector<const sEnemyMemory*>> groups;
+		for (const auto& kv : world_.enemies())
+		{
+			const sEnemyMemory& m = kv.second;
+			if (!m.armed()) continue;
+			if (!m.building && world_.age (m) > kAlarmFresh) continue;
+			long long dOur = std::numeric_limits<long long>::max();
+			for (const auto& k : keys)
+				dOur = std::min<long long> (dOur, (k - m.pos).l2NormSquared());
+			if (dOur > static_cast<long long> (kAlarmRadius) * kAlarmRadius) continue;
+			// враг ближе к своим зданиям, чем к нашим (базы рядом — Donuts), — не налёт на нас
+			long long dTheir = std::numeric_limits<long long>::max();
+			for (const auto& kv2 : world_.enemies())
+				if (kv2.second.building && kv2.second.owner == m.owner && kv2.first != m.id)
+					dTheir = std::min<long long> (dTheir, (kv2.second.pos - m.pos).l2NormSquared());
+			if (dTheir <= dOur) continue;
+			// группа — враги ближе kAlarmGroup друг к другу (порядок по id — детерминированно)
+			bool joined = false;
+			for (auto& g : groups)
+				if (std::any_of (g.begin(), g.end(), [&] (const sEnemyMemory* o) {
+						return (o->pos - m.pos).l2NormSquared() <= kAlarmGroup * kAlarmGroup;
+					}))
+				{
+					g.push_back (&m);
+					joined = true;
+					break;
+				}
+			if (!joined) groups.push_back ({&m});
+		}
+
+		// свободные бойцы: без цели огня в этом ходу, не отходят, не отогнаны оперативкой
+		std::vector<const cVehicle*> idleFighters;
+		for (size_t a = 0; a < attackers.size(); ++a)
+		{
+			const cVehicle* v = attackers[a];
+			if (focus[a] >= 0) continue;
+			if (std::find (opMoved_.begin(), opMoved_.end(), v->getId()) != opMoved_.end()) continue;
+			if (shouldRetreat (*v, enemies)) continue;
+			if (ops_.committed (v->getId())) continue; // в походе операции — не отзывать
+			idleFighters.push_back (v);
+		}
+		std::vector<bool> taken (idleFighters.size(), false);
+		for (const auto& g : groups)
+		{
+			long long hp = 0;
+			int armor = 0;
+			int flag = 0; // по каким поверхностям надо бить: воздух 1, море 2, суша 4
+			for (const sEnemyMemory* m : g)
+			{
+				hp += m->hp;
+				armor = std::max (armor, m->armor);
+				flag |= m->plane ? 1 : (m->ship ? 2 : 4);
+			}
+			const long long need = hp * kAlarmMarginNum / kAlarmMarginDen;
+			// кандидаты — по близости к группе, при равенстве — по id
+			std::vector<std::tuple<long long, unsigned int, size_t>> cands;
+			for (size_t i = 0; i < idleFighters.size(); ++i)
+			{
+				if (taken[i] || (idleFighters[i]->getStaticUnitData().canAttack & flag) == 0) continue;
+				long long d = std::numeric_limits<long long>::max();
+				for (const sEnemyMemory* m : g)
+					d = std::min<long long> (d, (idleFighters[i]->getPosition() - m->pos).l2NormSquared());
+				if (d > kAlarmMaxDist * kAlarmMaxDist) continue;
+				cands.emplace_back (d, idleFighters[i]->getId(), i);
+			}
+			std::sort (cands.begin(), cands.end());
+			long long have = 0;
+			for (const auto& c : cands)
+			{
+				if (have >= need) break;
+				const size_t i = std::get<2> (c);
+				const cVehicle* v = idleFighters[i];
+				taken[i] = true;
+				have += static_cast<long long> (effectiveDamagePerShot (v->data.getDamage(), armor)) * v->data.getShotsMax();
+				// идти к ближайшему врагу группы
+				const sEnemyMemory* nearest = g.front();
+				for (const sEnemyMemory* m : g)
+					if ((v->getPosition() - m->pos).l2NormSquared() < (v->getPosition() - nearest->pos).l2NormSquared()) nearest = m;
+				defend[v->getId()] = nearest->pos;
+				++stats_.defenders;
+			}
+			++stats_.alarms;
+			stats_.intruders += static_cast<int> (g.size());
+			for (const sEnemyMemory* m : g)
+				alarmTargets.push_back (m->pos);
+			if (have >= need)
+				for (const sEnemyMemory* m : g)
+					covered.push_back (m->id);
+			else
+				++stats_.uncovered;
+		}
+	}
+	// задания операций армии (шаг 8) — машинам без приказа: огонь, отход, тревога и оперативка — раньше
+	std::map<unsigned int, sOpTask> opTasks;
+	{
+		std::vector<unsigned int> busy;
+		for (size_t a = 0; a < attackers.size(); ++a)
+			if (focus[a] >= 0) busy.push_back (attackers[a]->getId());
+		for (const cVehicle* v : opCtx.fighters)
+		{
+			const unsigned int id = v->getId();
+			if (!isIdle (*v) || std::find (opMoved_.begin(), opMoved_.end(), id) != opMoved_.end() || defend.count (id) != 0
+				|| shouldRetreat (*v, enemies))
+				busy.push_back (id);
+		}
+		ops_.plan (opCtx, busy, opTasks);
+	}
+
+	// видимые враги, к которым сближаются бойцы без тревоги: без тех, на кого защитников хватило
+	std::vector<sEnemy> approachable;
+	for (const auto& e : enemies)
+		if (std::find (covered.begin(), covered.end(), e.unit->getId()) == covered.end()) approachable.push_back (e);
+
 	for (const auto& vehicle : player->getVehicles())
 	{
 		if (!isIdle (*vehicle)) continue;
+		if (std::find (opMoved_.begin(), opMoved_.end(), vehicle->getId()) != opMoved_.end()) continue; // отогнан с площадки
 
 		const auto& sd = vehicle->getStaticUnitData();
 
@@ -961,25 +2263,125 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 				const bool toBase = !found;
 				if (toBase)
 					dest = player->getLandingPos(); // нет строя/направления — старый запасной путь
-				cPathCalculator pc (*vehicle, view, dest, false);
-				auto path = pc.calcPath();
+				// шаг 7: отход — в клетку без угрозы (у точки отхода, иначе — рядом с собой)
+				const eThreatLayer rl = kRetreatLayer;
+				if (world_.threatFor (*vehicle, dest, rl) > 0)
+				{
+					cPosition safe;
+					if (world_.nearestSafeCell (*vehicle, view, dest, kSafeSnap, vehicle->getPosition(), safe, rl)
+						|| world_.nearestSafeCell (*vehicle, view, vehicle->getPosition(), kRetreatMax, dest, safe, rl))
+						dest = safe;
+				}
+				auto path = threatAwarePath (*vehicle, view, dest, world_, rl);
+				if (!path.empty())
+				{
+					// опасная клетка в отчёте — всегда по «дальность + ход»; отдельно — в зоне огня
+					const bool unsafe = world_.threatFor (*vehicle, path.back()) > 0;
+					if (world_.threatFor (*vehicle, path.back(), eThreatLayer::Fire) > 0) ++stats_.fireRetreats;
+					cOrder o;
+					o.type = eOrderType::Move;
+					o.playerId = playerId;
+					o.unitId = vehicle->getId();
+					o.path = std::move (path);
+					o.position = o.path.back(); // цель пути — для журнала и дневника
+					o.level = "micro";
+					o.reason = std::string (toBase ? "retreat to base" : "retreat behind line") + (unsafe ? " (unsafe)" : "");
+					out.push_back (std::move (o));
+					++stats_.retreats;
+					if (unsafe) ++stats_.unsafeRetreats;
+				}
+				continue; // уже у цели отхода — стоим, не лезем обратно в бой
+			}
+
+			// 3) тревога у базы: защитник идёт к врагу у ключевого здания
+			if (const auto d = defend.find (vehicle->getId()); d != defend.end())
+			{
+				cPathCalculator pc (*vehicle, view, d->second, true);
+				auto path = pathToVector (pc.calcPath());
+				// как и сближение — только до края зоны огня (если сами не под ним)
+				if (world_.groundFire (vehicle->getPosition()) == 0)
+				{
+					size_t cut = 0;
+					while (cut < path.size() && world_.groundFire (path[cut]) == 0) ++cut;
+					if (cut < path.size())
+					{
+						path.resize (cut);
+						if (path.empty())
+						{
+							++stats_.holds;
+							continue;
+						}
+					}
+				}
 				if (!path.empty())
 				{
 					cOrder o;
 					o.type = eOrderType::Move;
 					o.playerId = playerId;
 					o.unitId = vehicle->getId();
-					o.path = pathToVector (path);
+					o.path = std::move (path);
+					o.position = o.path.back(); // цель пути — для журнала и дневника
 					o.level = "micro";
-					o.reason = toBase ? "retreat to base" : "retreat behind line";
+					o.reason = "base alarm: defend";
 					out.push_back (std::move (o));
+					continue;
 				}
-				continue; // уже у цели отхода — стоим, не лезем обратно в бой
+				// пути нет (уже в радиусе, а враг не виден) — по обычным правилам
 			}
 
-			// 3) враги видны, но не в радиусе — сближаемся
-			if (const sEnemy* n = nearestEnemy (enemies, vehicle->getPosition()))
+			// 3½) операция армии (шаг 8): сбор, поход строем, бой группой, отход, разведка, резерв
+			if (const auto t = opTasks.find (vehicle->getId()); t != opTasks.end())
 			{
+				if (!t->second.path.empty())
+				{
+					cOrder o;
+					o.type = eOrderType::Move;
+					o.playerId = playerId;
+					o.unitId = vehicle->getId();
+					o.path = t->second.path;
+					o.position = o.path.back(); // цель пути — для журнала и дневника
+					o.level = "operational";
+					o.reason = t->second.reason;
+					out.push_back (std::move (o));
+					++stats_.opMoves;
+				}
+				else
+					++stats_.opHolds;
+				continue;
+			}
+
+			// 4) враги видны, но не в радиусе — сближаемся (кроме тех, на кого хватило защитников);
+			//    шаг 7 — только до края зоны огня врага: стоящий бьёт первым и ответным
+			//    огнём (cVehicle::provokeReactionFire), входящий под выстрелы — проигрывает
+			if (const sEnemy* n = nearestEnemy (approachable, vehicle->getPosition()))
+			{
+				if (world_.groundFire (vehicle->getPosition()) == 0)
+				{
+					cPathCalculator pc (*vehicle, view, n->pos, true);
+					auto path = pathToVector (pc.calcPath());
+					size_t cut = 0;
+					while (cut < path.size() && world_.groundFire (path[cut]) == 0) ++cut;
+					if (cut < path.size())
+					{
+						path.resize (cut);
+						if (path.empty())
+						{
+							++stats_.holds; // уже у края — ждать, пока враг войдёт в нашу дальность
+							continue;
+						}
+						cOrder o;
+						o.type = eOrderType::Move;
+						o.playerId = playerId;
+						o.unitId = vehicle->getId();
+						o.path = std::move (path);
+						o.position = o.path.back(); // цель пути — для журнала и дневника
+						o.level = "micro";
+						o.reason = "approach to fire edge";
+						out.push_back (std::move (o));
+						continue;
+					}
+					// путь до цели вне зоны огня (враг без оружия, мы дальнобойнее) — обычное сближение
+				}
 				cPathCalculator pc (*vehicle, view, n->pos, true);
 				auto path = pc.calcPath();
 				if (!path.empty())
@@ -989,6 +2391,7 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 					o.playerId = playerId;
 					o.unitId = vehicle->getId();
 					o.path = pathToVector (path);
+					o.position = o.path.back(); // цель пути — для журнала и дневника
 					o.level = "micro";
 					o.reason = "approach enemy";
 					out.push_back (std::move (o));
@@ -996,25 +2399,54 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 				}
 			}
 
-			// 4) врагов не видно — выдвигаемся к ближайшей неразведанной клетке
-			//    (разведка боем; на симметричной карте армии встретятся и вступят в бой)
+			// 5) врагов не видно — выдвигаемся к ближайшей неразведанной клетке
+			//    (разведка боем; на симметричной карте армии встретятся и вступят в бой);
+			//    шаг 7 — только к безопасным клеткам и в обход опасных (замена — шаг 8)
 			{
-				bool found = false;
-				const cPosition target = findNearestUnexplored (*vehicle, view, scoutCache, found);
-				if (found)
+				auto path = pathToUnexplored (*vehicle, view, scoutCache, world_, kScoutLayer);
+				if (!path.empty())
 				{
-					cPathCalculator pc (*vehicle, view, target, false);
-					auto path = pc.calcPath();
+					cOrder o;
+					o.type = eOrderType::Move;
+					o.playerId = playerId;
+					o.unitId = vehicle->getId();
+					o.path = std::move (path);
+					o.position = o.path.back(); // цель пути — для журнала и дневника
+					o.level = "micro";
+					o.reason = "advance (scout)";
+					out.push_back (std::move (o));
+					continue;
+				}
+			}
+
+			// 6) делать нечего (разведка заперта угрозами) — резерв идёт к ближайшему врагу тревоги
+			{
+				const cPosition* best = nullptr;
+				for (const auto& p : alarmTargets)
+					if (best == nullptr || (p - vehicle->getPosition()).l2NormSquared() < (*best - vehicle->getPosition()).l2NormSquared())
+						best = &p;
+				if (best != nullptr)
+				{
+					cPathCalculator pc (*vehicle, view, *best, true);
+					auto path = pathToVector (pc.calcPath());
+					if (world_.groundFire (vehicle->getPosition()) == 0)
+					{
+						size_t cut = 0;
+						while (cut < path.size() && world_.groundFire (path[cut]) == 0) ++cut;
+						if (cut < path.size()) path.resize (cut);
+					}
 					if (!path.empty())
 					{
 						cOrder o;
 						o.type = eOrderType::Move;
 						o.playerId = playerId;
 						o.unitId = vehicle->getId();
-						o.path = pathToVector (path);
+						o.path = std::move (path);
+						o.position = o.path.back(); // цель пути — для журнала и дневника
 						o.level = "micro";
-						o.reason = "advance (scout)";
+						o.reason = "base alarm: reserve";
 						out.push_back (std::move (o));
+						++stats_.reserve;
 					}
 				}
 			}
@@ -1061,6 +2493,7 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 					o.playerId = playerId;
 					o.unitId = vehicle->getId();
 					o.path = pathToVector (path);
+					o.position = o.path.back(); // цель пути — для журнала и дневника
 					o.level = "micro";
 					o.reason = "approach damaged unit";
 					out.push_back (std::move (o));
@@ -1071,25 +2504,49 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 		}
 
 		// --- разведчик ---
+		// Он один и заменить его нечем (малой фабрики правила не строят): сначала
+		// разведать ресурсы у своей базы (там ставятся шахты), от врагов — назад.
 		if (sd.vehicleData.canSurvey)
 		{
-			bool found = false;
-			const cPosition target = findNearestUnexplored (*vehicle, view, scoutCache, found);
-			if (found)
+			const cPosition landing = player->getLandingPos();
+			// шаг 7: под угрозой врага (карта угроз по памяти) — в ближайшую безопасную клетку,
+			// при равной дальности — ближе к базе
+			const eThreatLayer bl = kBuilderLayer;
+			if (world_.threatFor (*vehicle, vehicle->getPosition(), bl) > 0)
 			{
-				cPathCalculator pc (*vehicle, view, target, false);
-				auto path = pc.calcPath();
-				if (!path.empty())
+				cPosition dest;
+				if (world_.nearestSafeCell (*vehicle, view, vehicle->getPosition(), kEvacuateRadius, landing, dest, bl))
 				{
-					cOrder o;
-					o.type = eOrderType::Move;
-					o.playerId = playerId;
-					o.unitId = vehicle->getId();
-					o.path = pathToVector (path);
-					o.level = "micro";
-					o.reason = "survey unexplored";
-					out.push_back (std::move (o));
+					auto path = threatAwarePath (*vehicle, view, dest, world_, bl);
+					if (!path.empty())
+					{
+						cOrder o;
+						o.type = eOrderType::Move;
+						o.playerId = playerId;
+						o.unitId = vehicle->getId();
+						o.path = std::move (path);
+						o.position = o.path.back(); // цель пути — для журнала и дневника
+						o.level = "micro";
+						o.reason = "surveyor away from enemy";
+						out.push_back (std::move (o));
+						++stats_.evacuations;
+					}
+					continue;
 				}
+			}
+			auto path = pathToUnexplored (*vehicle, view, scoutCache, world_, bl, &landing, kSurveyorHome);
+			if (path.empty()) path = pathToUnexplored (*vehicle, view, scoutCache, world_, bl);
+			if (!path.empty())
+			{
+				cOrder o;
+				o.type = eOrderType::Move;
+				o.playerId = playerId;
+				o.unitId = vehicle->getId();
+				o.path = std::move (path);
+				o.position = o.path.back(); // цель пути — для журнала и дневника
+				o.level = "micro";
+				o.reason = "survey unexplored";
+				out.push_back (std::move (o));
 			}
 			continue;
 		}

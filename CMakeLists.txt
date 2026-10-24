@@ -143,6 +143,10 @@ file(GLOB_RECURSE maxr_ai_headless_SRCS "src/ai_headless/*.cpp"
 add_executable(ai_headless ${maxr_ai_headless_SRCS})
 target_include_directories(ai_headless PUBLIC src)
 target_link_libraries(ai_headless maxr_lib)
+# LLM-советник (ai_http_client): Winsock для HTTP к localhost
+if(WIN32)
+  target_link_libraries(ai_headless ws2_32)
+endif()
 
 # maxr
 file(GLOB_RECURSE maxr_SRCS "src/ui/*.cpp" "src/ui/*.h")

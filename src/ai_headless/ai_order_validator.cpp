@@ -118,6 +118,11 @@ sValidationResult validateOrder (const cModel& model, const cOrder& o)
 			const auto& bdata = model.getUnitsData()->getStaticUnitData (bid);
 			if (!bdata.ID.isABuilding())
 				return fail (r, "Build: тип — не здание");
+			// правила так не приказывают; для LLM — понятная причина вместо молчаливого отказа сервера
+			if (v->getStaticUnitData().canBuild != bdata.buildAs)
+				return fail (r, "Build: этот юнит не строит здания такого класса (" + bdata.buildAs + ")");
+			if (v->isUnitBuildingABuilding())
+				return fail (r, "Build: конструктор уже строит");
 			return r;
 		}
 		case eOrderType::ChangeBuildList:
@@ -146,11 +151,17 @@ sValidationResult validateOrder (const cModel& model, const cOrder& o)
 			if (o.transferValue <= 0) return fail (r, "Transfer: нечего передавать");
 			cUnit* target = model.getUnitFromID (o.unitId2);
 			if (target == nullptr) return fail (r, "Transfer: цель не найдена");
+			if (target->getOwner() == nullptr || target->getOwner()->getId() != o.playerId)
+				return fail (r, "Transfer: цель не своя");
 			return r;
 		}
 		case eOrderType::StartWork:
 		{
-			if (!unit->isABuilding()) return fail (r, "StartWork: юнит — не здание");
+			auto* b = dynamic_cast<cBuilding*> (unit);
+			if (b == nullptr) return fail (r, "StartWork: юнит — не здание");
+			if (!b->getStaticData().canWork) return fail (r, "StartWork: здание не запускается (нет рабочего цикла)");
+			if (b->isUnitWorking()) return fail (r, "StartWork: здание уже работает");
+			if (!b->buildingCanBeStarted()) return fail (r, "StartWork: у фабрики нет недостроенного задания");
 			return r;
 		}
 		case eOrderType::StopWork:
@@ -165,6 +176,8 @@ sValidationResult validateOrder (const cModel& model, const cOrder& o)
 		{
 			cUnit* target = model.getUnitFromID (o.unitId2);
 			if (target == nullptr) return fail (r, "Load: грузимый юнит не найден");
+			if (target->getOwner() == nullptr || target->getOwner()->getId() != o.playerId)
+				return fail (r, "Load: грузимый юнит не свой");
 			return r;
 		}
 		case eOrderType::ActivateUnit:
