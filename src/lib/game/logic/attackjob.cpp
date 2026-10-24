@@ -26,6 +26,7 @@
 #include "game/data/units/unit.h"
 #include "game/data/units/vehicle.h"
 #include "game/logic/fxeffects.h"
+#include "game/logic/movejob.h"
 #include "utility/crc.h"
 #include "utility/log.h"
 #include "utility/narrow_cast.h"
@@ -47,6 +48,15 @@ cAttackJob::cAttackJob (cUnit& aggressor, const cPosition& targetPosition, const
 {
 	NetLog.debug (" cAttackJob: Started attack, aggressor ID: " + std::to_string (aggressor.getId()) + " @" + std::to_string (model.getGameTime()));
 	assert (!aggressor.isAVehicle() || !static_cast<cVehicle&> (aggressor).isUnitMoving());
+	if (aggressor.isAVehicle())
+	{
+		// the vehicle is between two movement steps: its move job waits for the attack (see cMoveJob::run)
+		const cMoveJob* moveJob = static_cast<const cVehicle&> (aggressor).getMoveJob();
+		if (moveJob && moveJob->isActive())
+		{
+			NetLog.debug (" cAttackJob: aggressor ID: " + std::to_string (aggressor.getId()) + " has an active move job, the movement waits for the attack");
+		}
+	}
 
 	lockTarget (*model.getMap(), aggressor);
 
@@ -72,13 +82,16 @@ void cAttackJob::run (cModel& model)
 {
 	if (counter > 0) counter--;
 
-	if (aggressorId == -1)
+	auto* aggressor = aggressorId == -1 ? nullptr : model.getUnitFromID (aggressorId);
+	if (aggressor == nullptr && state != eAJState::Finished)
 	{
+		// the aggressor has been removed (see onRemoveUnit).
+		// Insurance: a job must never use a removed aggressor
+		if (aggressorId != -1)
+			NetLog.warn (" cAttackJob: aggressor ID " + std::to_string (aggressorId) + " not found, attack finished @" + std::to_string (model.getGameTime()));
 		releaseTargets (model);
 		state = eAJState::Finished;
 	}
-	auto* aggressor = model.getUnitFromID (aggressorId);
-	assert (aggressor != nullptr);
 	switch (state)
 	{
 		case eAJState::Rotating:
@@ -326,14 +339,16 @@ void cAttackJob::impact (cModel& model)
 	auto* aggressor = model.getUnitFromID (aggressorId);
 	assert (aggressor != nullptr);
 
+	// the attack of the aggressor is over with the first hit field (see impactSingle)
+	bool aggressorReleased = false;
 	if (aggressor->getStaticUnitData().muzzleType == eMuzzleType::RocketCluster)
-		impactCluster (model);
+		impactCluster (model, aggressorReleased);
 	else
-		impactSingle (targetPosition, aggressor->data.getDamage(), model);
+		impactSingle (targetPosition, aggressor->data.getDamage(), model, aggressorReleased);
 }
 
 //------------------------------------------------------------------------------
-void cAttackJob::impactCluster (cModel& model)
+void cAttackJob::impactCluster (cModel& model, bool& aggressorReleased)
 {
 	std::vector<cUnit*> targets;
 
@@ -341,32 +356,32 @@ void cAttackJob::impactCluster (cModel& model)
 	assert (aggressor != nullptr);
 	//full damage
 	int clusterDamage = aggressor->data.getDamage();
-	impactSingle (targetPosition, clusterDamage, model, &targets);
+	impactSingle (targetPosition, clusterDamage, model, aggressorReleased, &targets);
 
 	// 3/4 damage
 	clusterDamage = (aggressor->data.getDamage() * 3) / 4;
-	impactSingle (targetPosition + cPosition (-1, 0), clusterDamage, model, &targets);
-	impactSingle (targetPosition + cPosition (+1, 0), clusterDamage, model, &targets);
-	impactSingle (targetPosition + cPosition (0, -1), clusterDamage, model, &targets);
-	impactSingle (targetPosition + cPosition (0, +1), clusterDamage, model, &targets);
+	impactSingle (targetPosition + cPosition (-1, 0), clusterDamage, model, aggressorReleased, &targets);
+	impactSingle (targetPosition + cPosition (+1, 0), clusterDamage, model, aggressorReleased, &targets);
+	impactSingle (targetPosition + cPosition (0, -1), clusterDamage, model, aggressorReleased, &targets);
+	impactSingle (targetPosition + cPosition (0, +1), clusterDamage, model, aggressorReleased, &targets);
 
 	// 1/2 damage
 	clusterDamage = aggressor->data.getDamage() / 2;
-	impactSingle (targetPosition + cPosition (+1, +1), clusterDamage, model, &targets);
-	impactSingle (targetPosition + cPosition (+1, -1), clusterDamage, model, &targets);
-	impactSingle (targetPosition + cPosition (-1, +1), clusterDamage, model, &targets);
-	impactSingle (targetPosition + cPosition (-1, -1), clusterDamage, model, &targets);
+	impactSingle (targetPosition + cPosition (+1, +1), clusterDamage, model, aggressorReleased, &targets);
+	impactSingle (targetPosition + cPosition (+1, -1), clusterDamage, model, aggressorReleased, &targets);
+	impactSingle (targetPosition + cPosition (-1, +1), clusterDamage, model, aggressorReleased, &targets);
+	impactSingle (targetPosition + cPosition (-1, -1), clusterDamage, model, aggressorReleased, &targets);
 
 	// 1/3 damage
 	clusterDamage = aggressor->data.getDamage() / 3;
-	impactSingle (targetPosition + cPosition (-2, 0), clusterDamage, model, &targets);
-	impactSingle (targetPosition + cPosition (+2, 0), clusterDamage, model, &targets);
-	impactSingle (targetPosition + cPosition (0, -2), clusterDamage, model, &targets);
-	impactSingle (targetPosition + cPosition (0, +2), clusterDamage, model, &targets);
+	impactSingle (targetPosition + cPosition (-2, 0), clusterDamage, model, aggressorReleased, &targets);
+	impactSingle (targetPosition + cPosition (+2, 0), clusterDamage, model, aggressorReleased, &targets);
+	impactSingle (targetPosition + cPosition (0, -2), clusterDamage, model, aggressorReleased, &targets);
+	impactSingle (targetPosition + cPosition (0, +2), clusterDamage, model, aggressorReleased, &targets);
 }
 
 //------------------------------------------------------------------------------
-void cAttackJob::impactSingle (const cPosition& position, int attackPoints, cModel& model, std::vector<cUnit*>* avoidTargets)
+void cAttackJob::impactSingle (const cPosition& position, int attackPoints, cModel& model, bool& aggressorReleased, std::vector<cUnit*>* avoidTargets)
 {
 	const cMap& map = *model.getMap();
 
@@ -431,7 +446,16 @@ void cAttackJob::impactSingle (const cPosition& position, int attackPoints, cMod
 		model.addFx (std::make_unique<cFxHit> (position * 64 + offset + cPosition (32, 32), targetHit, bigTarget));
 	}
 
-	aggressor->setAttacking (false);
+	// A cluster impact hits up to 13 fields, but the attack of the aggressor ends only once.
+	// The reaction fire below (inSentryRange of a hit target) may already have started
+	// the next attack job of this aggressor: clearing its attacking state again would leave
+	// that job unprotected (more jobs of one aggressor rotate it against each other forever,
+	// and cModel::deleteUnit would not detach them from the destroyed aggressor).
+	if (!aggressorReleased)
+	{
+		aggressor->setAttacking (false);
+		aggressorReleased = true;
+	}
 
 	//make message
 	if (target && target->getOwner())

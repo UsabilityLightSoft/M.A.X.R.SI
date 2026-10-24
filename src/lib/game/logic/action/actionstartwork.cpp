@@ -40,6 +40,9 @@ void cActionStartWork::execute (cModel& model) const
 	cBuilding* b = model.getBuildingFromID (unitId);
 	if (b == nullptr || !b->getOwner()) return;
 	if (b->getOwner()->getId() != playerNr) return;
+	// same check as the GUI "Start" item: no work cycle (habitat would add its production
+	// again), already working, or a factory without an unfinished first item
+	if (!b->buildingCanBeStarted()) return;
 
 	b->startWork();
 }

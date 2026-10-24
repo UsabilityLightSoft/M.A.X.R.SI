@@ -123,6 +123,14 @@ void cActionFinishBuild::finishAVehicle (cModel& model, cBuilding& building) con
 	model.sideStepStealthUnit (escapePosition, unitData, player);
 	if (!map->possiblePlaceVehicle (unitData, escapePosition, player)) return;
 
+	// The factory may still be working, although its build job is finished
+	// (e.g. when it has been started again after the job was finished).
+	// Stop it before switching to the next job: startWork() below does nothing
+	// for a working factory, so the subbase would not account the metal
+	// consumption of the next job and its needed metal would drift below zero.
+	building.stopWork (false);
+	if (building.isUnitWorking()) return;
+
 	if (player)
 	{
 		if (auto* dynamicUnitData = player->getLastUnitData (buildingListItem.getType()))
@@ -151,8 +159,10 @@ void cActionFinishBuild::finishAVehicle (cModel& model, cBuilding& building) con
 
 	if (!building.isBuildListEmpty())
 	{
+		// do not use buildingListItem any more:
+		// adding/removing build list items invalidates references to them
 		cBuildListItem& nextBuildingListItem = building.getBuildListItem (0);
-		if (buildingListItem.getRemainingMetal() == -1)
+		if (nextBuildingListItem.getRemainingMetal() == -1)
 		{
 			std::array<int, 3> turboBuildRounds;
 			std::array<int, 3> turboBuildCosts;

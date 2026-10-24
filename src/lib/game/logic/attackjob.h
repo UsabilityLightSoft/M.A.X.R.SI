@@ -81,8 +81,8 @@ private:
 	void fire (cModel& model);
 	std::unique_ptr<cFx> createMuzzleFx (const cUnit& aggressor);
 	void impact (cModel& model);
-	void impactCluster (cModel& model);
-	void impactSingle (const cPosition& position, int attackPoints, cModel& model, std::vector<cUnit*>* avoidTargets = nullptr);
+	void impactCluster (cModel& model, bool& aggressorReleased);
+	void impactSingle (const cPosition& position, int attackPoints, cModel& model, bool& aggressorReleased, std::vector<cUnit*>* avoidTargets = nullptr);
 
 private:
 	int aggressorId = -1;
