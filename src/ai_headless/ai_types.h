@@ -19,11 +19,16 @@
 namespace ai
 {
 
+// Шаг 13: «нет юнита» в полях-ссылках приказа (unitId2). Id 0 — настоящая машина (первый конструктор
+// игрока 0), поэтому 0 больше не значит «нет цели». Мозги, писавшие 0 как «нет» (base, base2, сторонние),
+// переводит движок ИИИ (cAiBrain::zeroMeansNoUnit): у Move с выстрелом в конце пути, Attack и UpgradeVehicle.
+inline constexpr unsigned int kNoUnit = 0xFFFFFFFFu;
+
 enum class eOrderType
 {
 	None,
 	EndTurn,        // playerId
-	Move,           // unitId + path
+	Move,           // unitId + path (+ unitId2 — что сделать с ним в конце пути: moveEnd; по умолчанию выстрел, шаг 9)
 	Attack,         // unitId + targetPosition
 	Build,          // unitId (конструктор) + buildingType + position
 	BuildPath,      // unitId + buildingType + position (старт) + position2 (конец)
@@ -33,16 +38,42 @@ enum class eOrderType
 	Rearm,          // unitId (источник) + unitId2 (цель)
 	Transfer,       // unitId (источник) + unitId2 (цель) + value + resType
 	StartWork,      // unitId (здание)
-	StopWork,       // unitId (юнит)
-	ToggleSentry,   // unitId
+	StopWork,       // unitId (юнит): здание — стоп; машина — остановить движение (и долгий путь), стройку, расчистку
+	ToggleSentry,   // unitId — дозор: включить / выключить (огонь по любому видимому врагу, вошедшему в дальность)
 	ToggleManualFire,// unitId
 	ToggleLayMines, // unitId (миноукладчик)
 	ToggleCollectMines, // unitId (тральщик)
 	SelfDestroy,    // unitId (здание)
-	Load,           // unitId (транспорт) + unitId2 (грузимый юнит)
-	ActivateUnit,   // unitId (хранилище) + unitId2 (юнит) + position (куда выйти)
+	Load,           // unitId (транспорт или здание-хранилище) + unitId2 (грузимый юнит рядом; авиатранспорт — под собой)
+	ActivateUnit,   // unitId (хранилище) + unitId2 (юнит) + position (куда выйти: рядом; из авиатранспорта — под ним)
 	FinishBuild,    // unitId (конструктор/фабрика) + position (точка выезда)
+	// шаг 10 (исследования и золото) — в конце списка: советник перебирает типы EndTurn…FinishBuild
+	BuyUpgrades,    // playerId + unitType + upgradeSteps — купить улучшения типа за кредиты (золото)
+	UpgradeVehicle, // unitId (хранилище: депо/ангар/док) + unitId2 (машина внутри; kNoUnit — все устаревшие)
+	UpgradeBuilding,// unitId (здание) + allUnits (и все такие же здания подбазы) — до текущей версии за металл
+	SetMining,      // unitId (здание подбазы) + mining — распределение добычи шахт подбазы (металл, нефть, золото)
+	// шаг 11 (новые приказы П2) — в конце списка
+	Disable,        // unitId (коммандос) + unitId2 (цель на соседней клетке) — выключить (cActionStealDisable)
+	Steal,          // unitId (коммандос) + unitId2 (машина на соседней клетке) — захватить
 };
+
+// шаг 11: что машина делает с unitId2 приказа Move в конце пути (cEndMoveAction движка)
+enum class eMoveEnd
+{
+	Attack, // выстрелить по unitId2 (шаг 9, «подъехал — выстрелил»)
+	Load,   // погрузить unitId2 в себя (транспорт подъехал; авиатранспорт — встал над ним)
+	GetIn,  // войти в unitId2 (транспорт или здание-хранилище рядом)
+};
+
+inline const char* toString (eMoveEnd e)
+{
+	switch (e)
+	{
+		case eMoveEnd::Load: return "load";
+		case eMoveEnd::GetIn: return "getIn";
+		default: return "attack";
+	}
+}
 
 inline const char* toString (eOrderType t)
 {
@@ -68,6 +99,12 @@ inline const char* toString (eOrderType t)
 		case eOrderType::Load: return "Load";
 		case eOrderType::ActivateUnit: return "ActivateUnit";
 		case eOrderType::FinishBuild: return "FinishBuild";
+		case eOrderType::BuyUpgrades: return "BuyUpgrades";
+		case eOrderType::UpgradeVehicle: return "UpgradeVehicle";
+		case eOrderType::UpgradeBuilding: return "UpgradeBuilding";
+		case eOrderType::SetMining: return "SetMining";
+		case eOrderType::Disable: return "Disable";
+		case eOrderType::Steal: return "Steal";
 		default: return "None";
 	}
 }
@@ -93,7 +130,9 @@ struct cOrder
 	int playerId = -1;               // чей приказ (EndTurn, ChangeResearch)
 
 	unsigned int unitId = 0;         // основной юнит
-	unsigned int unitId2 = 0;        // вторичный юнит (Repair/Rearm/Transfer/Load/Activate)
+	unsigned int unitId2 = kNoUnit;  // вторичный юнит (Repair/Rearm/Transfer/Load/Activate/Disable/Steal; Move — цель
+	                                 // в конце пути); шаг 13: kNoUnit — нет (0 — настоящая машина)
+	eMoveEnd moveEnd = eMoveEnd::Attack; // Move с unitId2: что сделать с ним в конце пути (шаг 11)
 
 	sTypeId buildingType;            // Build/BuildPath: что строим
 	cPosition position;              // Attack/Build/Activate: целевая клетка
@@ -109,6 +148,15 @@ struct cOrder
 
 	int transferValue = 0;           // Transfer: сколько
 	eResourceType resType = eResourceType::None; // Transfer: что
+
+	// шаг 10: улучшения и добыча
+	sTypeId unitType;                // BuyUpgrades: тип юнита
+	// BuyUpgrades: шагов улучшения по видам, порядок kUpgradeKinds (ai_upgrades.h):
+	// урон, выстрелы, дальность, боезапас, броня, прочность, обзор, скорость
+	std::array<int, 8> upgradeSteps{};
+	int upgradeCost = 0;             // BuyUpgrades: цена по расчёту мозга (кредиты) — для журнала
+	bool allUnits = false;           // UpgradeBuilding: и все такие же здания подбазы
+	std::array<int, 3> mining{};     // SetMining: металл, нефть, золото в ход
 
 	// аудит
 	std::string level;               // "micro" / "op" / "strategy"

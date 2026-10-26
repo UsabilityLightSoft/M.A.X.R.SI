@@ -116,6 +116,13 @@ public:
 	const char* name() const override { return "llm"; }
 
 	std::vector<cOrder> decideTurn (int playerId, const cModel& model) override;
+	// шаг 11: заходы 2+ — правила внутри советника, без запроса к модели (запрос — только в заходе 1)
+	bool wantsAnotherPass() const override { return rule_.wantsAnotherPass(); }
+	// шаг 13: «нет цели» — kNoUnit (свои правила и разбор ответа модели не пишут 0 как «нет»)
+	bool zeroMeansNoUnit() const override { return false; }
+	// шаг 13, часть 2: свои юниты, выключенные коммандос врага, — своим правилам (тревога «диверсант»)
+	void noteDisabled (const std::vector<unsigned int>& ids) override { rule_.noteDisabled (ids); }
+	std::vector<cOrder> decidePass (int playerId, const cModel& model, int pass) override { return rule_.decidePass (playerId, model, pass); }
 
 private:
 	std::vector<cOrder> adviseOrFallback (int playerId, int turn, const cModel& model, const std::vector<cOrder>& ruleOrders);

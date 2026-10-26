@@ -5,12 +5,15 @@
 #include "ai_order_validator.h"
 
 #include "ai_types.h"
+#include "ai_upgrades.h"
 
+#include "game/data/base/base.h"
 #include "game/data/map/map.h"
 #include "game/data/map/mapview.h"
 #include "game/data/model.h"
 #include "game/data/player/player.h"
 #include "game/data/units/building.h"
+#include "game/data/units/commandodata.h"
 #include "game/data/units/unit.h"
 #include "game/data/units/unitdata.h"
 #include "game/data/units/vehicle.h"
@@ -75,6 +78,23 @@ sValidationResult validateOrder (const cModel& model, const cOrder& o)
 		return r;
 	}
 
+	// шаг 10: улучшения типа за кредиты — приказ игрока, не юнита
+	if (o.type == eOrderType::BuyUpgrades)
+	{
+		if (player == nullptr) return fail (r, "BuyUpgrades: нет такого игрока");
+		if (player->isDefeated) return fail (r, "BuyUpgrades: игрок побеждён");
+		const sID id (o.unitType.firstPart, o.unitType.secondPart);
+		cUnitUpgrade upgrade;
+		int cost = 0;
+		std::string why;
+		if (!makeUnitUpgrade (model, *player, id, o.upgradeSteps, upgrade, cost, &why))
+			return fail (r, "BuyUpgrades: " + why);
+		if (cost > player->getCredits())
+			return fail (r, "BuyUpgrades: не хватает кредитов (нужно " + std::to_string (cost) + ", есть "
+				+ std::to_string (player->getCredits()) + ")");
+		return r;
+	}
+
 	// --- приказы, адресованные юниту ---
 	cUnit* unit = model.getUnitFromID (o.unitId);
 	if (unit == nullptr) return fail (r, std::string (toString (o.type)) + ": юнит не найден");
@@ -94,6 +114,17 @@ sValidationResult validateOrder (const cModel& model, const cOrder& o)
 			for (const auto& p : o.path)
 				if (!map->isValidPosition (p))
 					return fail (r, "Move: клетка вне карты");
+			// шаг 11: погрузить в конце пути или войти — цель своя
+			if (o.moveEnd != eMoveEnd::Attack)
+			{
+				const cUnit* target = model.getUnitFromID (o.unitId2);
+				if (target == nullptr) return fail (r, "Move: цель погрузки не найдена");
+				if (target->getOwner() != unit->getOwner()) return fail (r, "Move: цель погрузки не своя");
+				if (o.moveEnd == eMoveEnd::Load && v->getStaticUnitData().storageUnitsMax <= 0)
+					return fail (r, "Move: машина не транспорт — грузить некуда");
+				if (o.moveEnd == eMoveEnd::GetIn && target->getStaticUnitData().storageUnitsMax <= 0)
+					return fail (r, "Move: цель — не транспорт и не хранилище");
+			}
 			return r;
 		}
 		case eOrderType::Attack:
@@ -178,12 +209,90 @@ sValidationResult validateOrder (const cModel& model, const cOrder& o)
 			if (target == nullptr) return fail (r, "Load: грузимый юнит не найден");
 			if (target->getOwner() == nullptr || target->getOwner()->getId() != o.playerId)
 				return fail (r, "Load: грузимый юнит не свой");
+			// шаг 11: та же проверка, что у сервера (cActionLoad) — с понятной причиной
+			auto* loaded = dynamic_cast<cVehicle*> (target);
+			if (loaded == nullptr) return fail (r, "Load: грузить можно только машину");
+			if (!unit->canLoad (loaded))
+				return fail (r, "Load: не грузится (нужно: рядом, авиатранспорт — над машиной; место; тип груза; машина стоит и не под огнём)");
 			return r;
 		}
 		case eOrderType::ActivateUnit:
 		{
 			if (!map->isValidPosition (o.position))
 				return fail (r, "ActivateUnit: клетка вне карты");
+			// шаг 11: машина внутри и может выйти на клетку (как cActionActivate)
+			const cUnit* stored = model.getUnitFromID (o.unitId2);
+			if (stored == nullptr || std::find (unit->storedUnits.begin(), unit->storedUnits.end(), stored) == unit->storedUnits.end())
+				return fail (r, "ActivateUnit: машины нет внутри");
+			if (!unit->isNextTo (o.position) && unit->getPosition() != o.position)
+				return fail (r, "ActivateUnit: клетка не рядом с хранилищем");
+			// по видимому игроку (скрытую чужую машину на клетке сервер отодвинет сам)
+			const cMapView view (map, sharedPlayer (model, o.playerId));
+			if (!unit->canExitTo (o.position, view, stored->getStaticUnitData()))
+				return fail (r, "ActivateUnit: на клетку не выйти (занята или не та местность)");
+			return r;
+		}
+		// --- шаг 10 ---
+		case eOrderType::UpgradeVehicle:
+		{
+			auto* b = dynamic_cast<cBuilding*> (unit);
+			if (b == nullptr) return fail (r, "UpgradeVehicle: хранилище — не здание");
+			if (b->getStaticUnitData().storageUnitsMax <= 0) return fail (r, "UpgradeVehicle: здание не хранит машин");
+			if (b->subBase == nullptr) return fail (r, "UpgradeVehicle: здание без подбазы (нет металла)");
+			const int metal = b->subBase->getResourcesStored().metal;
+			int cheapest = -1;
+			for (const cVehicle* v : b->storedUnits)
+			{
+				if (o.unitId2 != kNoUnit && v->getId() != o.unitId2) continue; // шаг 13: kNoUnit — все устаревшие
+				if (!outdated (*v)) continue;
+				const int c = refitMetalCost (*unit->getOwner(), v->data.getId());
+				if (cheapest < 0 || c < cheapest) cheapest = c;
+			}
+			if (cheapest < 0)
+				return fail (r, o.unitId2 != kNoUnit ? "UpgradeVehicle: машины нет в хранилище или она уже текущей версии"
+												: "UpgradeVehicle: в хранилище нет устаревших машин");
+			if (cheapest > metal)
+				return fail (r, "UpgradeVehicle: не хватает металла (нужно " + std::to_string (cheapest) + ", есть " + std::to_string (metal) + ")");
+			return r;
+		}
+		case eOrderType::UpgradeBuilding:
+		{
+			auto* b = dynamic_cast<cBuilding*> (unit);
+			if (b == nullptr) return fail (r, "UpgradeBuilding: юнит — не здание");
+			if (!outdated (*b)) return fail (r, "UpgradeBuilding: здание уже текущей версии");
+			if (b->subBase == nullptr) return fail (r, "UpgradeBuilding: здание без подбазы (нет металла)");
+			const int cost = refitMetalCost (*unit->getOwner(), b->data.getId());
+			if (cost > b->subBase->getResourcesStored().metal)
+				return fail (r, "UpgradeBuilding: не хватает металла (нужно " + std::to_string (cost) + ")");
+			return r;
+		}
+		case eOrderType::SetMining:
+		{
+			auto* b = dynamic_cast<cBuilding*> (unit);
+			if (b == nullptr) return fail (r, "SetMining: юнит — не здание");
+			if (b->subBase == nullptr) return fail (r, "SetMining: здание без подбазы");
+			for (int n : o.mining)
+				if (n < 0) return fail (r, "SetMining: отрицательная добыча");
+			return r;
+		}
+		// --- шаг 11: коммандос выключает или захватывает соседнюю цель (cActionStealDisable) ---
+		case eOrderType::Disable:
+		case eOrderType::Steal:
+		{
+			const bool steal = o.type == eOrderType::Steal;
+			const char* what = steal ? "Steal" : "Disable";
+			auto* commando = dynamic_cast<cVehicle*> (unit);
+			if (commando == nullptr) return fail (r, std::string (what) + ": юнит — не машина");
+			if (steal ? !commando->getStaticData().canCapture : !commando->getStaticData().canDisable)
+				return fail (r, std::string (what) + ": машина этого не умеет (только коммандос)");
+			const cUnit* target = model.getUnitFromID (o.unitId2);
+			if (target == nullptr) return fail (r, std::string (what) + ": цель не найдена");
+			const auto viewer = sharedPlayer (model, o.playerId);
+			if (viewer == nullptr || !viewer->canSeeUnit (*target, *map)) return fail (r, std::string (what) + ": цель не видна");
+			if (!cCommandoData::canDoAction (*commando, target, steal))
+				return fail (r, std::string (what) + (steal
+					? ": нельзя (нужно: соседняя клетка, выстрел, цель — чужая машина без груза, не в воздухе)"
+					: ": нельзя (нужно: соседняя клетка, выстрел, цель чужая, не выключена, не в воздухе)"));
 			return r;
 		}
 		default:

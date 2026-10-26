@@ -29,28 +29,45 @@
 //           используется фиксированный дефолт kDefaultRandomSeed из random.h —
 //           т.е. прогон всё равно детерминирован.
 // argv[5] = сторож, мс без смены хода до выхода (default 900000)
-// argv[6] = мозг: "rule", "base" или "llm" — обоим игрокам; "llm,rule", "rule,base" —
+// argv[6] = мозг: "rule", "base", "base2" или "llm" — обоим игрокам; "llm,rule", "rule,base" —
 //           по игроку (игрок 0, игрок 1). Не задан — переменная MAXR_BRAIN, иначе "rule".
 //           "base" — замороженная копия правил на 24.10.2026 (ai_base_brain.cpp), эталон
-//           турниров шагов 7–12: «rule,base» мерит, насколько новые правила сильнее.
+//           турниров шагов 7–10: «rule,base» мерит, насколько новые правила сильнее.
+//           "base2" — замороженный итог шага 10 (ai_base2_*.cpp, 26.10.2026), эталон с шага 11.
+//           "base3" — замороженный итог шага 13, часть 1 (ai_base3_*.cpp, 26.10.2026), чемпион с части 2.
+//           "scenario" — сценарная проверка новых приказов (шаг 11, ai_scenario_brain.h): игроку 0
+//           при высадке добавляются машины сценария; точки высадки — MAXR_LANDING рядом.
+//           "external" — решает внешняя программа по HTTP (шаг 16, ai_external_brain.h):
+//           MAXR_EXT_URL, MAXR_EXT_MODE (assist | full), MAXR_EXT_TIMEOUT_MS.
+//           "red1" — налётчик по сценарию (шаг 14, ai_red_brain.h): MAXR_RED=rear|sea|subs|combo,
+//           MAXR_RED_ECO, MAXR_RED_START; машины сценария покупаются при высадке (краш-тест).
+//           "red2" — честный налётчик (шаг 14б, ai_red_fair.cpp): высадка по правилам окна высадки,
+//           хозяйство base2, свои заводы налёта, разведка, ангар; MAXR_RED, MAXR_RED_START.
+// MAXR_PASSES — предел заходов за ход (шаг 11, умолчание 5; 1 — один заход, как до шага 11).
 //           LLM-советник: MAXR_LLM_URL, MAXR_LLM_MODEL, MAXR_LLM_TIMEOUT_MS;
 //           его журнал — <каталог вывода>/llm.jsonl, полные ответы сервера —
 //           llm_replies.jsonl (первой строкой — параметры партии).
 // MAXR_LLM_REPLAY=<llm_replies.jsonl | llm.jsonl> — повтор партии с LLM: советник
 //           берёт ответы из записи, модель не зовётся (те же argv и MAXR_LLM_*).
 // MAXR_FAST_TICK=0 — проигрывать ходы в реальном времени (по умолчанию быстрый такт).
+// MAXR_DETERMINISTIC_TICK=0 — время идёт само, как в сетевой игре (шаг 11; партия не повторяется).
 // Партия кончается на ходе argv[1] или раньше — когда движок признал игрока
 // побеждённым. Выход: digest/, journal.jsonl, metrics.json (исход и метрики D),
 // metrics_turns.jsonl (ряд по ходам).
 
 #include "SDLutility/sdlcomponent.h"
 #include "SDLutility/sdlnetcomponent.h"
+#include "ai_base2_rule_brain.h"
+#include "ai_base3_rule_brain.h"
 #include "ai_base_brain.h"
 #include "ai_brain.h"
 #include "ai_decision_journal.h"
 #include "ai_engine.h"
+#include "ai_external_brain.h"
 #include "ai_llm_advisor.h"
 #include "ai_rule_brain.h"
+#include "ai_red_brain.h"
+#include "ai_scenario_brain.h"
 #include "crashreporter/debug.h"
 #include "game/connectionmanager.h"
 #include "game/data/gamesettings.h"
@@ -62,6 +79,7 @@
 #include "game/data/units/unitdata.h"
 #include "game/logic/action/actioninitnewgame.h"
 #include "game/logic/client.h"
+#include "game/logic/gametimer.h"
 #include "game/logic/server.h"
 #include "game/logic/turncounter.h"
 #include "game/startup/gamepreparation.h"
@@ -83,6 +101,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -90,7 +109,7 @@
 #include <vector>
 
 //------------------------------------------------------------------------------
-// разобрать выбор мозга: «rule»/«base»/«llm» — обоим игрокам, «llm,rule» — по игроку
+// разобрать выбор мозга: «rule»/«base»/«base2»/«llm»/«scenario» — обоим игрокам, «llm,rule» — по игроку
 static bool parseBrains (const std::string& spec, int nPlayers, std::vector<std::string>& out, std::string& err)
 {
 	std::vector<std::string> items;
@@ -113,9 +132,9 @@ static bool parseBrains (const std::string& spec, int nPlayers, std::vector<std:
 	}
 	for (const auto& item : items)
 	{
-		if (item != "rule" && item != "base" && item != "llm")
+		if (item != "rule" && item != "base" && item != "base2" && item != "base3" && item != "llm" && item != "scenario" && item != "external" && item != "red1" && item != "red2")
 		{
-			err = "unknown brain '" + item + "' (allowed: rule, base, llm)";
+			err = "unknown brain '" + item + "' (allowed: rule, base, base2, base3, llm, scenario, external, red1, red2)";
 			return false;
 		}
 	}
@@ -139,9 +158,14 @@ static bool parseBrains (const std::string& spec, int nPlayers, std::vector<std:
 // меньшим простором меньше площадок под шахты — на Delta у дальней пары без этого было
 // 457 клеток суши против 643), и из них — самая дальняя по пути танка пара.
 // MAXR_LANDING="x0,y0;x1,y1" — точки вручную (для опытов), проверка годности та же.
+// Шаг 13 (п. 76 PLAN.md): точки из файла карты — maps/<карта>.json генератора карт
+// (TargetFiles/tools/mapgen, поле "landing": [[x0,y0],[x1,y1]]) рядом с .wrl; у точек вручную
+// и из файла базы могут стоять в разных областях суши (материки, острова) — тогда пути танка
+// между ними нет (−1), а областью каждой базы должно быть не меньше kMinLandingRegionEach.
 namespace
 {
 constexpr int kMinLandingRegion = 300;  // клеток в области на двоих; меньше (Three Isles: 185) — играть негде
+constexpr int kMinLandingRegionEach = 150; // шаг 13: базы в разных областях — клеток у каждой
 constexpr int kMinLandingDistance = 20; // шагов танка между базами — не ближе
 constexpr int kRoomRadius = 18;         // радиус «простора» = kMaxSiteRadius правил (площадки шахт)
 constexpr double kRoomShare = 0.8;      // просторная точка — не меньше этой доли от лучшей
@@ -322,10 +346,12 @@ struct sLandingPlan
 {
 	std::array<cPosition, 2> send{};    // что отдать initNewGame
 	std::array<cPosition, 2> landing{}; // где встанет база
-	std::string how;                    // "corner" — старый выбор, "roomy" — дальняя просторная пара, "env" — MAXR_LANDING
+	std::string how;                    // "corner" — старый выбор, "roomy" — дальняя просторная пара, "env" — MAXR_LANDING,
+	                                    // "map" — файл карты (шаг 13)
 	std::string error;                  // не пусто — высадка невозможна
 	int regionSize = 0;
-	int distance = 0;
+	int regionSize1 = 0;                // шаг 13: область второй базы (у разных областей — своя)
+	int distance = 0;                   // шагов танка между базами; −1 — разные области суши
 	std::array<int, 2> room{};          // простор у баз (клеток суши в радиусе kRoomRadius)
 };
 
@@ -334,21 +360,72 @@ std::string posText (const cPosition& p)
 	return "(" + std::to_string (p.x()) + "," + std::to_string (p.y()) + ")";
 }
 
+// Шаг 13: точки высадки из файла карты <карта>.json рядом с .wrl (каталог карт игры, затем
+// каталог карт пользователя — как cStaticMap::loadMap). false — файла нет; err — файл есть, но негоден.
+bool readMapLanding (const std::string& mapFile, const cStaticMap& map, std::array<cPosition, 2>& out,
+                     std::string& source, std::string& err)
+{
+	std::filesystem::path name (mapFile);
+	name.replace_extension (".json");
+	std::vector<std::filesystem::path> dirs {cSettings::getInstance().getMapsPath()};
+	if (!cSettings::getInstance().getUserMapsDir().empty()) dirs.push_back (cSettings::getInstance().getUserMapsDir());
+	for (const auto& dir : dirs)
+	{
+		const std::filesystem::path path = dir / name;
+		std::ifstream file (path);
+		if (!file.is_open()) continue;
+		source = utf8::to_string (path);
+		nlohmann::json j;
+		try
+		{
+			file >> j;
+		}
+		catch (const std::exception& ex)
+		{
+			err = source + ": " + ex.what();
+			return false;
+		}
+		// файл — от этой карты: имя и размер
+		if (j.contains ("file") && j["file"].is_string() && j["file"].get<std::string>() != std::filesystem::path (mapFile).filename().string())
+		{
+			err = source + ": file '" + j["file"].get<std::string>() + "' is not " + mapFile;
+			return false;
+		}
+		if (j.contains ("size") && j["size"].is_number_integer() && j["size"].get<int>() != map.getSize().x())
+		{
+			err = source + ": size " + std::to_string (j["size"].get<int>()) + " is not the map size " + std::to_string (map.getSize().x());
+			return false;
+		}
+		const auto& l = j.contains ("landing") ? j["landing"] : nlohmann::json();
+		if (!l.is_array() || l.size() != 2 || !l[0].is_array() || !l[1].is_array() || l[0].size() != 2 || l[1].size() != 2
+			|| !l[0][0].is_number_integer() || !l[0][1].is_number_integer() || !l[1][0].is_number_integer() || !l[1][1].is_number_integer())
+		{
+			err = source + ": no field \"landing\": [[x0,y0],[x1,y1]]";
+			return false;
+		}
+		out = {cPosition (l[0][0].get<int>(), l[0][1].get<int>()), cPosition (l[1][0].get<int>(), l[1][1].get<int>())};
+		return true;
+	}
+	return false;
+}
+
 sLandingPlan planLanding (const cStaticMap& map, const cUnitsData& unitsData, bool fixedBridgehead,
-                          const std::array<std::vector<sLandingUnit>, 2>& units)
+                          const std::array<std::vector<sLandingUnit>, 2>& units, const std::array<cPosition, 2>* mapLanding)
 {
 	const sLandGrid g = buildLandGrid (map);
 	const std::vector<int> room = landRoom (map);
 	const cPosition mapSize = map.getSize();
-	const auto good = [&] (const cPosition& l, int player) {
-		return g.at (l) >= 0 && g.sizes[g.at (l)] >= kMinLandingRegion && startMineFits (map, unitsData, l)
+	const auto good = [&] (const cPosition& l, int player, int minRegion = kMinLandingRegion) {
+		return g.at (l) >= 0 && g.sizes[g.at (l)] >= minRegion && startMineFits (map, unitsData, l)
 			&& cActionInitNewGame::isValidLandingPosition (l, map, fixedBridgehead, units[player], unitsData)
 			&& baseLeavesExit (g, l);
 	};
 	const auto roomAt = [&] (const cPosition& l) { return room[l.y() * g.w + l.x()]; };
 	sLandingPlan plan;
 
-	// 0. точки вручную: MAXR_LANDING="x0,y0;x1,y1"
+	// 0. точки вручную (MAXR_LANDING="x0,y0;x1,y1") или из файла карты (шаг 13): базы могут стоять
+	//    в разных областях суши — тогда каждой области не меньше kMinLandingRegionEach клеток
+	std::string fixedHow;
 	if (const char* env = std::getenv ("MAXR_LANDING"); env != nullptr && *env != 0)
 	{
 		int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
@@ -358,22 +435,35 @@ sLandingPlan planLanding (const cStaticMap& map, const cUnitsData& unitsData, bo
 			return plan;
 		}
 		plan.landing = {cPosition (x0, y0), cPosition (x1, y1)};
+		fixedHow = "env";
+	}
+	else if (mapLanding != nullptr)
+	{
+		plan.landing = *mapLanding;
+		fixedHow = "map";
+	}
+	if (!fixedHow.empty())
+	{
 		plan.send = plan.landing;
+		const char* what = fixedHow == "env" ? "MAXR_LANDING" : "map landing";
 		for (int i = 0; i < 2; ++i)
-			if (!map.isValidPosition (plan.landing[i]) || !good (plan.landing[i], i))
+			if (!map.isValidPosition (plan.landing[i]))
 			{
-				plan.error = "MAXR_LANDING: p" + std::to_string (i) + "=" + posText (plan.landing[i])
+				plan.error = std::string (what) + ": p" + std::to_string (i) + "=" + posText (plan.landing[i]) + " is outside the map";
+				return plan;
+			}
+		const bool sameRegion = g.at (plan.landing[0]) >= 0 && g.at (plan.landing[0]) == g.at (plan.landing[1]);
+		for (int i = 0; i < 2; ++i)
+			if (!good (plan.landing[i], i, sameRegion ? kMinLandingRegion : kMinLandingRegionEach))
+			{
+				plan.error = std::string (what) + ": p" + std::to_string (i) + "=" + posText (plan.landing[i])
 					+ " is not a valid landing place (start mine, units, exit, land region)";
 				return plan;
 			}
-		if (g.at (plan.landing[0]) != g.at (plan.landing[1]))
-		{
-			plan.error = "MAXR_LANDING: the points are in different land regions";
-			return plan;
-		}
-		plan.how = "env";
+		plan.how = fixedHow;
 		plan.regionSize = g.sizes[g.at (plan.landing[0])];
-		plan.distance = tankDistances (g, plan.landing[0])[plan.landing[1].y() * g.w + plan.landing[1].x()];
+		plan.regionSize1 = g.sizes[g.at (plan.landing[1])];
+		plan.distance = sameRegion ? tankDistances (g, plan.landing[0])[plan.landing[1].y() * g.w + plan.landing[1].x()] : -1;
 		plan.room = {roomAt (plan.landing[0]), roomAt (plan.landing[1])};
 		return plan;
 	}
@@ -412,6 +502,7 @@ sLandingPlan planLanding (const cStaticMap& map, const cUnitsData& unitsData, bo
 			{
 				plan.how = "corner";
 				plan.regionSize = g.sizes[g.at (plan.landing[0])];
+				plan.regionSize1 = plan.regionSize;
 				plan.room = {roomAt (plan.landing[0]), roomAt (plan.landing[1])};
 				return plan;
 			}
@@ -426,10 +517,48 @@ sLandingPlan planLanding (const cStaticMap& map, const cUnitsData& unitsData, bo
 	}
 	const int region = static_cast<int> (std::max_element (g.sizes.begin(), g.sizes.end()) - g.sizes.begin());
 	plan.regionSize = g.sizes[region];
+	plan.regionSize1 = plan.regionSize;
 	if (g.sizes[region] < kMinLandingRegion)
 	{
-		plan.error = "largest land region reachable by tanks has " + std::to_string (g.sizes[region]) + " cells, need "
-			+ std::to_string (kMinLandingRegion) + " for both players (islands: the AI has no sea or air transport)";
+		// шаг 13: острова (Three Isles) — базы на двух самых больших областях, в каждой не меньше
+		// kMinLandingRegionEach клеток; пути танка между ними нет (−1), в каждой — самая просторная годная точка
+		std::vector<int> order (g.sizes.size());
+		for (size_t i = 0; i < order.size(); ++i) order[i] = static_cast<int> (i);
+		std::stable_sort (order.begin(), order.end(), [&g] (int a, int b) { return g.sizes[a] > g.sizes[b]; });
+		if (order.size() < 2 || g.sizes[order[1]] < kMinLandingRegionEach)
+		{
+			plan.error = "largest land region reachable by tanks has " + std::to_string (g.sizes[region]) + " cells, need "
+				+ std::to_string (kMinLandingRegion) + " for both players, or two regions of " + std::to_string (kMinLandingRegionEach)
+				+ " (islands)";
+			return plan;
+		}
+		for (int i = 0; i < 2; ++i)
+		{
+			cPosition best (-1, -1);
+			int bestRoom = -1;
+			for (int o = 0; o < g.w * g.h; ++o)
+			{
+				const cPosition l (o % g.w, o / g.w);
+				if (g.region[o] != order[i] || !good (l, i, kMinLandingRegionEach)) continue;
+				if (roomAt (l) > bestRoom)
+				{
+					bestRoom = roomAt (l);
+					best = l;
+				}
+			}
+			if (best.x() < 0)
+			{
+				plan.error = "no valid landing place on island " + std::to_string (i) + " (" + std::to_string (g.sizes[order[i]]) + " cells)";
+				return plan;
+			}
+			plan.landing[i] = best;
+		}
+		plan.send = plan.landing;
+		plan.how = "islands";
+		plan.regionSize = g.sizes[order[0]];
+		plan.regionSize1 = g.sizes[order[1]];
+		plan.distance = -1;
+		plan.room = {roomAt (plan.landing[0]), roomAt (plan.landing[1])};
 		return plan;
 	}
 	std::vector<cPosition> valid;
@@ -523,7 +652,7 @@ try
 		if (!parseBrains (spec, kPlayers, brains, err))
 		{
 			std::cout << "[ai_headless] ERROR: brain '" << spec << "' from " << source << ": " << err
-				<< ". Usage: rule | base | llm | rule,base | llm,rule" << std::endl;
+				<< ". Usage: rule | base | base2 | base3 | llm | rule,base3 | llm,rule" << std::endl;
 			return -1;
 		}
 		std::cout << "[ai_headless] brains (" << source << "):";
@@ -671,8 +800,44 @@ try
 	for (int i = 0; i < 2; ++i)
 		for (const auto& [unitId, cargo] : computeInitialLandingUnits (i, *gameSettings, UnitsDataGlobal))
 			landingUnits[i].push_back ({unitId, static_cast<unsigned int> (cargo)});
+	// шаг 11: сценарная проверка — игроку 0 машины сценария (покупка при высадке из стартовых кредитов)
+	if (brains[0] == "scenario")
+		for (const auto& type : ai::kScenarioUnits)
+		{
+			const auto& all = UnitsDataGlobal.getStaticUnitsData();
+			const auto it = std::find_if (all.begin(), all.end(), [&] (const cStaticUnitData& d) { return d.getDefaultName() == type; });
+			if (it == all.end())
+			{
+				std::cout << "[ai_headless] ERROR: scenario unit '" << type << "' not found in the unit data" << std::endl;
+				return -1;
+			}
+			landingUnits[0].push_back ({it->ID, 0});
+		}
+	// «rule,scenario» и т. п.: игрок 1 — диверсант против мозга игрока 0 (коммандос)
+	if (brains[1] == "scenario" && brains[0] != "scenario")
+		for (const auto& d : UnitsDataGlobal.getStaticUnitsData())
+			if (d.getDefaultName() == "commando") landingUnits[1].push_back ({d.ID, 0});
+	// шаг 14: налётчику «red1» — машины сценария (MAXR_RED), покупка при высадке из стартовых кредитов;
+	// шаг 14б: «red2» — только то, что окно высадки продаёт человеку (наземные машины без пехоты), с грузом
+	for (int i = 0; i < 2; ++i)
+		if (brains[i] == "red1" || brains[i] == "red2")
+			for (const auto& [type, cargo] : ai::redLandingPurchase (ai::redScenarioFromEnv(), brains[i] == "red2"))
+				for (const auto& d : UnitsDataGlobal.getStaticUnitsData())
+					if (d.getDefaultName() == type)
+					{
+						landingUnits[i].push_back ({d.ID, static_cast<unsigned> (cargo)});
+						break;
+					}
+	// шаг 13 (п. 76): высадка из файла карты (генератор карт кладёт <карта>.json рядом с .wrl)
+	std::array<cPosition, 2> mapLandingPts;
+	std::string mapLandingSource, mapLandingErr;
+	const bool haveMapLanding = readMapLanding (mapFile, *staticMap, mapLandingPts, mapLandingSource, mapLandingErr);
+	if (!mapLandingErr.empty())
+		std::cout << "[ai_headless] WARNING: map landing file ignored: " << mapLandingErr << std::endl;
+	else if (haveMapLanding)
+		std::cout << "[ai_headless] map landing file: " << mapLandingSource << std::endl;
 	const sLandingPlan landing = planLanding (*staticMap, UnitsDataGlobal,
-		gameSettings->bridgeheadType == eGameSettingsBridgeheadType::Definite, landingUnits);
+		gameSettings->bridgeheadType == eGameSettingsBridgeheadType::Definite, landingUnits, haveMapLanding ? &mapLandingPts : nullptr);
 	if (!landing.error.empty())
 	{
 		std::cout << "[ai_headless] ERROR: map " << mapFile << " is not playable: " << landing.error << std::endl;
@@ -680,8 +845,10 @@ try
 		return -1;
 	}
 	std::cout << "[ai_headless] landing (" << landing.how << "): p0=" << posText (landing.landing[0])
-		<< " p1=" << posText (landing.landing[1]) << ", tank path " << landing.distance << " steps, land region "
-		<< landing.regionSize << " cells, room " << landing.room[0] << "/" << landing.room[1] << std::endl;
+		<< " p1=" << posText (landing.landing[1]) << ", tank path " << landing.distance << " steps"
+		<< (landing.distance < 0 ? " (different land regions)" : "") << ", land region "
+		<< landing.regionSize << (landing.regionSize1 != landing.regionSize ? "/" + std::to_string (landing.regionSize1) : std::string())
+		<< " cells, room " << landing.room[0] << "/" << landing.room[1] << std::endl;
 
 	// --- игроки ---
 	std::vector<cPlayerBasicData> playersBasicData;
@@ -719,9 +886,15 @@ try
 	// --- детерминированный такт (headless): сервер НЕ двигает модель, пока
 	// активный игрок не сдал ход; после сдачи ход проигрывается детерминированно.
 	// Клиенту запрещаем уходить в WaitForServer (иначе endTurn блокируется).
-	server->setDeterministicTick (true);
+	// MAXR_DETERMINISTIC_TICK=0 (шаг 11, для опыта «как в сетевой игре»): время идёт само, модель не
+	// ждёт решений ИИИ; заходы хода работают так же — по признаку «приказы доиграны» в модели.
+	// Партии в этом режиме не повторяются побайтно.
+	bool deterministicTick = true;
+	if (const char* envDet = std::getenv ("MAXR_DETERMINISTIC_TICK"); envDet != nullptr && std::string (envDet) == "0")
+		deterministicTick = false;
+	server->setDeterministicTick (deterministicTick);
 	for (auto& client : clients)
-		client->setDeterministicTick (true);
+		client->setDeterministicTick (deterministicTick);
 
 	// Зависший конец хода (машина на ходу стала стрелком реактивного огня: задания
 	// движения и атаки по очереди поворачивают её навсегда) развязывается одинаково
@@ -740,7 +913,7 @@ try
 	server->setFastTick (fastTick);
 	for (auto& client : clients)
 		client->setFastTick (fastTick);
-	std::cout << "[ai_headless] tick: deterministic, " << (fastTick ? "fast" : "real-time")
+	std::cout << "[ai_headless] tick: " << (deterministicTick ? "deterministic" : "NOT deterministic (time runs, as in a network game)") << ", " << (fastTick ? "fast" : "real-time")
 		<< "; logs: " << engineLogPath << ", " << netLogPath
 		<< " (settings net log name, unused here: " << utf8::to_string (cSettings::getInstance().getNetLogPath().filename()) << ")" << std::endl;
 
@@ -778,6 +951,18 @@ try
 			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::cLlmAdvisorBrain> (llmJournal, llmConfig, llmReplies, llmReplay));
 		else if (brains[i] == "base")
 			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::cBaseRuleBrain>());
+		else if (brains[i] == "base2")
+			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::base2::cRuleBrain>());
+		else if (brains[i] == "base3")
+			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::base3::cRuleBrain>());
+		else if (brains[i] == "scenario")
+			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::cScenarioBrain>());
+		else if (brains[i] == "red1")
+			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::cRedBrain>());
+		else if (brains[i] == "red2")
+			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::cRedBrain> (true));
+		else if (brains[i] == "external")
+			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::cExternalBrain> (ai::sExternalConfig::fromEnv()));
 		else
 			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::cRuleBrain>());
 	}
@@ -834,15 +1019,19 @@ try
 			lastTurn = turn;
 			lastProgressTick = SDL_GetTicks();
 		}
+		// Шаг 11: итог партии читается, когда начало хода доиграно (ответный огонь начала хода
+		// попал, cModel::isTurnStartPlayedOut): в эти тики модель идёт, и итог, прочитанный
+		// посреди них, зависел бы от потоков (время модели в metrics.json, а то и потери).
+		const bool settled = clients[0]->getModel().isTurnStartPlayedOut();
 		// Движок на начале круга признал игрока побеждённым (нет юнитов, способных
 		// стрелять или строить) — партия решена. Дальше она и не идёт: EndTurn
 		// побеждённого движок игнорирует.
-		if (engine.isAnyPlayerDefeated())
+		if (settled && engine.isAnyPlayerDefeated())
 		{
 			gameEnd = ai::eGameEnd::Elimination;
 			break;
 		}
-		if (turn >= maxTurns)
+		if (settled && turn >= maxTurns)
 			break;
 
 		// сторож: нет прогресса — выходим с диагностикой (лимит настраивается argv[5])
@@ -864,6 +1053,13 @@ try
 	if (llmJournal) llmJournal->close();
 	if (llmReplies) llmReplies->close();
 	server->stop();
+	// Таймеры SDL зовут колбэк в своём потоке; SDL_RemoveTimer не ждёт колбэк, который уже
+	// идёт, — если тот берёт мьютекс уже разрушенного таймера клиента, программа падает при
+	// выходе (std::system_error «Invalid argument», 1 партия из ≈700 на шаге 11). Остановить
+	// таймеры клиентов заранее и дать идущим колбэкам закончиться (они — микросекунды).
+	for (auto& client : clients)
+		client->getGameTimer()->stop();
+	SDL_Delay (3 * GAME_TICK_TIME);
 	Log.info ("ai_headless: DONE. Turns played: " + std::to_string (lastTurn));
 	return 0;
 }

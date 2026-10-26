@@ -41,7 +41,8 @@ enum class eThreatLayer
 {
 	None,
 	Fire,
-	Reach
+	Reach,
+	Strike // шаг 9: «удар с подъезда» (дальность + проезд с выстрелом) видимых врагов и зданий
 };
 
 // что помним о вражеском юните
@@ -66,8 +67,15 @@ struct sEnemyMemory
 	int hpMax = 0;
 	int speed = 0;          // клеток за ход (speedMax / 4), у зданий 0
 	int canAttack = 0;      // eTerrainFlag: по кому бьёт
+	// шаг 9: для ролей и «удара с подъезда»
+	int shotsMax = 0;       // выстрелов за ход по данным
+	int scan = 0;
+	bool driveFire = false; // стреляет на ходу без потери выстрелов
+	int moveFire = 0;       // клеток, которые проедет за свой ход и ещё выстрелит (у зданий 0)
 
 	bool armed() const { return damage > 0 && shots > 0 && range > 0 && canAttack != 0; }
+	// «удар с подъезда»: докуда достанет выстрелом в свой ход, подъехав (дальность + moveFire)
+	int strike() const { return range + moveFire; }
 	// бьёт по наземным машинам
 	bool hitsGround() const { return armed() && (canAttack & 4) != 0; }
 	// бьёт по воздушным машинам
@@ -98,6 +106,9 @@ public:
 	// зона огня с места: клетка в дальности вооружённого врага, видимого сейчас
 	// или прошлым ходом (без его хода), — по наземной машине
 	int groundFire (const cPosition& p) const { return at (fire_, p); }
+	// шаг 9: «удар с подъезда» — клетка, куда видимый (сейчас или прошлым ходом) враг или
+	// здание выстрелит в свой ход, подъехав и сохранив выстрел (дальность + moveFire), — по наземной машине
+	int groundStrike (const cPosition& p) const { return at (strike_, p); }
 	// угроза для конкретной машины (наземная или воздушная карта; у воздушной
 	// зоны огня нет — берётся «дальность + ход»)
 	int threatFor (const cVehicle& v, const cPosition& p, eThreatLayer layer = eThreatLayer::Reach) const;
@@ -106,8 +117,10 @@ public:
 
 	// Безопасный путь до dest: A* со штрафом kThreatStepPenalty за шаг в клетку
 	// под угрозой. Пусто — пути нет (или dest == старт).
+	// Шаг 13: maxExpand > 0 — не больше стольких клеток поиска (иначе пусто): строй не ищет по всей
+	// области машину, запертую машинами.
 	std::vector<cPosition> safePath (const cVehicle& v, const cMapView& view, const cPosition& dest,
-		eThreatLayer layer = eThreatLayer::Reach) const;
+		eThreatLayer layer = eThreatLayer::Reach, int maxExpand = 0) const;
 	// То же, но до любой клетки не дальше nearDist (евклидово) от target, куда можно
 	// встать (шаг 8: поход операции к цели — здание занято, встать у него). Пусто —
 	// пути нет или старт уже у цели.
@@ -126,6 +139,18 @@ public:
 	bool nearestSafeCell (const cVehicle& v, const cMapView& view, const cPosition& near, int maxR,
 		const cPosition& prefer, cPosition& out, eThreatLayer layer = eThreatLayer::Reach) const;
 
+	// Шаг 13 (п. 77 PLAN.md): область проходимости клетки p для класса движения машины v — связные
+	// клетки, куда такая машина может встать без учёта машин (суша, берег, вода, мосты и платформы,
+	// как cMap::possiblePlaceVehicle; с запасом — лишнее связывает, но не рвёт). Разные области —
+	// пути нет вовсе: поиск пути не обходит всю область впустую. −1 — клетка непроходима для класса
+	// (или вне карты); у самолётов — 0 (всё связано). Пересчёт — раз в ход, по запросу класса.
+	int regionOf (const cVehicle& v, const cPosition& p) const;
+	// размер области (клеток) по номеру regionOf для класса машины v; 0 — нет такой
+	int regionSize (const cVehicle& v, int region) const;
+	// то же для класса «танк» (наземная, не берег и не вода) — для анализа карты стратегией (П3)
+	int tankRegionOf (const cPosition& p) const;
+	int tankRegionSize (int region) const;
+
 	const std::map<unsigned int, sEnemyMemory>& enemies() const { return memory_; }
 	int turn() const { return turn_; }
 	// сколько ходов назад видели (0 — виден сейчас)
@@ -138,6 +163,31 @@ private:
 		return grid[static_cast<size_t> (p.y()) * w_ + p.x()];
 	}
 
+	// шаг 13: области проходимости по классу движения (ключ — биты: наземная 1, вода 2, берег 4)
+	struct sRegions
+	{
+		long long bridges = -1; // подпись мостов и платформ на воде и берегу, с которой посчитано
+		std::vector<int> label;
+		std::vector<int> sizes;
+	};
+	// подпись клеток воды и берега со зданием, по которому едет наземная машина (мост, платформа,
+	// дорога) — области пересчитываются, только когда она меняется (местность статична)
+	long long bridgeSign_ = 0;
+	const sRegions& regions (int cls) const;
+	static int moveClass (const cVehicle& v);
+	mutable std::map<int, sRegions> regions_;
+	const cMap* map_ = nullptr; // карта модели этого хода (update)
+	// шаг 13: буферы A* — общие на все вызовы (без массивов на всю карту на каждый вызов): клетка
+	// годна в поиске, если её метка == поколению поиска; куча — вектор с push_heap/pop_heap в том же
+	// порядке, что прежняя std::priority_queue (пути те же)
+	mutable std::vector<int> pathG_;
+	mutable std::vector<int> pathPrev_;
+	mutable std::vector<unsigned int> pathSeen_;
+	mutable std::vector<unsigned int> pathClosed_;
+	mutable unsigned int pathGen_ = 0;
+	mutable std::vector<std::pair<int, int>> pathHeap_;
+	unsigned int beginPathSearch (size_t n) const;
+
 	std::map<unsigned int, sEnemyMemory> memory_; // по id — детерминированно
 	int turn_ = 0;
 	int w_ = 0;
@@ -145,6 +195,7 @@ private:
 	std::vector<int> ground_;
 	std::vector<int> air_;
 	std::vector<int> fire_;
+	std::vector<int> strike_; // шаг 9: дальность + подъезд с выстрелом (видимые и здания)
 	std::vector<int> seen_; // ход последнего наблюдения клетки (−1 — не видели)
 };
 

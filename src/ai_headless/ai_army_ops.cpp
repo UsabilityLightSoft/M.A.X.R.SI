@@ -4,6 +4,7 @@
 
 #include "ai_army_ops.h"
 
+#include "ai_roles.h"
 #include "ai_world_model.h"
 
 #include "game/data/map/map.h"
@@ -44,6 +45,7 @@ constexpr int kGatherTurns = 6;     // ждать отставших не дол
 constexpr int kGatherPct = 80;      // собрались — эта доля группы у точки сбора
 constexpr int kPacePct = 70;        // лидер идёт на эту долю своего хода
 constexpr int kCohesionPct = 70;    // лидер шагает, когда рядом эта доля группы
+constexpr int kCohesionCap = 40;    // шаг 13: доля — от стольких машин (не от всей огромной группы)
 constexpr int kEngage = 10;         // ближе к цели — бить
 constexpr int kDefRadius = 15;      // защитники цели — враги ближе к ней
 constexpr int kSense = 12;          // враги у группы — ближе к лидеру
@@ -55,6 +57,7 @@ constexpr int kSearchTurns = 4;     // Search: осматриваться не �
 constexpr int kRetreatTurns = 12;   // отход: не дольше — потом распустить
 
 constexpr int kSearchRadius = 15;  // Search: другая цель — не дальше от группы
+constexpr int kFormationSearchMax = 6000; // шаг 13: строй — A* машины, которую не достало поле, не больше стольких клеток
 constexpr int kMergeDist = 8;      // подмога сливается с операцией, когда лидеры ближе
 constexpr int kReserveRadius = 8;  // резерв стоит, пока не дальше от базы
 constexpr int kHealthyPct = 60;    // лидер — машина не ниже этой доли hp
@@ -177,7 +180,276 @@ int buildingClass (const cModel& model, const sEnemyMemory& m)
 
 constexpr int kClassPenalty[5] = {0, 12, 30, 20, 40}; // к расстоянию до цели, клеток
 
+// шаг 9
+constexpr int kRearPenalty = 30;   // поддержка в строю: за клетку впереди центра (ближе к цели)
+// опасность клетки поддержки (findStandoff): 0 — вне «удара с подъезда» врага, 1 — в нём, но вне зоны огня
+constexpr int kAssaultDanger = 1;  // штурмовое орудие бьёт ненамного дальше танка — ему можно стоять в «ударе»
+constexpr int kSupportDanger = 0;  // артиллерии и ракетам — нет
+constexpr int kSupportSense = 6;   // поддержка в бою: цели — у группы (kSense + это) или у цели операции
+
+// кассетный удар задевает клетки ближе 2 (по сторонам) к цели — и свои машины, и здания
+bool ownNear (const cModel& model, const cPlayer* owner, const cPosition& p)
+{
+	const cMap& map = *model.getMap();
+	for (int dy = -2; dy <= 2; ++dy)
+		for (int dx = -2; dx <= 2; ++dx)
+		{
+			if (std::abs (dx) + std::abs (dy) > 2) continue;
+			const cPosition c = p + cPosition (dx, dy);
+			if (!map.isValidPosition (c)) continue;
+			const auto& field = map.getField (c);
+			if (const cVehicle* u = field.getVehicle(); u != nullptr && u->getOwner() == owner) return true;
+			for (const cBuilding* b : field.getBuildings())
+				if (b->getOwner() == owner) return true;
+		}
+	return false;
+}
+
+// квадрат расстояния от клетки до юнита из памяти (здание 2×2 — до ближней клетки)
+long long distToMemory (const cPosition& c, const sEnemyMemory& m)
+{
+	long long best = dist2 (c, m.pos);
+	if (m.big)
+		for (int dy = 0; dy <= 1; ++dy)
+			for (int dx = 0; dx <= 1; ++dx)
+				best = std::min (best, dist2 (c, m.pos + cPosition (dx, dy)));
+	return best;
+}
+
+// лучшая цель выстрела с клетки c: в дальности, вооружённые раньше, затем меньше hp, затем id
+const sEnemyMemory* bestShotFrom (const cModel& model, const cVehicle& v, const cPosition& c,
+	const std::vector<const sEnemyMemory*>& targets)
+{
+	const long long r2 = static_cast<long long> (v.data.getRange()) * v.data.getRange();
+	const bool splash = v.getStaticUnitData().muzzleType == eMuzzleType::RocketCluster;
+	const sEnemyMemory* best = nullptr;
+	for (const sEnemyMemory* m : targets)
+	{
+		if (distToMemory (c, *m) > r2) continue;
+		if (splash && ownNear (model, v.getOwner(), m->pos)) continue;
+		if (best == nullptr)
+		{
+			best = m;
+			continue;
+		}
+		const bool am = m->armed(), ab = best->armed();
+		if (am != ab)
+		{
+			if (am) best = m;
+			continue;
+		}
+		if (m->hp != best->hp)
+		{
+			if (m->hp < best->hp) best = m;
+			continue;
+		}
+		if (m->id < best->id) best = m;
+	}
+	return best;
+}
+
 } // namespace
+
+//------------------------------------------------------------------------------
+int shotsAfterMove (const cVehicle& v, int cost)
+{
+	const int shots = std::min (v.data.getShots(), v.data.getAmmo());
+	if (shots <= 0) return 0;
+	if (v.getStaticUnitData().vehicleData.canDriveAndFire) return shots;
+	const int left = v.data.getSpeed() - cost;
+	if (left <= 0 || v.data.getSpeedMax() <= 0) return 0;
+	return std::min (shots, left * v.data.getShotsMax() / v.data.getSpeedMax());
+}
+
+//------------------------------------------------------------------------------
+int supportMaxDanger (eRole r)
+{
+	return r == eRole::Assault ? kAssaultDanger : kSupportDanger;
+}
+
+//------------------------------------------------------------------------------
+std::vector<const sEnemyMemory*> attackableTargets (const cModel& model, const cWorldModel& world, const cVehicle& v)
+{
+	std::vector<const sEnemyMemory*> res;
+	const auto& sd = v.getStaticUnitData();
+	const auto& ud = *model.getUnitsData();
+	for (const auto& kv : world.enemies())
+	{
+		const sEnemyMemory& m = kv.second;
+		if (!m.visible) continue;
+		const int need = m.plane ? eTerrainFlag::Air : (m.ship ? eTerrainFlag::Sea : eTerrainFlag::Ground);
+		if ((sd.canAttack & need) == 0) continue;
+		if (m.building)
+		{
+			const sID id (m.typeFirst, m.typeSecond);
+			if (!ud.isValidId (id)) continue;
+			if (ud.getStaticUnitData (id).buildingData.explodesOnContact) continue;
+			if (ud.getDynamicUnitData (id).getBuildCost() <= 2) continue; // соединители, дороги, площадки — не цель
+		}
+		res.push_back (&m);
+	}
+	return res;
+}
+
+//------------------------------------------------------------------------------
+unsigned int endMoveTarget (const cModel& model, const cVehicle& v, const std::vector<cPosition>& path,
+	const std::vector<const sEnemyMemory*>& targets)
+{
+	if (path.empty() || targets.empty()) return kNoUnit;
+	int cost = 0;
+	cPosition prev = v.getPosition();
+	for (const auto& p : path)
+	{
+		cost += cPathCalculator::calcNextCost (prev, p, &v, model.getMap().get());
+		prev = p;
+	}
+	if (shotsAfterMove (v, cost) < 1) return kNoUnit;
+	const sEnemyMemory* t = bestShotFrom (model, v, path.back(), targets);
+	return t != nullptr ? t->id : kNoUnit;
+}
+
+//------------------------------------------------------------------------------
+sStandoff findStandoff (const cModel& model, const cMapView& view, const cWorldModel& world, const cVehicle& v,
+	const std::vector<const sEnemyMemory*>& targets, int ring, bool fire, int maxDanger, const std::vector<cPosition>& reserved)
+{
+	sStandoff res;
+	const cPosition start = v.getPosition();
+	res.cell = start;
+	const int budget = std::max (0, v.data.getSpeed());
+	// окно хода: дорога вдвое дешевле суши (шаг 2) — не дальше budget / 2 клеток
+	const int B = budget / 2 + 1;
+	const int side = 2 * B + 1;
+	auto inWin = [&] (const cPosition& p) { return std::abs (p.x() - start.x()) <= B && std::abs (p.y() - start.y()) <= B; };
+	auto li = [&] (const cPosition& p) { return static_cast<size_t> (p.y() - start.y() + B) * side + (p.x() - start.x() + B); };
+	constexpr int kInf = std::numeric_limits<int>::max();
+	std::vector<int> g (static_cast<size_t> (side) * side, kInf);
+	std::vector<int> prev (static_cast<size_t> (side) * side, -1);
+	using tNode = std::pair<int, int>;
+	std::priority_queue<tNode, std::vector<tNode>, std::greater<tNode>> open;
+	g[li (start)] = 0;
+	open.push ({0, static_cast<int> (li (start))});
+	while (!open.empty())
+	{
+		const auto [d, cur] = open.top();
+		open.pop();
+		if (d != g[cur]) continue;
+		const cPosition p (start.x() - B + cur % side, start.y() - B + cur / side);
+		for (int dy = -1; dy <= 1; ++dy)
+			for (int dx = -1; dx <= 1; ++dx)
+			{
+				if (dx == 0 && dy == 0) continue;
+				const cPosition n = p + cPosition (dx, dy);
+				if (!inWin (n) || !view.isValidPosition (n) || !view.possiblePlace (v, n)) continue;
+				const int nd = d + cPathCalculator::calcNextCost (p, n, &v, &view);
+				if (nd > budget) continue;
+				const size_t ni = li (n);
+				if (nd < g[ni])
+				{
+					g[ni] = nd;
+					prev[ni] = cur;
+					open.push ({nd, static_cast<int> (ni)});
+				}
+			}
+	}
+	// цели — только те, до которых можно дотянуться из окна
+	std::vector<const sEnemyMemory*> near;
+	const long long reach2 = static_cast<long long> (B + ring + 3) * (B + ring + 3);
+	for (const sEnemyMemory* m : targets)
+		if (dist2 (m->pos, start) <= reach2) near.push_back (m);
+	const long long ring2 = static_cast<long long> (ring) * ring;
+	const long long range2 = static_cast<long long> (v.data.getRange()) * v.data.getRange();
+	const int shotsNow = std::min (v.data.getShots(), v.data.getAmmo());
+	using tKey = std::tuple<int, int, int, long long, int, int, size_t>;
+	tKey bestKey {std::numeric_limits<int>::max(), 0, 0, 0, 0, 0, 0};
+	size_t bestI = li (start);
+	unsigned int bestShot = kNoUnit;
+	bool bestIn = false;
+	int bestDanger = 0;
+	for (int y = -B; y <= B; ++y)
+		for (int x = -B; x <= B; ++x)
+		{
+			const cPosition c = start + cPosition (x, y);
+			const size_t i = li (c);
+			if (g[i] == kInf) continue;
+			if (c != start && containsPos (reserved, c)) continue;
+			const int danger = world.groundFire (c) > 0 ? 2 : (world.groundStrike (c) > 0 ? 1 : 0);
+			long long minD2 = std::numeric_limits<long long>::max();
+			for (const sEnemyMemory* m : near)
+				minD2 = std::min (minD2, distToMemory (c, *m));
+			const bool inRing = minD2 <= ring2;
+			unsigned int shot = kNoUnit;
+			bool fireNow = false;
+			if (fire && minD2 <= range2)
+			{
+				if (c == start)
+					fireNow = shotsNow > 0;
+				else if (shotsAfterMove (v, g[i]) >= 1)
+					if (const sEnemyMemory* t = bestShotFrom (model, v, c, near))
+					{
+						shot = t->id;
+						fireNow = true;
+					}
+			}
+			const long long gap = inRing ? 0 : (minD2 == std::numeric_limits<long long>::max() ? std::numeric_limits<long long>::max() / 4 : minD2 - ring2);
+			const tKey key {std::max (0, danger - maxDanger), fireNow ? 0 : 1, inRing ? 0 : 1, gap, danger, g[i], i};
+			if (key < bestKey)
+			{
+				bestKey = key;
+				bestI = i;
+				bestShot = shot;
+				bestIn = inRing;
+				bestDanger = danger;
+			}
+		}
+	res.cell = cPosition (start.x() - B + static_cast<int> (bestI % side), start.y() - B + static_cast<int> (bestI / side));
+	res.danger = bestDanger;
+	res.inRange = bestIn;
+	if (res.cell != start)
+	{
+		for (int c = static_cast<int> (bestI); c >= 0 && c != static_cast<int> (li (start)); c = prev[c])
+			res.path.emplace_back (start.x() - B + c % side, start.y() - B + c / side);
+		std::reverse (res.path.begin(), res.path.end());
+		res.attackId = bestShot;
+	}
+	return res;
+}
+
+//------------------------------------------------------------------------------
+eRole cArmyOps::roleOfId (unsigned int id) const
+{
+	const auto it = roleById_.find (id);
+	return it == roleById_.end() ? eRole::None : static_cast<eRole> (it->second);
+}
+
+//------------------------------------------------------------------------------
+bool cArmyOps::isSupport (unsigned int id) const
+{
+	return isSupportRole (roleOfId (id));
+}
+
+//------------------------------------------------------------------------------
+cPosition cArmyOps::escortAnchor (bool* withArmy) const
+{
+	if (withArmy) *withArmy = false;
+	for (const auto& op : ops_)
+	{
+		if (op.members.empty() || (op.state != eOpState::Advance && op.state != eOpState::Attack && op.state != eOpState::Search)) continue;
+		if (const auto it = fighterById_.find (op.leader); it != fighterById_.end())
+		{
+			if (withArmy) *withArmy = true;
+			return it->second->getPosition();
+		}
+	}
+	return rallyPoint();
+}
+
+//------------------------------------------------------------------------------
+cPosition cArmyOps::rallyPoint() const
+{
+	for (const auto& op : ops_)
+		if ((op.state == eOpState::Wait || op.state == eOpState::Gather) && op.rally.x() >= 0) return op.rally;
+	return home_;
+}
 
 //------------------------------------------------------------------------------
 const char* opStateName (eOpState s)
@@ -249,6 +521,7 @@ nlohmann::json cArmyOps::toJson() const
 		ops.push_back (op.toJson());
 	j["ops"] = std::move (ops);
 	j["scouts"] = scouts_;
+	j["spotters"] = spotters_;
 	j["reserve"] = reserve_;
 	j["cooldownUntil"] = cooldownUntil_;
 	j["enemyArmy"] = {{"count", totalDef_.count}, {"force", needOf (totalDef_)}};
@@ -395,7 +668,8 @@ cArmyOps::sForce cArmyOps::forceOf (const sContext&, const std::vector<unsigned 
 		const auto it = fighterById_.find (id);
 		if (it == fighterById_.end()) continue;
 		const cVehicle& v = *it->second;
-		f.dmg += static_cast<long long> (effDamage (v.data.getDamage(), enemyArmor)) * v.data.getShotsMax();
+		// шаг 9: без боезапаса не стреляет (у ракет он на 6 выстрелов) — в силу не входит
+		f.dmg += static_cast<long long> (effDamage (v.data.getDamage(), enemyArmor)) * std::min (v.data.getShotsMax(), v.data.getAmmo());
 		f.hp += v.data.getHitpoints();
 		f.armor = std::max (f.armor, v.data.getArmor());
 		++f.count;
@@ -648,7 +922,12 @@ unsigned int cArmyOps::chooseLeader (const sContext&, const sOperation& op) cons
 	auto healthy = [] (const cVehicle& v) {
 		return v.data.getHitpointsMax() > 0 && v.data.getHitpoints() * 100 >= v.data.getHitpointsMax() * kHealthyPct;
 	};
-	if (const auto it = fighterById_.find (op.leader); it != fighterById_.end() && contains (op.members, op.leader) && healthy (*it->second))
+	// шаг 9: лидер — машина строя (танк), не поддержка: та идёт в хвосте
+	const bool anyLine = std::any_of (op.members.begin(), op.members.end(), [this] (unsigned int id) {
+		return fighterById_.count (id) != 0 && !isSupport (id);
+	});
+	if (const auto it = fighterById_.find (op.leader); it != fighterById_.end() && contains (op.members, op.leader) && healthy (*it->second)
+		&& (!anyLine || !isSupport (op.leader)))
 		return op.leader;
 	const cVehicle* best = nullptr;
 	for (unsigned int id : op.members)
@@ -659,6 +938,12 @@ unsigned int cArmyOps::chooseLeader (const sContext&, const sOperation& op) cons
 		if (best == nullptr)
 		{
 			best = v;
+			continue;
+		}
+		const bool lv = !isSupport (v->getId()), lb = !isSupport (best->getId());
+		if (lv != lb)
+		{
+			if (lv) best = v;
 			continue;
 		}
 		const bool hv = healthy (*v), hb = healthy (*best);
@@ -697,12 +982,29 @@ void cArmyOps::updateRoles (const sContext& ctx, std::vector<unsigned int>& pool
 		role.swap (kept);
 	};
 	keep (reserve_, wantReserve);
-	keep (scouts_, wantScouts);
-	auto take = [&] (std::vector<unsigned int>& role, int want, bool nearest) {
+	// шаг 9: есть разведчики малой фабрики — разведка ими, танки в разведку не идут;
+	// разведчики сверх нужных — корректировщики при армии
+	const bool scoutVehicles = !scoutById_.empty();
+	spotters_.clear();
+	if (scoutVehicles)
+	{
+		std::vector<unsigned int> kept;
+		for (unsigned int id : scouts_)
+			if (scoutById_.count (id) && static_cast<int> (kept.size()) < wantScouts) kept.push_back (id);
+		for (const auto& kv : scoutById_)
+			if (static_cast<int> (kept.size()) < wantScouts && !contains (kept, kv.first)) kept.push_back (kv.first);
+		scouts_.swap (kept);
+		for (const auto& kv : scoutById_)
+			if (!contains (scouts_, kv.first)) spotters_.push_back (kv.first);
+	}
+	else
+		keep (scouts_, wantScouts);
+	auto take = [&] (std::vector<unsigned int>& role, int want, bool nearest, bool lineFirst) {
 		while (static_cast<int> (role.size()) < want)
 		{
 			unsigned int best = 0;
 			int bestD = 0;
+			bool bestLine = false;
 			bool any = false;
 			for (unsigned int id : pool)
 			{
@@ -711,20 +1013,23 @@ void cArmyOps::updateRoles (const sContext& ctx, std::vector<unsigned int>& pool
 				if (it == fighterById_.end()) continue;
 				int d = landDist (it->second->getPosition());
 				if (d < 0) d = 1 << 20;
-				if (!any || (nearest ? d < bestD : d > bestD))
+				const bool line = !isSupport (id); // резерв и разведка — строем (танками), поддержка — в армию
+				if (!any || (lineFirst && line != bestLine ? line : (nearest ? d < bestD : d > bestD)))
 				{
 					any = true;
 					best = id;
 					bestD = d;
+					bestLine = line;
 				}
 			}
 			if (!any) break;
 			role.push_back (best);
 		}
 	};
-	take (reserve_, wantReserve, true);
+	take (reserve_, wantReserve, true, true);
 	// разведчики — только если в группе останется кто-то (первая машина — сразу в разведку)
-	take (scouts_, std::min (wantScouts, std::max (0, static_cast<int> (pool.size()) - static_cast<int> (reserve_.size()))), false);
+	if (!scoutVehicles)
+		take (scouts_, std::min (wantScouts, std::max (0, static_cast<int> (pool.size()) - static_cast<int> (reserve_.size()))), false, true);
 	std::vector<unsigned int> rest;
 	for (unsigned int id : pool)
 		if (!contains (reserve_, id) && !contains (scouts_, id)) rest.push_back (id);
@@ -743,8 +1048,18 @@ void cArmyOps::refresh (const sContext& ctx)
 {
 	const int turn = ctx.turn;
 	fighterById_.clear();
+	roleById_.clear();
+	scoutById_.clear();
 	for (const cVehicle* v : ctx.fighters)
+	{
 		fighterById_[v->getId()] = v;
+		if (ctx.roles) roleById_[v->getId()] = static_cast<int> (ctx.roles->roleOf (*v));
+	}
+	for (const cVehicle* v : ctx.scoutUnits)
+	{
+		scoutById_[v->getId()] = v;
+		roleById_[v->getId()] = static_cast<int> (eRole::Scout);
+	}
 	{
 		const auto* tank = ctx.player->getLastUnitData (kIdTank);
 		ourArmor_ = tank ? tank->getArmor() : 0;
@@ -1112,15 +1427,31 @@ void cArmyOps::planFormation (const sContext& ctx, const sOperation& op, const c
 	for (unsigned int id : op.members)
 	{
 		if (contains (busy, id) || tasks.count (id)) continue;
-		const auto it = fighterById_.find (id);
-		if (it == fighterById_.end()) continue;
-		order.emplace_back (dist2 (it->second->getPosition(), center), id, it->second);
+		const cVehicle* u = nullptr;
+		if (const auto it = fighterById_.find (id); it != fighterById_.end()) u = it->second;
+		else if (const auto st = scoutById_.find (id); st != scoutById_.end()) u = st->second; // шаг 9: корректировщики
+		if (u == nullptr) continue;
+		order.emplace_back (dist2 (u->getPosition(), center), id, u);
 	}
 	std::sort (order.begin(), order.end());
+	// шаг 13 (п. 77): дальние от центра машины — по одному полю расстояний на группу (прежде — A* на
+	// каждую машину по всей карте, а за ним, если пути нет, ещё и поиск движка)
+	const int nearWindow = B + 2;   // ближе — короткий поиск в окне у центра
+	const int localWindow = B + 4;  // окно короткого поиска
+	{
+		std::vector<const cVehicle*> far;
+		for (const auto& [d, id, v] : order)
+			if (cheb (v->getPosition(), center) > nearWindow) far.push_back (v);
+		if (!far.empty()) buildFormationField (ctx, center, far);
+	}
 	for (const auto& [d, id, v] : order)
 	{
 		const cPosition up = v->getPosition();
-		if (holdNear && cheb (up, center) <= R && !containsPos (reserved, up) && !avoided (up))
+		// шаг 9: поддержка и корректировщики — в хвосте строя (дальше от цели, чем центр)
+		const bool rear = op.target.x() >= 0 && (isSupport (id) || contains (spotters_, id));
+		const int centerToTarget = rear ? cheb (center, op.target) : 0;
+		if (holdNear && cheb (up, center) <= R && !containsPos (reserved, up) && !avoided (up)
+			&& (!rear || cheb (up, op.target) > centerToTarget))
 		{
 			reserved.push_back (up);
 			tasks[id] = {{}, reason + " (hold)"};
@@ -1139,7 +1470,12 @@ void cArmyOps::planFormation (const sContext& ctx, const sOperation& op, const c
 				if (avoided (c)) continue;
 				if (c != up && !view.possiblePlace (*v, c)) continue;
 				if (containsPos (reserved, c)) continue;
-				const long long key = 50LL * ld + cheb (c, up);
+				long long key = 50LL * ld + cheb (c, up);
+				if (rear)
+				{
+					const int ahead = centerToTarget + 1 - cheb (c, op.target);
+					if (ahead > 0) key += static_cast<long long> (kRearPenalty) * ahead;
+				}
 				if (key < bestKey)
 				{
 					bestKey = key;
@@ -1152,8 +1488,24 @@ void cArmyOps::planFormation (const sContext& ctx, const sOperation& op, const c
 			tasks[id] = {{}, reason + " (hold)"};
 			continue;
 		}
-		auto path = ctx.world->safePath (*v, view, cell, eThreatLayer::None);
-		if (path.empty()) path = enginePath (*v, view, cell, false);
+		std::vector<cPosition> path;
+		if (cheb (up, center) > nearWindow)
+		{
+			// по полю до окна у центра, оттуда — коротким поиском до своей клетки строя
+			path = descendFormationField (ctx, *v, center, nearWindow);
+			if (!path.empty() && cheb (path.back(), center) <= nearWindow && path.back() != cell)
+			{
+				auto tail = localPath (ctx, *v, path.back(), cell, center, localWindow);
+				path.insert (path.end(), tail.begin(), tail.end());
+			}
+			// поле машину не достало (амфибия на берегу, долгий обход) — прежний поиск A*, но с пределом
+			// клеток и без поиска движка следом: у того та же проходимость, он не находит того, чего не
+			// нашёл A*, а запертую машину оба искали по всей области (64% времени на Gen_Straits, шаг 12)
+			if (path.empty() && ctx.world->regionOf (*v, up) >= 0 && ctx.world->regionOf (*v, up) == ctx.world->regionOf (*v, cell))
+				path = ctx.world->safePath (*v, view, cell, eThreatLayer::None, kFormationSearchMax);
+		}
+		else
+			path = localPath (ctx, *v, up, cell, center, localWindow);
 		truncateToTurn (*v, view, path, pacePct);
 		if (fireEdge) cutAtFireEdge (*ctx.world, *v, path);
 		avoidReservedEnd (path, reserved);
@@ -1163,13 +1515,215 @@ void cArmyOps::planFormation (const sContext& ctx, const sOperation& op, const c
 }
 
 //------------------------------------------------------------------------------
+void cArmyOps::buildFormationField (const sContext& ctx, const cPosition& center, const std::vector<const cVehicle*>& far)
+{
+	const cMapView& view = *ctx.view;
+	const size_t N = static_cast<size_t> (W_) * H_;
+	if (fieldDist_.size() != N)
+	{
+		fieldDist_.assign (N, 0);
+		fieldNext_.assign (N, -1);
+		fieldSeen_.assign (N, 0);
+		fieldClosed_.assign (N, 0);
+		fieldGen_ = 0;
+	}
+	if (++fieldGen_ == 0)
+	{
+		std::fill (fieldSeen_.begin(), fieldSeen_.end(), 0);
+		std::fill (fieldClosed_.begin(), fieldClosed_.end(), 0);
+		fieldGen_ = 1;
+	}
+	const unsigned int gen = fieldGen_;
+	if (!view.isValidPosition (center) || far.empty()) return;
+	// образец — машина с самой узкой проходимостью (меньше битов «вода» и «берег»), при равенстве — первая
+	const auto classOf = [] (const cVehicle& v) {
+		const auto& sd = v.getStaticUnitData();
+		return (sd.factorGround > 0 ? 1 : 0) | (sd.factorSea > 0 ? 2 : 0) | (sd.factorCoast > 0 ? 4 : 0);
+	};
+	const auto width = [] (int cls) { return ((cls & 2) ? 2 : 0) + ((cls & 4) ? 1 : 0); };
+	const cVehicle* rep = far.front();
+	for (const cVehicle* v : far)
+		if (width (classOf (*v)) < width (classOf (*rep))) rep = v;
+	fieldClass_ = classOf (*rep);
+	// машины, которые поле должно достать (того же класса, что образец, и в той же области
+	// проходимости): клетка машины — рядом с посчитанной клеткой. Машины других классов поле
+	// берёт попутно, не достало — у них свой поиск (planFormation)
+	std::map<int, int> waiting; // смещение клетки машины → 1
+	const int region = ctx.world->regionOf (*rep, center);
+	for (const cVehicle* v : far)
+	{
+		if (classOf (*v) != fieldClass_) continue;
+		const cPosition p = v->getPosition();
+		const int r = ctx.world->regionOf (*v, p);
+		if (region >= 0 && r >= 0 && r != region) continue; // другая область — поле её не достанет
+		waiting[p.y() * W_ + p.x()] = 1;
+	}
+	if (waiting.empty()) return;
+	constexpr int kSlack = 16; // после последней достанной машины — ещё столько цены (лучший сосед — посчитан)
+	int limit = std::numeric_limits<int>::max();
+	// и не дальше полутора прямых путей до самой дальней машины (шаг по суше — 4, по диагонали — 6):
+	// машину, запертую машинами или зданиями, поле не ищет по всей области
+	int cap = 0;
+	for (const auto& [o, one] : waiting)
+		cap = std::max (cap, 8 * cheb (cPosition (o % W_, o / W_), center) + 80);
+	using tNode = std::pair<int, int>;
+	std::vector<tNode> heap;
+	auto push = [&] (int d, int cell) {
+		heap.push_back ({d, cell});
+		std::push_heap (heap.begin(), heap.end(), std::greater<tNode>());
+	};
+	const int c0 = center.y() * W_ + center.x();
+	fieldSeen_[c0] = gen;
+	fieldDist_[c0] = 0;
+	fieldNext_[c0] = -1;
+	push (0, c0);
+	while (!heap.empty())
+	{
+		std::pop_heap (heap.begin(), heap.end(), std::greater<tNode>());
+		const auto [d, cur] = heap.back();
+		heap.pop_back();
+		if (fieldClosed_[cur] == gen) continue;
+		if (d > limit || d > cap) break;
+		fieldClosed_[cur] = gen;
+		const cPosition p (cur % W_, cur / W_);
+		for (int dy = -1; dy <= 1; ++dy)
+			for (int dx = -1; dx <= 1; ++dx)
+			{
+				if (dx == 0 && dy == 0) continue;
+				const cPosition n = p + cPosition (dx, dy);
+				if (n.x() < 0 || n.y() < 0 || n.x() >= W_ || n.y() >= H_) continue;
+				const int no = n.y() * W_ + n.x();
+				if (!waiting.empty())
+					if (const auto it = waiting.find (no); it != waiting.end())
+					{
+						waiting.erase (it);
+						if (waiting.empty()) limit = d + kSlack;
+					}
+				if (fieldClosed_[no] == gen) continue;
+				if (!view.possiblePlace (*rep, n)) continue;
+				// шаг к центру — из n в p: цена по клетке p (как у движка — по клетке, куда въезжают)
+				const int nd = d + cPathCalculator::calcNextCost (n, p, rep, &view);
+				if (fieldSeen_[no] != gen || nd < fieldDist_[no])
+				{
+					fieldSeen_[no] = gen;
+					fieldDist_[no] = nd;
+					fieldNext_[no] = cur;
+					push (nd, no);
+				}
+			}
+	}
+}
+
+//------------------------------------------------------------------------------
+std::vector<cPosition> cArmyOps::descendFormationField (const sContext& ctx, const cVehicle& v, const cPosition& center, int window) const
+{
+	std::vector<cPosition> path;
+	if (fieldDist_.empty()) return path;
+	const cMapView& view = *ctx.view;
+	const unsigned int gen = fieldGen_;
+	const cPosition up = v.getPosition();
+	// первый шаг: в соседнюю посчитанную клетку — меньше (цена шага + расстояние оттуда)
+	int best = -1;
+	long long bestKey = std::numeric_limits<long long>::max();
+	for (int dy = -1; dy <= 1; ++dy)
+		for (int dx = -1; dx <= 1; ++dx)
+		{
+			if (dx == 0 && dy == 0) continue;
+			const cPosition n = up + cPosition (dx, dy);
+			if (n.x() < 0 || n.y() < 0 || n.x() >= W_ || n.y() >= H_) continue;
+			const int no = n.y() * W_ + n.x();
+			if (fieldClosed_[no] != gen) continue;
+			if (n != center && !view.possiblePlace (v, n)) continue;
+			const long long key = static_cast<long long> (fieldDist_[no] + cPathCalculator::calcNextCost (up, n, &v, &view)) * 1000000LL + no;
+			if (key < bestKey)
+			{
+				bestKey = key;
+				best = no;
+			}
+		}
+	if (best < 0) return path;
+	// дальше — по полю к центру, пока не войдёт в окно или не уйдёт за ход с запасом
+	const int budget = v.data.getSpeedMax() + 16;
+	int cost = 0;
+	cPosition prev = up;
+	for (int c = best; c >= 0; c = fieldNext_[c])
+	{
+		const cPosition p (c % W_, c / W_);
+		cost += cPathCalculator::calcNextCost (prev, p, &v, &view);
+		path.push_back (p);
+		prev = p;
+		if (cheb (p, center) <= window || cost > budget) break;
+	}
+	// центр (клетка лидера) может быть занят — не вставать на него
+	while (!path.empty() && path.back() == center && !view.possiblePlace (v, center)) path.pop_back();
+	return path;
+}
+
+//------------------------------------------------------------------------------
+std::vector<cPosition> cArmyOps::localPath (const sContext& ctx, const cVehicle& v, const cPosition& from, const cPosition& to,
+	const cPosition& center, int window) const
+{
+	if (from == to) return {};
+	const cMapView& view = *ctx.view;
+	const int side = 2 * window + 1;
+	auto inWin = [&] (const cPosition& p) { return cheb (p, center) <= window; };
+	if (!inWin (from) || !inWin (to) || !view.possiblePlace (v, to)) return {};
+	auto li = [&] (const cPosition& p) { return static_cast<size_t> (p.y() - center.y() + window) * side + (p.x() - center.x() + window); };
+	constexpr int kInf = std::numeric_limits<int>::max();
+	std::vector<int> g (static_cast<size_t> (side) * side, kInf);
+	std::vector<int> prev (static_cast<size_t> (side) * side, -1);
+	using tNode = std::pair<int, int>;
+	std::priority_queue<tNode, std::vector<tNode>, std::greater<tNode>> open;
+	auto heur = [&] (const cPosition& p) { return 2 * cheb (p, to); };
+	g[li (from)] = 0;
+	open.push ({heur (from), static_cast<int> (li (from))});
+	const auto posOf = [&] (int i) { return cPosition (center.x() - window + i % side, center.y() - window + i / side); };
+	bool found = false;
+	while (!open.empty())
+	{
+		const auto [f, cur] = open.top();
+		open.pop();
+		const cPosition p = posOf (cur);
+		if (f - heur (p) != g[cur]) continue; // устаревшая запись
+		if (p == to)
+		{
+			found = true;
+			break;
+		}
+		for (int dy = -1; dy <= 1; ++dy)
+			for (int dx = -1; dx <= 1; ++dx)
+			{
+				if (dx == 0 && dy == 0) continue;
+				const cPosition n = p + cPosition (dx, dy);
+				if (!inWin (n) || !view.isValidPosition (n) || !view.possiblePlace (v, n)) continue;
+				const int ng = g[cur] + cPathCalculator::calcNextCost (p, n, &v, &view);
+				const size_t ni = li (n);
+				if (ng < g[ni])
+				{
+					g[ni] = ng;
+					prev[ni] = cur;
+					open.push ({ng + heur (n), static_cast<int> (ni)});
+				}
+			}
+	}
+	if (!found) return {};
+	std::vector<cPosition> path;
+	for (int c = static_cast<int> (li (to)); c >= 0 && c != static_cast<int> (li (from)); c = prev[c])
+		path.push_back (posOf (c));
+	std::reverse (path.begin(), path.end());
+	return path;
+}
+
+//------------------------------------------------------------------------------
 void cArmyOps::planAdvance (const sContext& ctx, sOperation& op, const std::vector<unsigned int>& busy,
 	std::vector<cPosition>& reserved, std::map<unsigned int, sOpTask>& tasks)
 {
 	const auto lit = fighterById_.find (op.leader);
 	if (lit == fighterById_.end()) return;
 	const cVehicle& leader = *lit->second;
-	const int N = static_cast<int> (op.members.size());
+	// шаг 13: сплочённость — по первым kCohesionCap машинам: группа в сотни машин (большие карты, подмога
+	// сливается в одну операцию) никогда не соберётся на 70% в радиусе — лидер ждал до конца партии
+	const int N = std::min (static_cast<int> (op.members.size()), kCohesionCap);
 	const int Rcoh = 2 + static_cast<int> (std::ceil (std::sqrt (static_cast<double> (std::max (1, N)))));
 	const cPosition L0 = leader.getPosition();
 	int near = 0;
@@ -1180,19 +1734,52 @@ void cArmyOps::planAdvance (const sContext& ctx, sOperation& op, const std::vect
 	cPosition L = L0;
 	if (!contains (busy, leader.getId()))
 	{
-		std::vector<cPosition> path;
-		if (cohesive)
-		{
+		auto leaderPath = [&] (const cVehicle& v) {
 			// путь по клеткам с меньшей угрозой — к кругу у цели
-			path = ctx.world->safePathNear (leader, *ctx.view, op.target, std::max (1, kEngage - 2), eThreatLayer::Reach);
-			if (path.empty()) path = enginePath (leader, *ctx.view, op.target, true);
-			truncateToTurn (leader, *ctx.view, path, kPacePct);
-			cutAtFireEdge (*ctx.world, leader, path);
-			avoidReservedEnd (path, reserved);
+			auto p = ctx.world->safePathNear (v, *ctx.view, op.target, std::max (1, kEngage - 2), eThreatLayer::Reach);
+			if (p.empty()) p = enginePath (v, *ctx.view, op.target, true);
+			truncateToTurn (v, *ctx.view, p, kPacePct);
+			cutAtFireEdge (*ctx.world, v, p);
+			avoidReservedEnd (p, reserved);
+			return p;
+		};
+		std::vector<cPosition> path;
+		if (cohesive) path = leaderPath (leader);
+		// шаг 13: группа сплочена, а лидеру некуда шагнуть (большая группа обступила его со всех сторон —
+		// на 250×250 армия в 200 машин стояла так до конца партии) — ведёт ближайшая к цели машина строя, у
+		// которой путь есть; она — лидер и дальше
+		const cVehicle* vanguard = nullptr;
+		if (cohesive && path.empty())
+		{
+			std::vector<std::tuple<long long, unsigned int, const cVehicle*>> cand;
+			for (unsigned int id : op.members)
+				if (const auto it = fighterById_.find (id); it != fighterById_.end() && id != leader.getId() && !isSupport (id)
+					&& !contains (busy, id) && !tasks.count (id))
+					cand.emplace_back (dist2 (it->second->getPosition(), op.target), id, it->second);
+			std::sort (cand.begin(), cand.end(), [] (const auto& a, const auto& b) {
+				return std::get<0> (a) != std::get<0> (b) ? std::get<0> (a) < std::get<0> (b) : std::get<1> (a) < std::get<1> (b);
+			});
+			for (size_t k = 0; k < cand.size() && k < 6 && vanguard == nullptr; ++k)
+			{
+				auto p = leaderPath (*std::get<2> (cand[k]));
+				if (p.empty()) continue;
+				vanguard = std::get<2> (cand[k]);
+				path = std::move (p);
+			}
 		}
-		if (!path.empty()) L = path.back();
-		reserved.push_back (L);
-		tasks[leader.getId()] = {std::move (path), tag + (cohesive ? ": leader" : ": leader waits for group")};
+		if (vanguard != nullptr)
+		{
+			L = path.back();
+			reserved.push_back (L);
+			tasks[vanguard->getId()] = {std::move (path), tag + ": vanguard (leader boxed in)"};
+			op.leader = vanguard->getId();
+		}
+		else
+		{
+			if (!path.empty()) L = path.back();
+			reserved.push_back (L);
+			tasks[leader.getId()] = {std::move (path), tag + (cohesive ? ": leader" : ": leader waits for group")};
+		}
 	}
 	planFormation (ctx, op, L, false, busy, reserved, tasks, tag + ": follow", true, 100);
 }
@@ -1203,7 +1790,7 @@ void cArmyOps::planAttack (const sContext& ctx, sOperation& op, const std::vecto
 {
 	const auto lit = fighterById_.find (op.leader);
 	const cPosition L0 = lit != fighterById_.end() ? lit->second->getPosition() : op.target;
-	const int N = static_cast<int> (op.members.size());
+	const int N = std::min (static_cast<int> (op.members.size()), kCohesionCap); // шаг 13: как в походе
 	const int Rcoh = 4 + static_cast<int> (std::ceil (std::sqrt (static_cast<double> (std::max (1, N)))));
 	int near = 0;
 	for (unsigned int id : op.members)
@@ -1225,8 +1812,25 @@ void cArmyOps::planAttack (const sContext& ctx, sOperation& op, const std::vecto
 		order.emplace_back (dist2 (it->second->getPosition(), op.target), id, it->second);
 	}
 	std::sort (order.begin(), order.end());
+	sOperation rearGroup; // поддержка без видимых целей — в хвосте строя у лидера
+	rearGroup.target = op.target;
 	for (const auto& [d, id, v] : order)
 	{
+		// видимые цели у группы и у цели операции (шаг 9)
+		std::vector<const sEnemyMemory*> targets;
+		for (const sEnemyMemory* m : attackableTargets (*ctx.model, *ctx.world, *v))
+			if (dist2 (m->pos, L0) <= static_cast<long long> (kSense + kSupportSense) * (kSense + kSupportSense)
+				|| dist2 (m->pos, op.target) <= static_cast<long long> (kEngage) * kEngage)
+				targets.push_back (m);
+		if (isSupport (id))
+		{
+			// поддержка: вне «удара с подъезда», бить с предельной дальности, выстрел в конце пути
+			if (!targets.empty())
+				planSupport (ctx, *v, targets, reserved, tasks, tag);
+			else
+				rearGroup.members.push_back (id);
+			continue;
+		}
 		cPosition dest = op.target;
 		long long best = std::numeric_limits<long long>::max();
 		for (const sEnemyMemory* m : foes)
@@ -1241,8 +1845,28 @@ void cArmyOps::planAttack (const sContext& ctx, sOperation& op, const std::vecto
 		avoidReservedEnd (path, reserved);
 		reserved.push_back (path.empty() ? v->getPosition() : path.back());
 		const char* what = foes.empty() ? ": to target" : (enter ? ": enter" : ": to fire edge");
-		tasks[id] = {std::move (path), tag + what};
+		// шаг 9: доехал до цели в дальности, выстрел остался — выстрелить в конце пути
+		const unsigned int shot = endMoveTarget (*ctx.model, *v, path, targets);
+		tasks[id] = {std::move (path), tag + what + (shot != kNoUnit ? " +fire" : ""), shot};
 	}
+	if (!rearGroup.members.empty())
+	{
+		cPosition L = L0;
+		if (const auto it = tasks.find (op.leader); it != tasks.end() && !it->second.path.empty()) L = it->second.path.back();
+		planFormation (ctx, rearGroup, L, false, busy, reserved, tasks, tag + ": support follows", true, 100);
+	}
+}
+
+//------------------------------------------------------------------------------
+bool cArmyOps::planSupport (const sContext& ctx, const cVehicle& v, const std::vector<const sEnemyMemory*>& foes,
+	std::vector<cPosition>& reserved, std::map<unsigned int, sOpTask>& tasks, const std::string& tag)
+{
+	const int maxDanger = supportMaxDanger (roleOfId (v.getId()));
+	sStandoff s = findStandoff (*ctx.model, *ctx.view, *ctx.world, v, foes, v.data.getRange(), true, maxDanger, reserved);
+	reserved.push_back (s.path.empty() ? v.getPosition() : s.path.back());
+	const bool moving = !s.path.empty();
+	tasks[v.getId()] = {std::move (s.path), tag + (moving ? (s.attackId != kNoUnit ? ": standoff +fire" : ": standoff") : ": standoff (hold)"), s.attackId};
+	return true;
 }
 
 //------------------------------------------------------------------------------
@@ -1251,12 +1875,18 @@ void cArmyOps::planScouts (const sContext& ctx, const std::vector<unsigned int>&
 {
 	const cMapView& view = *ctx.view;
 	std::vector<cPosition> taken; // клетки, куда уже пошли другие разведчики
-	for (unsigned int id : scouts_)
+	// шаг 9: разведчики малой фабрики и корректировщики без армии в походе — тоже в разведку
+	std::vector<unsigned int> explorers = scouts_;
+	for (unsigned int id : spotters_)
+		if (!tasks.count (id)) explorers.push_back (id);
+	for (unsigned int id : explorers)
 	{
 		if (contains (busy, id) || tasks.count (id)) continue;
-		const auto it = fighterById_.find (id);
-		if (it == fighterById_.end()) continue;
-		const cVehicle& v = *it->second;
+		const cVehicle* vp = nullptr;
+		if (const auto it = fighterById_.find (id); it != fighterById_.end()) vp = it->second;
+		else if (const auto st = scoutById_.find (id); st != scoutById_.end()) vp = st->second;
+		if (vp == nullptr) continue;
+		const cVehicle& v = *vp;
 		std::vector<cPosition> tried;
 		std::vector<cPosition> path;
 		for (int attempt = 0; attempt < 3 && path.empty(); ++attempt)
@@ -1292,12 +1922,72 @@ void cArmyOps::planScouts (const sContext& ctx, const std::vector<unsigned int>&
 			if (ctx.world->pathUnsafe (v, path)) path.clear();
 			if (!path.empty()) taken.push_back (best);
 		}
+		// шаг 9: безопасного пути разведки нет, а сам под ударом врага — сначала уйти из-под него
+		// (стоять на месте значило погибнуть: 152 из 256 погибших разведчиков — «explore» среди врагов)
+		if (path.empty() && (ctx.world->groundStrike (v.getPosition()) > 0 || ctx.world->groundThreat (v.getPosition()) > 0))
+		{
+			std::vector<const sEnemyMemory*> foes;
+			for (const auto& kv : ctx.world->enemies())
+				if (kv.second.visible && kv.second.hitsGround()) foes.push_back (&kv.second);
+			sStandoff s = findStandoff (*ctx.model, view, *ctx.world, v, foes, std::max (1, v.data.getScan() - 1), false, 0, reserved);
+			const int here = ctx.world->groundFire (v.getPosition()) > 0 ? 2 : (ctx.world->groundStrike (v.getPosition()) > 0 ? 1 : 0);
+			if (!s.path.empty() && s.danger <= here)
+			{
+				reserved.push_back (s.path.back());
+				tasks[id] = {std::move (s.path), "scout: evade"};
+				continue;
+			}
+		}
 		truncateToTurn (v, view, path, 100);
 		cutAtFireEdge (*ctx.world, v, path);
 		avoidReservedEnd (path, reserved);
 		reserved.push_back (path.empty() ? v.getPosition() : path.back());
 		tasks[id] = {std::move (path), "scout: explore"};
 	}
+}
+
+//------------------------------------------------------------------------------
+void cArmyOps::planSpotters (const sContext& ctx, const std::vector<unsigned int>& busy, std::vector<cPosition>& reserved,
+	std::map<unsigned int, sOpTask>& tasks)
+{
+	// первая по id операция в походе или бою; нет — корректировщики уйдут в разведку
+	const sOperation* op = nullptr;
+	for (const auto& o : ops_)
+		if (!o.members.empty() && (o.state == eOpState::Advance || o.state == eOpState::Attack || o.state == eOpState::Search))
+		{
+			op = &o;
+			break;
+		}
+	if (op == nullptr) return;
+	const auto lit = fighterById_.find (op->leader);
+	if (lit == fighterById_.end()) return;
+	cPosition L = lit->second->getPosition();
+	if (const auto it = tasks.find (op->leader); it != tasks.end() && !it->second.path.empty()) L = it->second.path.back();
+	// видимые вооружённые враги у армии
+	std::vector<const sEnemyMemory*> foes;
+	const long long r2 = static_cast<long long> (kSense + kSupportSense) * (kSense + kSupportSense);
+	for (const auto& kv : ctx.world->enemies())
+		if (kv.second.visible && kv.second.armed() && dist2 (kv.second.pos, L) <= r2) foes.push_back (&kv.second);
+	sOperation group;
+	group.target = op->target;
+	for (unsigned int id : spotters_)
+	{
+		if (contains (busy, id) || tasks.count (id)) continue;
+		const auto st = scoutById_.find (id);
+		if (st == scoutById_.end()) continue;
+		const cVehicle& v = *st->second;
+		if (!foes.empty())
+		{
+			// держать врага в обзоре (для артиллерии), самому — вне «удара с подъезда»
+			sStandoff s = findStandoff (*ctx.model, *ctx.view, *ctx.world, v, foes, std::max (1, v.data.getScan() - 1), false, 0, reserved);
+			reserved.push_back (s.path.empty() ? v.getPosition() : s.path.back());
+			tasks[id] = {std::move (s.path), "spot: keep in sight"};
+		}
+		else
+			group.members.push_back (id);
+	}
+	if (!group.members.empty())
+		planFormation (ctx, group, L, false, busy, reserved, tasks, "spot: follow army", true, 100);
 }
 
 //------------------------------------------------------------------------------
@@ -1342,6 +2032,16 @@ bool cArmyOps::planDefense (const sContext& ctx, const sOperation& op, const std
 		const auto it = fighterById_.find (id);
 		if (it == fighterById_.end()) continue;
 		const cVehicle& v = *it->second;
+		// шаг 9: цели — видимые враги у точки сбора
+		std::vector<const sEnemyMemory*> targets;
+		for (const sEnemyMemory* m : attackableTargets (*ctx.model, *ctx.world, v))
+			if (dist2 (m->pos, op.rally) <= static_cast<long long> (kDefend + kSupportSense) * (kDefend + kSupportSense))
+				targets.push_back (m);
+		if (isSupport (id) && !targets.empty())
+		{
+			planSupport (ctx, v, targets, reserved, tasks, tag);
+			continue;
+		}
 		const sEnemyMemory* n = foes.front();
 		for (const sEnemyMemory* m : foes)
 			if (dist2 (m->pos, v.getPosition()) < dist2 (n->pos, v.getPosition())) n = m;
@@ -1350,7 +2050,8 @@ bool cArmyOps::planDefense (const sContext& ctx, const sOperation& op, const std
 		cutAtFireEdge (*ctx.world, v, path);
 		avoidReservedEnd (path, reserved);
 		reserved.push_back (path.empty() ? v.getPosition() : path.back());
-		tasks[id] = {std::move (path), tag};
+		const unsigned int shot = endMoveTarget (*ctx.model, v, path, targets);
+		tasks[id] = {std::move (path), tag + (shot != kNoUnit ? " +fire" : ""), shot};
 	}
 	return true;
 }
@@ -1384,6 +2085,7 @@ void cArmyOps::plan (const sContext& ctx, const std::vector<unsigned int>& busy,
 			planFormation (ctx, *f, f->rally, true, busy, reserved, tasks,
 				"op " + std::to_string (f->id) + " " + opStateName (f->state) + ": rally", true, 100);
 	planReserve (ctx, busy, reserved, tasks);
+	planSpotters (ctx, busy, reserved, tasks);
 	planScouts (ctx, busy, reserved, tasks);
 }
 

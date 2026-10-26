@@ -21,11 +21,21 @@
  *
  * Вход для директивы советника (шаг 13): sArmyDirective — цель / собрать / отойти.
  * Всё упорядочено по id и обходу карты — детерминированно.
+ *
+ * Шаг 9 — роли (ai_roles): в операциях — строй (танки) и поддержка (штурмовые
+ * орудия, артиллерия, ракеты); лидер — танк; поддержка идёт в хвосте строя, а в
+ * бою встаёт вне «удара с подъезда» врага (дальность + сколько он проедет с
+ * выстрелом) так, чтобы бить с предельной дальности (findStandoff), и стреляет в
+ * конце пути, если выстрел остался; танк, доехав до цели в дальности, — тоже.
+ * Разведка — разведчиками малой фабрики (нет их — танками, как в шаге 8);
+ * разведчики сверх нужных — корректировщики: держат врага в обзоре для
+ * артиллерии, сами вне угроз.
  ***************************************************************************/
 
 #ifndef ai_headless_ai_army_opsH
 #define ai_headless_ai_army_opsH
 
+#include "ai_types.h"
 #include "utility/position.h"
 
 #include <nlohmann/json.hpp>
@@ -42,7 +52,36 @@ class cVehicle;
 namespace ai
 {
 
+class cRoleBook;
 class cWorldModel;
+struct sEnemyMemory;
+enum class eRole;
+
+// Шаг 9: клетка хода для машины поддержки (и корректировщика) — см. findStandoff
+struct sStandoff
+{
+	std::vector<cPosition> path; // пусто — стоять
+	unsigned int attackId = kNoUnit; // цель выстрела в конце пути (шаг 13: kNoUnit — без выстрела)
+	cPosition cell {-1, -1};
+	int danger = 0;              // 0 — вне «удара с подъезда» врага, 1 — в нём, 2 — в его зоне огня
+	bool inRange = false;        // с клетки цель ближе ring
+};
+
+// Лучшая клетка хода машины v: опасность не выше maxDanger (иначе — наименьшая), с неё
+// цель из targets ближе ring (иначе — ближе к этому кольцу), при fire — выстрел в конце
+// пути, если после движения выстрел останется (cVehicle::DecSpeed); затем — меньше пути.
+// Кассетная машина не выбирает цель, у которой свои ближе 2 клеток (бьёт площадь и своих).
+sStandoff findStandoff (const cModel& model, const cMapView& view, const cWorldModel& world, const cVehicle& v,
+	const std::vector<const sEnemyMemory*>& targets, int ring, bool fire, int maxDanger, const std::vector<cPosition>& reserved);
+// цель выстрела в конце пути path (в дальности последней клетки, выстрел остался); kNoUnit — нет
+unsigned int endMoveTarget (const cModel& model, const cVehicle& v, const std::vector<cPosition>& path,
+	const std::vector<const sEnemyMemory*>& targets);
+// видимые враги, по которым машина v может стрелять (здания-мины и соединители — нет)
+std::vector<const sEnemyMemory*> attackableTargets (const cModel& model, const cWorldModel& world, const cVehicle& v);
+// сколько выстрелов останется после движения ценой cost очков хода
+int shotsAfterMove (const cVehicle& v, int cost);
+// допустимая опасность клетки машины поддержки (findStandoff, maxDanger): штурмовому орудию — 1, прочим — 0
+int supportMaxDanger (eRole r);
 
 enum class eOpState
 {
@@ -82,6 +121,7 @@ struct sOpTask
 {
 	std::vector<cPosition> path;
 	std::string reason;
+	unsigned int attackId = kNoUnit; // шаг 9: выстрел в конце пути («подъехал — выстрелил»); шаг 13: kNoUnit — нет
 };
 
 struct sOperation
@@ -116,7 +156,9 @@ public:
 		const cMapView* view = nullptr;
 		const cWorldModel* world = nullptr;
 		int turn = 0;
-		std::vector<const cVehicle*> fighters; // все свои боевые наземные машины
+		std::vector<const cVehicle*> fighters; // свои боевые наземные машины ролей строя и поддержки
+		std::vector<const cVehicle*> scoutUnits; // шаг 9: разведчики (роль Scout) — разведка и корректировка
+		const cRoleBook* roles = nullptr;      // шаг 9: роли машин
 	};
 
 	// начало хода: состав, роли (резерв, разведка), цели, силы, переходы состояний
@@ -131,6 +173,11 @@ public:
 	size_t pendingEvents() const { return events_.size(); }
 	nlohmann::json toJson() const;
 	const std::vector<sOperation>& operations() const { return ops_; }
+	// шаг 9: куда держаться сопровождению (ПВО, ремонтник): лидер операции в походе или
+	// бою, иначе точка сбора формирующейся, иначе база; рядом с армией ли
+	cPosition escortAnchor (bool* withArmy = nullptr) const;
+	// точка сбора формирующейся операции (нет — база)
+	cPosition rallyPoint() const;
 
 private:
 	struct sForce
@@ -163,12 +210,31 @@ private:
 	void planFormation (const sContext& ctx, const sOperation& op, const cPosition& center, bool holdNear,
 		const std::vector<unsigned int>& busy, std::vector<cPosition>& reserved, std::map<unsigned int, sOpTask>& tasks,
 		const std::string& reason, bool fireEdge, int pacePct);
+	// шаг 13 (п. 77 PLAN.md): строй без A* на каждую машину. Дальние от центра машины идут по одному
+	// полю расстояний до центра (Дейкстра от центра, шаги в обратную сторону — цена шага к центру,
+	// машина-образец — с самой узкой проходимостью); ближние — коротким поиском в окне у центра.
+	// Поле строится до тех пор, пока все дальние машины не окажутся рядом с посчитанной клеткой.
+	void buildFormationField (const sContext& ctx, const cPosition& center, const std::vector<const cVehicle*>& far);
+	// путь машины v по полю: первый шаг — в соседнюю посчитанную клетку, дальше — к центру, пока не
+	// войдёт в окно (Чебышёв ≤ window от центра) или не исчерпает ход с запасом; пусто — поле её не достало
+	std::vector<cPosition> descendFormationField (const sContext& ctx, const cVehicle& v, const cPosition& center, int window) const;
+	// короткий путь машины v из from в to внутри окна (Чебышёв ≤ window от center); пусто — нет
+	std::vector<cPosition> localPath (const sContext& ctx, const cVehicle& v, const cPosition& from, const cPosition& to,
+		const cPosition& center, int window) const;
 	void planAdvance (const sContext& ctx, sOperation& op, const std::vector<unsigned int>& busy,
 		std::vector<cPosition>& reserved, std::map<unsigned int, sOpTask>& tasks);
 	void planAttack (const sContext& ctx, sOperation& op, const std::vector<unsigned int>& busy,
 		std::vector<cPosition>& reserved, std::map<unsigned int, sOpTask>& tasks);
 	void planScouts (const sContext& ctx, const std::vector<unsigned int>& busy, std::vector<cPosition>& reserved,
 		std::map<unsigned int, sOpTask>& tasks);
+	// шаг 9: корректировщики при операции в походе или бою (иначе — в разведку)
+	void planSpotters (const sContext& ctx, const std::vector<unsigned int>& busy, std::vector<cPosition>& reserved,
+		std::map<unsigned int, sOpTask>& tasks);
+	// шаг 9: машина поддержки — клетка вне «удара с подъезда» врага, бить с предельной дальности
+	bool planSupport (const sContext& ctx, const cVehicle& v, const std::vector<const sEnemyMemory*>& foes,
+		std::vector<cPosition>& reserved, std::map<unsigned int, sOpTask>& tasks, const std::string& tag);
+	bool isSupport (unsigned int id) const;
+	eRole roleOfId (unsigned int id) const;
 	void planReserve (const sContext& ctx, const std::vector<unsigned int>& busy, std::vector<cPosition>& reserved,
 		std::map<unsigned int, sOpTask>& tasks);
 	// формирующаяся операция: враг у точки сбора — к краю его зоны огня (как одиночки шага 7)
@@ -177,7 +243,10 @@ private:
 
 	std::vector<sOperation> ops_;     // по id
 	std::vector<unsigned int> scouts_;  // разведчики (вне операций)
+	std::vector<unsigned int> spotters_; // шаг 9: корректировщики — разведчики сверх нужных
 	std::vector<unsigned int> reserve_; // резерв обороны у базы
+	std::map<unsigned int, const cVehicle*> scoutById_; // шаг 9: машины-разведчики (роль Scout)
+	std::map<unsigned int, int> roleById_; // шаг 9: роль своих машин (eRole) — для строя и лидера
 	int nextId_ = 1;
 	int cooldownUntil_ = 0; // после отхода — не выходить раньше (если сил не стало больше)
 	int cooldownForce_ = 0;
@@ -189,6 +258,14 @@ private:
 	cPosition home_ {-1, -1};
 	std::vector<int> landDist_;
 	std::vector<int> landPrev_;
+	// шаг 13: поле строя (buildFormationField) — буферы на всю карту заводятся раз, клетка годна,
+	// если её метка == поколению поля
+	std::vector<int> fieldDist_;
+	std::vector<int> fieldNext_;
+	std::vector<unsigned int> fieldSeen_;
+	std::vector<unsigned int> fieldClosed_;
+	unsigned int fieldGen_ = 0;
+	int fieldClass_ = 0; // класс движения образца поля (биты: наземная 1, вода 2, берег 4)
 	// клетки у своих зданий (кольцо выезда фабрик, площадки стройки) — строю там не стоять
 	std::vector<char> avoid_;
 	bool avoided (const cPosition& p) const

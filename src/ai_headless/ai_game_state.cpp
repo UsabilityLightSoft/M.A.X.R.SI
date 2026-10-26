@@ -11,10 +11,15 @@
 #include "game/data/player/player.h"
 #include "game/data/units/building.h"
 #include "game/data/units/unit.h"
+#include "game/data/units/commandodata.h"
 #include "game/data/units/unitdata.h"
 #include "game/data/units/vehicle.h"
+#include "game/logic/movejob.h"
 #include "game/logic/turncounter.h"
 #include "game/logic/upgradecalculator.h"
+#include "utility/string/utf-8.h"
+
+#include <algorithm>
 
 namespace ai
 {
@@ -79,6 +84,18 @@ std::string typeNameById (const cModel& model, const sID& id)
 	return id.getText();
 }
 
+// шаг 11: груз хранилища (транспорт, депо, ангар, док, казарма) — что внутри и сколько мест
+void addCargo (nlohmann::json& j, const cUnit& u)
+{
+	const int places = u.getStaticUnitData().storageUnitsMax;
+	if (places <= 0) return;
+	nlohmann::json cargo = nlohmann::json::array();
+	for (const cVehicle* v : u.storedUnits)
+		cargo.push_back ({{"id", v->getId()}, {"type", unitTypeName (*v)}});
+	j["cargo"] = std::move (cargo);
+	j["cargoMax"] = places;
+}
+
 nlohmann::json buildingJson (const cBuilding& b, const cModel& model)
 {
 	nlohmann::json j;
@@ -92,6 +109,7 @@ nlohmann::json buildingJson (const cBuilding& b, const cModel& model)
 	j["armor"] = b.data.getArmor();
 	j["scan"] = b.data.getScan();
 	j["disabled"] = b.isDisabled();
+	if (b.isDisabled()) j["disabledTurns"] = b.getDisabledTurns(); // шаг 11: сколько ходов ещё выключено
 	j["working"] = b.isUnitWorking();
 	j["rubble"] = b.isRubble();
 	j["storedRes"] = b.getStoredResources();
@@ -113,6 +131,7 @@ nlohmann::json buildingJson (const cBuilding& b, const cModel& model)
 	j["repeat"] = b.getRepeatBuild();
 	j["prod"] = resJson (b.prod);
 	j["maxProd"] = resJson (b.getMaxProd());
+	addCargo (j, b);
 	return j;
 }
 
@@ -137,13 +156,99 @@ nlohmann::json vehicleJson (const cVehicle& v)
 	j["range"] = v.data.getRange();
 	j["scan"] = v.data.getScan();
 	j["disabled"] = v.isDisabled();
+	if (v.isDisabled()) j["disabledTurns"] = v.getDisabledTurns(); // шаг 11: сколько ходов ещё выключена
 	j["sentry"] = v.isSentryActive();
+	if (v.isManualFireActive()) j["manualFire"] = true;
 	j["attacking"] = v.isAttacking();
 	j["beingAttacked"] = v.isBeingAttacked();
 	j["moving"] = v.isUnitMoving();
 	j["building"] = v.isUnitBuildingABuilding();
 	j["storedRes"] = v.getStoredResources();
 	j["storedUnits"] = v.storedUnits.size();
+	if (v.isUnitLoaded()) j["loaded"] = true; // внутри транспорта или здания
+	// шаг 11 (для шага 16): задание движения — куда едет и сколько клеток пути осталось; без поля — стоит
+	if (const cMoveJob* job = v.getMoveJob(); job != nullptr && !job->isFinished() && !job->getPath().empty())
+	{
+		cPosition dest;
+		int left = 0;
+		for (const auto& p : job->getPath())
+		{
+			dest = p;
+			++left;
+		}
+		j["moveDest"] = posJson (dest);
+		j["pathLeft"] = left;
+	}
+	addCargo (j, v);
+	return j;
+}
+
+// шаг 11: скрытность — скрыта ли машина на своей местности и кто из игроков её обнаружил
+void addStealth (nlohmann::json& j, const cVehicle& v, const cModel& model)
+{
+	if (v.getStaticUnitData().isStealthOn == 0 || v.isUnitLoaded()) return;
+	const auto& map = *model.getMap();
+	const cPosition& p = v.getPosition();
+	nlohmann::json detected = nlohmann::json::array();
+	for (const auto& player : model.getPlayerList())
+		if (player.get() != v.getOwner() && v.isDetectedByPlayer (player.get())) detected.push_back (player->getId());
+	j["stealth"] = {{"hidden", v.isStealthOnCurrentTerrain (map.getField (p), map.staticMap->getTerrain (p))},
+		{"detectedBy", std::move (detected)}};
+}
+
+// шаг 11: коммандос — удачи, звание и шанс выключить или захватить соседние видимые цели
+// по формуле движка (cCommandoData::computeChance; цель «можно» — cCommandoData::canDoAction без
+// учёта выстрела: выстрел есть — поле shots машины)
+void addCommando (nlohmann::json& j, const cVehicle& v, const cModel& model, const cPlayer* viewpoint)
+{
+	const auto& sd = v.getStaticData();
+	if (!sd.canDisable && !sd.canCapture) return;
+	const auto& data = v.getCommandoData();
+	nlohmann::json c;
+	c["successes"] = data.getSuccessCount();
+	c["rank"] = cCommandoData::getLevel (data.getSuccessCount());
+	nlohmann::json targets = nlohmann::json::array();
+	if (!v.isUnitLoaded())
+	{
+		const auto& map = *model.getMap();
+		std::vector<const cUnit*> seen;
+		for (int dy = -1; dy <= 1; ++dy)
+			for (int dx = -1; dx <= 1; ++dx)
+			{
+				const cPosition p = v.getPosition() + cPosition (dx, dy);
+				if ((dx == 0 && dy == 0) || !map.isValidPosition (p)) continue;
+				for (const cUnit* u : map.getField (p).getUnits())
+				{
+					if (u == nullptr || u->getOwner() == v.getOwner()) continue;
+					if (std::find (seen.begin(), seen.end(), u) != seen.end()) continue; // большое здание — одно
+					seen.push_back (u);
+					if (viewpoint != nullptr && !viewpoint->canSeeUnit (*u, map)) continue;
+					if (u->isABuilding() && static_cast<const cBuilding*> (u)->isRubble()) continue;
+					const auto& usd = u->getStaticUnitData();
+					const bool flying = u->isAVehicle() && usd.factorAir > 0 && static_cast<const cVehicle*> (u)->getFlightHeight() > 0;
+					const bool canDisable = sd.canDisable && usd.canBeDisabled && !u->isDisabled() && !flying;
+					const bool canSteal = sd.canCapture && usd.canBeCaptured && u->storedUnits.empty() && !flying;
+					if (!canDisable && !canSteal) continue;
+					nlohmann::json t;
+					t["id"] = u->getId();
+					t["type"] = unitTypeName (*u);
+					t["owner"] = u->getOwner() ? u->getOwner()->getId() : -1; // −1 — ничья (чужие): неудача без тревоги
+					t["disable"] = canDisable ? nlohmann::json (data.computeChance (u, false)) : nlohmann::json();
+					t["steal"] = canSteal ? nlohmann::json (data.computeChance (u, true)) : nlohmann::json();
+					targets.push_back (std::move (t));
+				}
+			}
+	}
+	c["targets"] = std::move (targets);
+	j["commando"] = std::move (c);
+}
+
+// машина в дайджесте: общие поля + поля шага 11 (скрытность, коммандос)
+nlohmann::json vehicleFull (const cVehicle& v, const cModel& model, const cPlayer* viewpoint)
+{
+	nlohmann::json j = vehicleJson (v);
+	addStealth (j, v, model);
+	addCommando (j, v, model, viewpoint);
 	return j;
 }
 
@@ -160,6 +265,9 @@ nlohmann::json buildGameStateDigest (const cModel& model, int viewpointPlayerId)
 
 	const auto& map = model.getMap();
 	j["mapSize"] = posJson (map->getSize());
+	// шаг 11 (для шага 16): файл карты и его контрольная сумма — местность берётся из .wrl
+	j["map"] = utf8::to_string (map->getFilename().filename());
+	j["mapChecksum"] = map->staticMap->getChecksum (0);
 
 	const cPlayer* viewpoint = (viewpointPlayerId >= 0) ? model.getPlayer (viewpointPlayerId) : nullptr;
 
@@ -175,6 +283,14 @@ nlohmann::json buildGameStateDigest (const cModel& model, int viewpointPlayerId)
 		p["score"] = player->getScore();
 		p["defeated"] = player->isDefeated;
 		p["finishedTurn"] = player->getHasFinishedTurn();
+		// шаг 11: кредиты, исследования и подбазы чужого игрока — сверх тумана войны: только своему
+		// (очки — общие, их видят все игроки)
+		if (viewpoint != nullptr && player.get() != viewpoint)
+		{
+			p.erase ("credits");
+			players.push_back (std::move (p));
+			continue;
+		}
 
 		nlohmann::json research;
 		for (int a = 0; a < static_cast<int> (cResearch::kNrResearchAreas); ++a)
@@ -220,7 +336,7 @@ nlohmann::json buildGameStateDigest (const cModel& model, int viewpointPlayerId)
 			if (!visible)
 				visible = viewpoint->canSeeUnit (*v, *map);
 			if (!visible) continue;
-			units.push_back (vehicleJson (*v));
+			units.push_back (vehicleFull (*v, model, viewpoint));
 		}
 		for (const auto& b : player->getBuildings())
 		{
@@ -231,6 +347,11 @@ nlohmann::json buildGameStateDigest (const cModel& model, int viewpointPlayerId)
 			buildings.push_back (buildingJson (*b, model));
 		}
 	}
+	// шаг 11: ничейные юниты (чужие, owner −1), видимые игроку: их выключают и захватывают без тревоги
+	for (const auto& v : model.getNeutralVehicles())
+		if (viewpoint == nullptr || viewpoint->canSeeUnit (*v, *map)) units.push_back (vehicleFull (*v, model, viewpoint));
+	for (const auto& b : model.getNeutralBuildings()) // кроме обломков: они тоже ничьи, но не техника чужих
+		if (!b->isRubble() && (viewpoint == nullptr || viewpoint->canSeeUnit (*b, *map))) buildings.push_back (buildingJson (*b, model));
 	j["units"] = std::move (units);
 	j["buildings"] = std::move (buildings);
 
@@ -254,6 +375,69 @@ nlohmann::json buildGameStateDigest (const cModel& model, int viewpointPlayerId)
 		j["resources"] = std::move (resources);
 	}
 
+	return j;
+}
+
+nlohmann::json buildVisibility (const cModel& model, int playerId)
+{
+	const cPlayer* player = model.getPlayer (playerId);
+	if (player == nullptr) return {};
+	const cPosition size = model.getMap()->getSize();
+	// по строкам — отрезки [y, x, длина] клеток, где признак истинен
+	const auto runs = [&] (auto has) {
+		nlohmann::json out = nlohmann::json::array();
+		for (int y = 0; y < size.y(); ++y)
+		{
+			int start = -1;
+			for (int x = 0; x <= size.x(); ++x)
+			{
+				const bool on = x < size.x() && has (cPosition (x, y));
+				if (on && start < 0) start = x;
+				if (!on && start >= 0)
+				{
+					out.push_back ({y, start, x - start});
+					start = -1;
+				}
+			}
+		}
+		return out;
+	};
+	return {{"scan", runs ([&] (const cPosition& p) { return player->canSeeAt (p); })},
+		{"detectLand", runs ([&] (const cPosition& p) { return player->hasLandDetection (p); })},
+		{"detectSea", runs ([&] (const cPosition& p) { return player->hasSeaDetection (p); })}};
+}
+
+nlohmann::json buildPassDigest (const cModel& model, int viewpointPlayerId, int pass)
+{
+	nlohmann::json j;
+	j["turn"] = model.getTurnCounter()->getTurn();
+	j["pass"] = pass;
+	j["gameTime"] = model.getGameTime();
+	j["viewpoint"] = viewpointPlayerId;
+	const auto& map = model.getMap();
+	const cPlayer* viewpoint = (viewpointPlayerId >= 0) ? model.getPlayer (viewpointPlayerId) : nullptr;
+	nlohmann::json units = nlohmann::json::array();
+	nlohmann::json buildings = nlohmann::json::array();
+	const auto add = [&] (const cPlayer* owner, const cVehicle* v, const cBuilding* b) {
+		const cUnit& u = v ? static_cast<const cUnit&> (*v) : static_cast<const cUnit&> (*b);
+		const bool own = viewpoint != nullptr && owner == viewpoint;
+		if (!own && viewpoint != nullptr && !viewpoint->canSeeUnit (u, *map)) return;
+		if (v)
+			units.push_back (vehicleFull (*v, model, viewpoint));
+		// свои здания — только повреждённые или выключенные: остальные с первого захода не менялись
+		else if (!own || b->data.getHitpoints() < b->data.getHitpointsMax() || b->isDisabled())
+			buildings.push_back (buildingJson (*b, model));
+	};
+	for (const auto& player : model.getPlayerList())
+	{
+		for (const auto& v : player->getVehicles()) add (player.get(), v.get(), nullptr);
+		for (const auto& b : player->getBuildings()) add (player.get(), nullptr, b.get());
+	}
+	for (const auto& v : model.getNeutralVehicles()) add (nullptr, v.get(), nullptr);
+	for (const auto& b : model.getNeutralBuildings())
+		if (!b->isRubble()) add (nullptr, nullptr, b.get());
+	j["units"] = std::move (units);
+	j["buildings"] = std::move (buildings);
 	return j;
 }
 
