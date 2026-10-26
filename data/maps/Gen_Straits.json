@@ -1,0 +1,117 @@
+{
+ "name": "Gen_Straits",
+ "file": "Gen_Straits.wrl",
+ "type": "straits",
+ "size": 220,
+ "seed": 12003,
+ "attempt": 0,
+ "symmetric_rot180": true,
+ "generator_version": "1",
+ "tileset_source": "Delta.wrl (M.A.X.R., data/maps) — все 96 плиток, палитра и типы",
+ "landing": [
+  [
+   56,
+   109
+  ],
+  [
+   163,
+   110
+  ]
+ ],
+ "landing_env": "56,109;163,110",
+ "landing_note": "базы в одной области суши танка — годится MAXR_LANDING",
+ "objects": {
+  "bush": 140,
+  "jungle": 294,
+  "jungle_pond": 166,
+  "ruin_b": 2,
+  "ruin_d": 2,
+  "wreck": 2,
+  "rocks": 6,
+  "hill": 12,
+  "crater": 8,
+  "shrub": 60,
+  "dirt": 74,
+  "bones": 62,
+  "bodies": 68,
+  "patch": 76
+ },
+ "checks": {
+  "seams_le_4px": true,
+  "no_diagonal_tiles": true,
+  "landing_clear_ge6": true,
+  "landing_region_ge300": true,
+  "landing_near_sea_le30": true,
+  "land_path": true,
+  "paths_only_via_isthmuses": true,
+  "isthmus_width_3_10": true,
+  "isthmus_flanked_by_water": true
+ },
+ "stats": {
+  "size": 220,
+  "water_pct": 13.1,
+  "coast_pct": 2.4,
+  "land_pct": 80.4,
+  "blocked_pct": 4.13,
+  "tank_regions_ge20": 1,
+  "tank_largest": 38892,
+  "water_regions_ge4": 9,
+  "sea_largest_pct_of_water": 58.6,
+  "seam_max_px": 4,
+  "seam_pairs_gt4": 0,
+  "same_tank_region": true,
+  "tank_path_steps": 123,
+  "straight_distance": 107.0,
+  "isthmus_min_width": [
+   5,
+   5
+  ],
+  "isthmus_water_both_sides": [
+   true,
+   true
+  ],
+  "landings": [
+   {
+    "x": 56,
+    "y": 109,
+    "tank_region": 1,
+    "tank_region_cells": 38892,
+    "clear": 12,
+    "room_r18": 1363,
+    "to_water_or_coast": 17,
+    "to_blocked": 21,
+    "to_main_sea": 18
+   },
+   {
+    "x": 163,
+    "y": 110,
+    "tank_region": 1,
+    "tank_region_cells": 38892,
+    "clear": 12,
+    "room_r18": 1363,
+    "to_water_or_coast": 17,
+    "to_blocked": 21,
+    "to_main_sea": 18
+   }
+  ]
+ },
+ "params": {
+  "level": 0.0,
+  "water": null,
+  "half_width_cells": 14,
+  "inner_half_width_cells": 24,
+  "isthmus_half_cells": 3.5,
+  "isthmus_v": [
+   0.27,
+   0.73
+  ],
+  "meander": 0.05,
+  "lake_thr": 2.0,
+  "min_lake": 8,
+  "min_island": 10,
+  "forest": 0.05,
+  "ruins_per_10k": 1.5,
+  "naval": true
+ },
+ "sha256": "80f9a173251b83a7982a1dfd48f2429d60bb30a4d1fbd2c3d324c4ff22e00521"
+}

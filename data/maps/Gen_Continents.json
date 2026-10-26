@@ -1,0 +1,101 @@
+{
+ "name": "Gen_Continents",
+ "file": "Gen_Continents.wrl",
+ "type": "continents",
+ "size": 250,
+ "seed": 12001,
+ "attempt": 0,
+ "symmetric_rot180": true,
+ "generator_version": "1",
+ "tileset_source": "Delta.wrl (M.A.X.R., data/maps) — все 96 плиток, палитра и типы",
+ "landing": [
+  [
+   86,
+   124
+  ],
+  [
+   163,
+   125
+  ]
+ ],
+ "landing_env": "86,124;163,125",
+ "landing_note": "базы в разных областях суши (нет пути по суше) — exe шага 10 такой высадки не примет (planLanding: «points are in different land regions»), он сам поставит обе базы в самую большую область",
+ "objects": {
+  "bush": 90,
+  "jungle_pond": 108,
+  "jungle": 324,
+  "ruin_b": 6,
+  "wreck": 2,
+  "ruin_c": 2,
+  "ruin_a": 2,
+  "crater": 8,
+  "rocks": 6,
+  "hill": 8,
+  "shrub": 70,
+  "bones": 56,
+  "bodies": 62,
+  "patch": 42,
+  "dirt": 66
+ },
+ "checks": {
+  "seams_le_4px": true,
+  "no_diagonal_tiles": true,
+  "landing_clear_ge6": true,
+  "landing_region_ge300": true,
+  "landing_near_sea_le30": true,
+  "no_land_path": true,
+  "continents_big": true
+ },
+ "stats": {
+  "size": 250,
+  "water_pct": 40.0,
+  "coast_pct": 3.0,
+  "land_pct": 54.0,
+  "blocked_pct": 2.98,
+  "tank_regions_ge20": 6,
+  "tank_largest": 16769,
+  "water_regions_ge4": 1,
+  "sea_largest_pct_of_water": 100.0,
+  "seam_max_px": 4,
+  "seam_pairs_gt4": 0,
+  "same_tank_region": false,
+  "tank_path_steps": null,
+  "straight_distance": 77.0,
+  "landings": [
+   {
+    "x": 86,
+    "y": 124,
+    "tank_region": 2,
+    "tank_region_cells": 16769,
+    "clear": 12,
+    "room_r18": 1352,
+    "to_water_or_coast": 17,
+    "to_blocked": 16,
+    "to_main_sea": 18
+   },
+   {
+    "x": 163,
+    "y": 125,
+    "tank_region": 1,
+    "tank_region_cells": 16769,
+    "clear": 12,
+    "room_r18": 1352,
+    "to_water_or_coast": 17,
+    "to_blocked": 16,
+    "to_main_sea": 18
+   }
+  ]
+ },
+ "params": {
+  "water": 0.42,
+  "sea_half_cells": 18,
+  "edge_cells": 8,
+  "strait_islands": 3,
+  "min_lake": 8,
+  "min_island": 10,
+  "forest": 0.05,
+  "ruins_per_10k": 2.0,
+  "naval": true
+ },
+ "sha256": "9e94c0eabee73b363faa33e94e20034302b084ac38e00d587f3f314ff003ee82"
+}

@@ -1,0 +1,105 @@
+{
+ "name": "Gen_Archipelago",
+ "file": "Gen_Archipelago.wrl",
+ "type": "archipelago",
+ "size": 250,
+ "seed": 12002,
+ "attempt": 0,
+ "symmetric_rot180": true,
+ "generator_version": "1",
+ "tileset_source": "Delta.wrl (M.A.X.R., data/maps) — все 96 плиток, палитра и типы",
+ "landing": [
+  [
+   49,
+   50
+  ],
+  [
+   200,
+   199
+  ]
+ ],
+ "landing_env": "49,50;200,199",
+ "landing_note": "базы в разных областях суши (нет пути по суше) — exe шага 10 такой высадки не примет (planLanding: «points are in different land regions»), он сам поставит обе базы в самую большую область",
+ "objects": {
+  "jungle": 52,
+  "jungle_pond": 14,
+  "bush": 14,
+  "ruin_a": 4,
+  "wreck": 2,
+  "ruin_c": 2,
+  "ruin_dome": 4,
+  "rocks": 2,
+  "hill": 4,
+  "dirt": 18,
+  "shrub": 18,
+  "bodies": 22,
+  "bones": 8,
+  "patch": 8
+ },
+ "checks": {
+  "seams_le_4px": true,
+  "no_diagonal_tiles": true,
+  "landing_clear_ge6": true,
+  "landing_region_ge300": true,
+  "landing_near_sea_le30": true,
+  "no_land_path": true,
+  "outposts_ge6": true,
+  "one_sea": true
+ },
+ "stats": {
+  "size": 250,
+  "water_pct": 81.6,
+  "coast_pct": 3.9,
+  "land_pct": 14.1,
+  "blocked_pct": 0.51,
+  "tank_regions_ge20": 30,
+  "tank_largest": 2588,
+  "water_regions_ge4": 1,
+  "sea_largest_pct_of_water": 100.0,
+  "seam_max_px": 4,
+  "seam_pairs_gt4": 0,
+  "same_tank_region": false,
+  "tank_path_steps": null,
+  "straight_distance": 212.1,
+  "outpost_islands_ge25": 28,
+  "landings": [
+   {
+    "x": 49,
+    "y": 50,
+    "tank_region": 2,
+    "tank_region_cells": 2588,
+    "clear": 10,
+    "room_r18": 1288,
+    "to_water_or_coast": 17,
+    "to_blocked": 10,
+    "to_main_sea": 18
+   },
+   {
+    "x": 200,
+    "y": 199,
+    "tank_region": 32,
+    "tank_region_cells": 2588,
+    "clear": 10,
+    "room_r18": 1288,
+    "to_water_or_coast": 17,
+    "to_blocked": 10,
+    "to_main_sea": 18
+   }
+  ]
+ },
+ "params": {
+  "level": 0.0,
+  "water": null,
+  "base_r_cells": 30,
+  "islands": 12,
+  "gap_cells": 8,
+  "isl_min_cells": 5,
+  "isl_max_cells": 13,
+  "min_lake": 6,
+  "min_island": 10,
+  "forest": 0.03,
+  "ruins_per_10k": 2.0,
+  "naval": true
+ },
+ "sha256": "1209f906b176bab38eda62adb3b59687325a69416303a46d9b05ca73dec29d7c"
+}

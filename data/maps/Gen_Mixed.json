@@ -1,0 +1,95 @@
+{
+ "name": "Gen_Mixed",
+ "file": "Gen_Mixed.wrl",
+ "type": "mixed",
+ "size": 160,
+ "seed": 12005,
+ "attempt": 15,
+ "symmetric_rot180": true,
+ "generator_version": "1",
+ "tileset_source": "Delta.wrl (M.A.X.R., data/maps) — все 96 плиток, палитра и типы",
+ "landing": [
+  [
+   18,
+   68
+  ],
+  [
+   141,
+   91
+  ]
+ ],
+ "landing_env": "18,68;141,91",
+ "landing_note": "базы в одной области суши танка — годится MAXR_LANDING",
+ "objects": {
+  "jungle": 116,
+  "bush": 36,
+  "jungle_pond": 42,
+  "ruin_a": 4,
+  "crater": 2,
+  "rocks": 4,
+  "hill": 2,
+  "patch": 20,
+  "shrub": 24,
+  "dirt": 18,
+  "bodies": 26,
+  "bones": 22
+ },
+ "checks": {
+  "seams_le_4px": true,
+  "no_diagonal_tiles": true,
+  "landing_clear_ge6": true,
+  "landing_region_ge300": true,
+  "landing_near_sea_le30": true,
+  "land_path": true
+ },
+ "stats": {
+  "size": 160,
+  "water_pct": 41.9,
+  "coast_pct": 6.1,
+  "land_pct": 49.3,
+  "blocked_pct": 2.67,
+  "tank_regions_ge20": 9,
+  "tank_largest": 11208,
+  "water_regions_ge4": 4,
+  "sea_largest_pct_of_water": 49.9,
+  "seam_max_px": 4,
+  "seam_pairs_gt4": 0,
+  "same_tank_region": true,
+  "tank_path_steps": 123,
+  "straight_distance": 125.1,
+  "landings": [
+   {
+    "x": 18,
+    "y": 68,
+    "tank_region": 1,
+    "tank_region_cells": 11208,
+    "clear": 11,
+    "room_r18": 1327,
+    "to_water_or_coast": 17,
+    "to_blocked": 11,
+    "to_main_sea": 18
+   },
+   {
+    "x": 141,
+    "y": 91,
+    "tank_region": 1,
+    "tank_region_cells": 11208,
+    "clear": 11,
+    "room_r18": 1327,
+    "to_water_or_coast": 17,
+    "to_blocked": 11,
+    "to_main_sea": 30
+   }
+  ]
+ },
+ "params": {
+  "water": 0.45,
+  "centre_bias": 1.2,
+  "min_lake": 8,
+  "min_island": 8,
+  "forest": 0.05,
+  "ruins_per_10k": 2.0,
+  "naval": true
+ },
+ "sha256": "461bca5d3e06dcf588aeb18dcf831df9197bfd72364e12f59510afa3aa7715e6"
+}
