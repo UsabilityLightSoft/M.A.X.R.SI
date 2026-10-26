@@ -366,12 +366,14 @@ void cPlayer::refreshScanMaps()
 	//2 add all units (yes they are on the scan maps twice now)
 	for (const auto& vehicle : vehicles)
 	{
-		if (vehicle->isUnitLoaded()) continue;
+		// disabled units are not on the scan maps (see cActionStealDisable)
+		if (vehicle->isUnitLoaded() || vehicle->isDisabled()) continue;
 		addToScan (*vehicle);
 	}
 
 	for (const auto& building : buildings)
 	{
+		if (building->isDisabled()) continue;
 		addToScan (*building);
 	}
 
@@ -639,6 +641,7 @@ sNewTurnPlayerReport cPlayer::makeTurnStart (cModel& model)
 			if (!building->isDisabled())
 			{
 				addToScan (*building);
+				building->detectOtherUnits (*model.getMap());
 				if (building->wasWorking)
 				{
 					building->startWork();
@@ -658,6 +661,9 @@ sNewTurnPlayerReport cPlayer::makeTurnStart (cModel& model)
 			if (!vehicle->isDisabled())
 			{
 				addToScan (*vehicle);
+				// the unit can detect again: search for stealth units in its range,
+				// like after a move step (a disabled vehicle may have been loaded)
+				if (!vehicle->isUnitLoaded()) vehicle->detectOtherUnits (*model.getMap());
 			}
 		}
 		vehicle->refreshData();
