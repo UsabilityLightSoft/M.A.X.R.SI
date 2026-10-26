@@ -20,6 +20,7 @@
 #include "action.h"
 
 #include "actionactivate.h"
+#include "actionaipass.h"
 #include "actionattack.h"
 #include "actionbuyupgrades.h"
 #include "actionchangebuildlist.h"
@@ -80,7 +81,8 @@ namespace serialization
 				{cAction::eActiontype::BuyUpgrades, "BuyUpgrades"},
 				{cAction::eActiontype::UpgradeVehicle, "UpgradeVehicle"},
 				{cAction::eActiontype::UpgradeBuilding, "UpgradeBuilding"},
-				{cAction::eActiontype::SetAutoMove, "SetAutoMove"}};
+				{cAction::eActiontype::SetAutoMove, "SetAutoMove"},
+				{cAction::eActiontype::AiPass, "AiPass"}};
 } // namespace serialization
 
 //------------------------------------------------------------------------------
@@ -119,6 +121,7 @@ std::unique_ptr<cAction> cAction::createFromBuffer (cBinaryArchiveIn& archive)
 		case eActiontype::UpgradeVehicle: return std::make_unique<cActionUpgradeVehicle> (archive);
 		case eActiontype::UpgradeBuilding: return std::make_unique<cActionUpgradeBuilding> (archive);
 		case eActiontype::SetAutoMove: return std::make_unique<cActionSetAutoMove> (archive);
+		case eActiontype::AiPass: return std::make_unique<cActionAiPass> (archive);
 		default:
 			throw std::runtime_error ("Unknown action type " + std::to_string (static_cast<int> (action)));
 	}

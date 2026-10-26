@@ -167,6 +167,14 @@ void cGameTimerServer::checkPlayersResponding (const std::vector<std::shared_ptr
 }
 
 //------------------------------------------------------------------------------
+bool cGameTimerServer::isPlayerDeciding (const cModel& model)
+{
+	// the active player decides after the start of the turn is played out (reaction fire
+	// at the turn start has hit) and between the passes of his turn (cActionAiPass)
+	return model.isTurnActiveAndUnfinished() && model.isTurnStartPlayedOut() && !model.isAiPassActive();
+}
+
+//------------------------------------------------------------------------------
 void cGameTimerServer::run (cModel& model, cServer& server)
 {
 	checkPlayersResponding (model.getPlayerList(), server);
@@ -179,12 +187,12 @@ void cGameTimerServer::run (cModel& model, cServer& server)
 	{
 		if (!popEvent()) break;
 
-		if (deterministicTick && model.isTurnActiveAndUnfinished())
+		if (deterministicTick && isPlayerDeciding (model))
 		{
 			// Headless deterministic mode: freeze game time (no unit movement,
 			// no attacks) while the active player is still deciding. The tick is
-			// discarded; once the player finishes the turn, subsequent ticks play
-			// the turn out deterministically.
+			// discarded; once the player finishes the turn or starts a pass of the
+			// turn (cActionAiPass), subsequent ticks play the orders out deterministically.
 			continue;
 		}
 
@@ -212,7 +220,7 @@ void cGameTimerServer::runFast (cModel& model, cServer& server)
 	while (sentGameTime < slowestClientTime + FAST_TICK_WINDOW)
 	{
 		// see run(): the model stands still, while the active player is deciding
-		if (deterministicTick && model.isTurnActiveAndUnfinished()) break;
+		if (deterministicTick && isPlayerDeciding (model)) break;
 
 		advanceGameTime (model, server);
 	}

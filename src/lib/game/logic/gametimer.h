@@ -91,6 +91,8 @@ private:
 	void checkPlayersResponding (const std::vector<std::shared_ptr<cPlayer>>& playerList, cServer&);
 	void advanceGameTime (cModel&, cServer&);
 	void runFast (cModel&, cServer&);
+	/** headless deterministic tick: the model stands still, while this is true */
+	static bool isPlayerDeciding (const cModel&);
 	std::map<int, sGameTimerClientDebugData> clientDebugData;
 	std::map<int, unsigned int> receivedTime; // time that the client has reported to server in last sync message
 	unsigned int sentGameTime = 0; // time that has server has reported to clients in last sync message
@@ -105,7 +107,10 @@ public:
 	* Headless-only deterministic tick: when true, the server does NOT advance
 	* the model (no unit movement/attacks) while a player's turn is active and
 	* the player has not finished. Once the player finishes, the turn is played
-	* out deterministically. Set via cServer::setDeterministicTick.
+	* out deterministically. During a pass of the turn (cActionAiPass, see
+	* cModel::startAiPass) the model runs, until the orders of the pass are played out;
+	* at the start of a turn it runs, until the reaction fire triggered by the turn start
+	* has hit (cModel::isTurnStartPlayedOut). Set via cServer::setDeterministicTick.
 	*/
 	bool deterministicTick = false;
 

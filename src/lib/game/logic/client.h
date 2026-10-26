@@ -109,6 +109,8 @@ public:
 	void changeUnitName (const cUnit&, std::string&&);
 	void startClearRubbles (const cVehicle&);
 	void endTurn();
+	/** play out the orders given so far in this turn, the turn stays (see cActionAiPass) */
+	void aiPass();
 	void finishBuild (const cUnit&, const cPosition& escapePosition);
 	void initNewGame (const sInitPlayerData&);
 	void load (const cUnit& loadingUnit, const cVehicle& loadedVehicle);

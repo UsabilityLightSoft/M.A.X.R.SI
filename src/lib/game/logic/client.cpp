@@ -26,6 +26,7 @@
 #include "game/data/units/vehicle.h"
 #include "game/logic/action/action.h"
 #include "game/logic/action/actionactivate.h"
+#include "game/logic/action/actionaipass.h"
 #include "game/logic/action/actionattack.h"
 #include "game/logic/action/actionbuyupgrades.h"
 #include "game/logic/action/actionchangebuildlist.h"
@@ -456,6 +457,12 @@ void cClient::startClearRubbles (const cVehicle& vehicle)
 void cClient::endTurn()
 {
 	if (!getFreezeModes().isFrozen()) sendNetMessage (cActionEndTurn());
+}
+
+//------------------------------------------------------------------------------
+void cClient::aiPass()
+{
+	if (!getFreezeModes().isFrozen()) sendNetMessage (cActionAiPass());
 }
 
 //------------------------------------------------------------------------------

@@ -35,6 +35,8 @@ public:
 	void addJob (cModel&, std::unique_ptr<cJob>);
 	void onRemoveUnit (const cUnit&);
 	void run (cModel&);
+	/** no job is running (see cModel::startAiPass) */
+	bool empty() const { return jobs.empty(); }
 	uint32_t getChecksum (uint32_t crc) const;
 
 	template <ArchiveInOrOut Archive>

@@ -57,7 +57,8 @@ public:
 		BuyUpgrades,
 		UpgradeVehicle,
 		UpgradeBuilding,
-		SetAutoMove
+		SetAutoMove,
+		AiPass
 	};
 	static std::unique_ptr<cAction> createFromBuffer (cBinaryArchiveIn& archive);
 

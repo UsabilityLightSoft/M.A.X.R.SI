@@ -52,6 +52,10 @@ namespace
 	// remaining movements of a normal turn end take less than 300 ticks
 	constexpr unsigned int kStalledTurnEndTicks = 2000;
 	constexpr unsigned int kForcedTurnEndTicks = 10000;
+
+	// turn pass (see cModel::startAiPass): insurance against a pass, whose movements
+	// never finish; a pass with movements and attacks takes a few hundred ticks
+	constexpr unsigned int kAiPassMaxTicks = 3000;
 } // namespace
 
 //------------------------------------------------------------------------------
@@ -89,6 +93,13 @@ void cModel::advanceGameTime()
 	effectsList.run();
 	handleTurnEnd();
 	helperJobs.run (*this);
+	// the start of the turn is played out, when the attacks it triggered have hit
+	// and the destroyed units are removed (see isTurnStartPlayedOut)
+	if (turnStartRunning && attackJobs.empty() && helperJobs.empty())
+	{
+		turnStartRunning = false;
+	}
+	checkAiPassEnd();
 }
 
 //------------------------------------------------------------------------------
@@ -103,6 +114,48 @@ bool cModel::isTurnActiveAndUnfinished() const
 	return turnEndState == eTurnEndState::TurnActive
 		&& activeTurnPlayer != nullptr
 		&& !activeTurnPlayer->getHasFinishedTurn();
+}
+
+//------------------------------------------------------------------------------
+void cModel::startAiPass (const cPlayer& player)
+{
+	++aiPassSerial; // the request has arrived, even if no pass is started
+	if (turnEndState != eTurnEndState::TurnActive) return;
+	if (player.isDefeated || player.getHasFinishedTurn()) return;
+	if (gameSettings->gameType != eGameSettingsGameType::Simultaneous && activeTurnPlayer != &player) return;
+
+	aiPassPlayer = player.getId();
+	aiPassStartTime = gameTime;
+	NetLog.debug (" cModel: pass of player " + std::to_string (aiPassPlayer) + " started @" + std::to_string (gameTime));
+}
+
+//------------------------------------------------------------------------------
+void cModel::checkAiPassEnd()
+{
+	if (aiPassPlayer < 0) return;
+
+	const cPlayer* player = getPlayer (aiPassPlayer);
+	bool finished = player == nullptr || player->isDefeated || player->getHasFinishedTurn() || turnEndState != eTurnEndState::TurnActive;
+	if (!finished)
+	{
+		const bool moving = std::ranges::any_of (moveJobs, [&] (const auto& moveJob) {
+			if (!moveJob->isActive()) return false;
+			const cVehicle* vehicle = moveJob->getVehicleId() ? getVehicleFromID (*moveJob->getVehicleId()) : nullptr;
+			return vehicle != nullptr && vehicle->getOwner() == player;
+		});
+		finished = !moving && attackJobs.empty() && helperJobs.empty();
+	}
+	if (!finished && gameTime - aiPassStartTime >= kAiPassMaxTicks)
+	{
+		++aiPassTimeouts;
+		NetLog.warn (" cModel: pass of player " + std::to_string (aiPassPlayer) + " ended by the tick limit @" + std::to_string (gameTime));
+		finished = true;
+	}
+	if (finished)
+	{
+		NetLog.debug (" cModel: pass of player " + std::to_string (aiPassPlayer) + " finished @" + std::to_string (gameTime));
+		aiPassPlayer = -1;
+	}
 }
 
 //------------------------------------------------------------------------------
@@ -686,7 +739,10 @@ void cModel::handleTurnEnd()
 		case eTurnEndState::ExecuteRemainingMovements:
 		{
 			const bool activeMoveJob = std::ranges::any_of (moveJobs, [] (const auto& moveJob) { return moveJob->isActive(); });
-			if (!activeMoveJob)
+			// The turn passes, when the shots of the ending turn have hit and the destroyed
+			// units are removed: a target of a shot still in flight would start the next turn
+			// under attack and could neither move nor fire, until the shot hits.
+			if (!activeMoveJob && attackJobs.empty() && helperJobs.empty())
 			{
 				turnEndState = eTurnEndState::ExecuteTurnStart;
 			}
@@ -770,6 +826,7 @@ void cModel::handleTurnEnd()
 			}
 
 			turnEndState = eTurnEndState::TurnActive;
+			turnStartRunning = true;
 			newTurnStarted (newTurnReport);
 		}
 		break;

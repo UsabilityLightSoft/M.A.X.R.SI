@@ -106,6 +106,16 @@ public:
 	bool isTurnActiveAndUnfinished() const;
 
 	/**
+	* The start of the current turn is played out: the attacks, that the turn start
+	* triggered (reaction fire on the units of the starting player, see
+	* cPlayer::makeTurnStart), have hit and the destroyed units are removed. A player
+	* should decide after that: a unit under attack can neither move nor fire. The
+	* headless deterministic tick runs the model until then (cGameTimerServer).
+	* Not part of the game state: not saved, not in the checksum.
+	*/
+	bool isTurnStartPlayedOut() const { return !turnStartRunning; }
+
+	/**
 	* Headless only: insurance against turn ends, whose remaining movements never
 	* finish. The known cause (a vehicle between two movement steps became the
 	* aggressor of a reaction fire: its move job and its attack job rotated it in
@@ -118,6 +128,24 @@ public:
 	/** number of turn ends, that reached the stall limit / were forced (headless diagnostics) */
 	unsigned int getStalledTurnEnds() const { return stalledTurnEnds; }
 	unsigned int getForcedTurnEnds() const { return forcedTurnEnds; }
+
+	/**
+	* Turn passes (cActionAiPass): a player gives orders, the model plays them out
+	* (movements, attacks, loading) and the player gives the next orders in the same
+	* turn, seeing the result. A pass ends, when no vehicle of the player has an active
+	* movement and no attack job and no helper job is running, at the latest after
+	* kAiPassMaxTicks (see model.cpp), or when the turn of the player ends. In the
+	* headless deterministic tick the game time runs only during a pass (see
+	* cGameTimerServer::deterministicTick); in a normal game it runs anyway, and the pass
+	* only tells the player, that his orders are played out.
+	* The pass state is not part of the game state: not saved, not in the checksum.
+	*/
+	void startAiPass (const cPlayer&);
+	bool isAiPassActive() const { return aiPassPlayer >= 0; }
+	/** number of executed cActionAiPass in this model: changes, when the request has arrived */
+	unsigned int getAiPassSerial() const { return aiPassSerial; }
+	/** number of passes, that hit the tick limit (diagnostics) */
+	unsigned int getAiPassTimeouts() const { return aiPassTimeouts; }
 
 	std::shared_ptr<const cTurnCounter> getTurnCounter() const;
 	std::shared_ptr<const cTurnTimeClock> getTurnTimeClock() const;
@@ -136,6 +164,9 @@ public:
 
 	std::shared_ptr<cBuilding> extractNeutralUnit (const cBuilding& building) { return neutralBuildings.extract (building); }
 	std::shared_ptr<cVehicle> extractNeutralUnit (const cVehicle& vehicle) { return neutralVehicles.extract (vehicle); }
+	/** units without owner: alien factories and vehicles, rubble */
+	const auto& getNeutralBuildings() const { return neutralBuildings; }
+	const auto& getNeutralVehicles() const { return neutralVehicles; }
 
 	cMoveJob* addMoveJob (cVehicle&, const std::forward_list<cPosition>& path);
 	cMoveJob* addMoveJob (cVehicle&, const cPosition& destination);
@@ -354,6 +385,16 @@ private:
 	unsigned int remainingMovementsStartTime = 0;
 	unsigned int stalledTurnEnds = 0;
 	unsigned int forcedTurnEnds = 0;
+
+	// see isTurnStartPlayedOut, not part of the game state
+	bool turnStartRunning = false;
+
+	// turn passes (see startAiPass), not part of the game state
+	void checkAiPassEnd();
+	int aiPassPlayer = -1;
+	unsigned int aiPassStartTime = 0;
+	unsigned int aiPassSerial = 0;
+	unsigned int aiPassTimeouts = 0;
 
 	/** lists with all FX-Animation */
 	cFxContainer effectsList;
