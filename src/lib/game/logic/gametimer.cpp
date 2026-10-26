@@ -27,6 +27,37 @@
 
 #include <SDL.h>
 #include <algorithm>
+#include <cstdlib>
+
+namespace
+{
+	//--------------------------------------------------------------------------
+	// Headless fast tick (cGameTimerServer::fastTick, cGameTimerClient::fastTick):
+	// the server and the client models run in one process, built from the same
+	// code, so the models are compared only every kFastChecksumInterval ticks.
+	// The model checksum is the biggest single cost of a tick on big maps with
+	// many units. MAXR_CHECKSUM_EVERY=<n> overrides the interval (1 = every tick).
+	// In a normal (network) game the checksum is computed and compared on every tick.
+	constexpr unsigned int kFastChecksumInterval = 16;
+
+	unsigned int fastChecksumInterval()
+	{
+		static const unsigned int interval = [] {
+			if (const char* env = std::getenv ("MAXR_CHECKSUM_EVERY"); env != nullptr && *env != 0)
+			{
+				const unsigned long value = std::strtoul (env, nullptr, 10);
+				return value == 0 ? 1u : static_cast<unsigned int> (value);
+			}
+			return kFastChecksumInterval;
+		}();
+		return interval;
+	}
+
+	bool isChecksumTick (bool fastTick, unsigned int gameTime)
+	{
+		return !fastTick || gameTime % fastChecksumInterval() == 0;
+	}
+} // namespace
 
 //------------------------------------------------------------------------------
 Uint32 cGameTimer::gameTimerCallback (Uint32 interval, void* arg)
@@ -231,7 +262,8 @@ void cGameTimerServer::advanceGameTime (cModel& model, cServer& server)
 {
 	model.advanceGameTime();
 
-	uint32_t checksum = model.getChecksum();
+	// 0: not computed on this tick (see isChecksumTick)
+	const uint32_t checksum = isChecksumTick (fastTick, model.getGameTime()) ? model.getChecksum() : 0;
 	for (auto player : model.getPlayerList())
 	{
 		cNetMessageSyncServer message;
@@ -383,8 +415,8 @@ void cGameTimerClient::runFast (cClient& client, cModel& model)
 		model.advanceGameTime();
 		client.runClientJobs();
 
-		//check crc
-		localChecksum = model.getChecksum();
+		//check crc (the server computes it on the same ticks, see isChecksumTick)
+		localChecksum = isChecksumTick (fastTick, model.getGameTime()) ? model.getChecksum() : remoteChecksum;
 		debugRemoteChecksum = remoteChecksum;
 		if (localChecksum != remoteChecksum)
 		{

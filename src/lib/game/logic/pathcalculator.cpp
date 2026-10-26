@@ -28,7 +28,9 @@
 #include "utility/narrow_cast.h"
 #include "utility/ranges.h"
 
+#include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <forward_list>
 
 namespace
@@ -59,8 +61,57 @@ namespace
 		std::vector<sPathNode> nodePool;
 		/* number of nodes handed out of nodePool in the current calcPath() */
 		std::size_t poolUsed = 0;
+		/* fields found not passable in the current calcPath(): blockedStamp[offset] == stamp */
+		std::vector<std::uint32_t> blockedStamp;
+		/* calcFieldCost() of the fields in the current calcPath(): valid, if fieldCostStamp[offset] == stamp */
+		std::vector<std::uint32_t> fieldCostStamp;
+		std::vector<int> fieldCost;
+		std::uint32_t stamp = 0;
+		/* map size, the lists above are prepared for */
+		cPosition preparedSize{-1, -1};
 	};
 	thread_local PathScratch pathScratch;
+
+	//--------------------------------------------------------------------------
+	// Prepares the scratch lists for a new search. openList and closedList are
+	// not refilled with W*H nullptr on every call: an entry is only ever set for
+	// a node of the pool, so it is enough to clear the entries of the nodes the
+	// previous search has handed out.
+	void prepareScratch (const cPosition& mapSize)
+	{
+		auto& s = pathScratch;
+		const int mapCells = mapSize.x() * mapSize.y();
+		if (s.preparedSize != mapSize)
+		{
+			s.nodesHeap.assign (mapCells + 1, nullptr);
+			s.openList.assign (mapCells + 1, nullptr);
+			s.closedList.assign (mapCells + 1, nullptr);
+			s.blockedStamp.assign (mapCells + 1, 0);
+			s.fieldCostStamp.assign (mapCells + 1, 0);
+			s.fieldCost.assign (mapCells + 1, 0);
+			s.stamp = 0;
+			if (s.nodePool.size() < static_cast<std::size_t> (mapCells + 1))
+				s.nodePool.resize (mapCells + 1);
+			s.preparedSize = mapSize;
+		}
+		else
+		{
+			for (std::size_t i = 0; i < s.poolUsed; ++i)
+			{
+				const cPosition& position = s.nodePool[i].position;
+				const int offset = position.x() + position.y() * mapSize.x();
+				s.openList[offset] = nullptr;
+				s.closedList[offset] = nullptr;
+			}
+		}
+		s.poolUsed = 0;
+		if (++s.stamp == 0)
+		{
+			std::fill (s.blockedStamp.begin(), s.blockedStamp.end(), 0);
+			std::fill (s.fieldCostStamp.begin(), s.fieldCostStamp.end(), 0);
+			s.stamp = 1;
+		}
+	}
 
 	//--------------------------------------------------------------------------
 	void swapHeapNodes (int a, int b)
@@ -94,6 +145,13 @@ bool cPathDestHandler::hasReachedDestination (const cPosition& position) const
 		default:
 			return true;
 	}
+}
+
+//------------------------------------------------------------------------------
+std::optional<cPosition> cPathDestHandler::getExactDestination() const
+{
+	if (type == ePathDestinationType::Pos) return destination;
+	return std::nullopt;
 }
 
 //------------------------------------------------------------------------------
@@ -156,21 +214,24 @@ std::forward_list<cPosition> cPathCalculator::calcPath()
 {
 	std::forward_list<cPosition> path;
 
+	// a field, that no node can be placed on, is never reached:
+	// the search would visit the whole reachable area and find nothing
+	if (const auto destination = destHandler->getExactDestination())
+	{
+		if (*destination != source && (!Map->isValidPosition (*destination) || !isPassable (*destination)))
+		{
+			return path;
+		}
+	}
+
 	// generate open and closed list (reused scratch buffers, cleared each run)
-	const int mapCells = Map->getSize().x() * Map->getSize().y();
+	// the pool is sized to the whole map; never reallocates during the search,
+	// so node 'prev' pointers into the pool stay valid.
+	mapSize = Map->getSize();
+	prepareScratch (mapSize);
 	auto& nodesHeap = pathScratch.nodesHeap;
 	auto& openList = pathScratch.openList;
 	auto& closedList = pathScratch.closedList;
-	auto& nodePool = pathScratch.nodePool;
-
-	nodesHeap.assign (mapCells + 1, nullptr);
-	openList.assign (mapCells + 1, nullptr);
-	closedList.assign (mapCells + 1, nullptr);
-	// reserve space for the maximum possible node count; never reallocates
-	// during the search, so node 'prev' pointers into the pool stay valid.
-	if (nodePool.size() < static_cast<std::size_t> (mapCells + 1))
-		nodePool.resize (mapCells + 1);
-	pathScratch.poolUsed = 0;
 
 	// generate startnode
 	sPathNode* StartNode = allocNode();
@@ -189,8 +250,9 @@ std::forward_list<cPosition> cPathCalculator::calcPath()
 		sPathNode* CurrentNode = nodesHeap[1];
 
 		// move it from the open to the closed list
-		openList[Map->getOffset (CurrentNode->position)] = nullptr;
-		closedList[Map->getOffset (CurrentNode->position)] = CurrentNode;
+		const int currentOffset = CurrentNode->position.x() + CurrentNode->position.y() * mapSize.x(); // Map->getOffset()
+		openList[currentOffset] = nullptr;
+		closedList[currentOffset] = CurrentNode;
 		deleteFirstFromHeap();
 
 		// generate waypoints when destination has been reached
@@ -226,9 +288,9 @@ void cPathCalculator::expandNodes (sPathNode* ParentNode)
 
 	// add all nearby nodes
 	const int minx = std::max (ParentNode->position.x() - 1, 0);
-	const int maxx = std::min (ParentNode->position.x() + 1, Map->getSize().y() - 1);
+	const int maxx = std::min (ParentNode->position.x() + 1, mapSize.y() - 1);
 	const int miny = std::max (ParentNode->position.y() - 1, 0);
-	const int maxy = std::min (ParentNode->position.y() + 1, Map->getSize().y() - 1);
+	const int maxy = std::min (ParentNode->position.y() + 1, mapSize.y() - 1);
 
 	for (int y = miny; y <= maxy; ++y)
 	{
@@ -236,31 +298,28 @@ void cPathCalculator::expandNodes (sPathNode* ParentNode)
 		{
 			const cPosition currentPosition (x, y);
 			if (currentPosition == ParentNode->position) continue;
+			if (x >= mapSize.x()) continue; // not a valid position (y is in the map)
 
-			if (!Map->possiblePlace (*Vehicle, currentPosition))
-			{
-				// when we have a group of units, the units will not block each other
-				if (group)
-				{
-					const auto& field = Map->getField (currentPosition);
-					// get the blocking unit
-					cVehicle* blockingUnit = (Vehicle->getStaticUnitData().factorAir > 0) ? field.getPlane() : field.getVehicle();
-					// check whether the blocking unit is the group
-					bool isInGroup = ranges::contains (*group, blockingUnit);
-					if (!isInGroup) continue;
-				}
-				else
-					continue;
-			}
-			const int offset = Map->getOffset (currentPosition);
+			// The map does not change during the search and isPassable() has no
+			// side effects: a closed or open field has already passed the check
+			// (or is the start field, which is closed first), and a field, that
+			// failed it, fails again. So each field is checked once per search.
+			const int offset = x + y * mapSize.x(); // Map->getOffset (currentPosition)
 			if (closedList[offset] != nullptr) continue;
 
 			if (openList[offset] == nullptr)
 			{
+				if (pathScratch.blockedStamp[offset] == pathScratch.stamp) continue;
+				if (!isPassable (currentPosition))
+				{
+					pathScratch.blockedStamp[offset] = pathScratch.stamp;
+					continue;
+				}
+
 				// generate new node
 				sPathNode* NewNode = allocNode();
 				NewNode->position = currentPosition;
-				NewNode->costG = calcNextCost (ParentNode->position, currentPosition, Vehicle, Map) + ParentNode->costG;
+				NewNode->costG = applyDiagonalCost (ParentNode->position, currentPosition, getFieldCost (currentPosition, offset)) + ParentNode->costG;
 				NewNode->costH = destHandler->heuristicCost (currentPosition);
 				NewNode->costF = NewNode->costG + NewNode->costH;
 				NewNode->prev = ParentNode;
@@ -271,7 +330,7 @@ void cPathCalculator::expandNodes (sPathNode* ParentNode)
 			{
 				// modify existing node
 				int costG, costH, costF;
-				costG = calcNextCost (ParentNode->position, currentPosition, Vehicle, Map) + ParentNode->costG;
+				costG = applyDiagonalCost (ParentNode->position, currentPosition, getFieldCost (currentPosition, offset)) + ParentNode->costG;
 				costH = destHandler->heuristicCost (currentPosition);
 				costF = costG + costH;
 				if (costF < openList[offset]->costF)
@@ -285,6 +344,34 @@ void cPathCalculator::expandNodes (sPathNode* ParentNode)
 			}
 		}
 	}
+}
+
+//------------------------------------------------------------------------------
+bool cPathCalculator::isPassable (const cPosition& position) const
+{
+	if (Map->possiblePlace (*Vehicle, position)) return true;
+
+	// when we have a group of units, the units will not block each other
+	if (!group) return false;
+
+	const auto& field = Map->getField (position);
+	// get the blocking unit
+	cVehicle* blockingUnit = (Vehicle->getStaticUnitData().factorAir > 0) ? field.getPlane() : field.getVehicle();
+	// check whether the blocking unit is the group
+	return ranges::contains (*group, blockingUnit);
+}
+
+//------------------------------------------------------------------------------
+int cPathCalculator::getFieldCost (const cPosition& position, int offset) const
+{
+	// the map does not change during the search: the costs of a field are the same from every side
+	auto& s = pathScratch;
+	if (s.fieldCostStamp[offset] != s.stamp)
+	{
+		s.fieldCost[offset] = calcFieldCost (position, Vehicle, Map);
+		s.fieldCostStamp[offset] = s.stamp;
+	}
+	return s.fieldCost[offset];
 }
 
 //------------------------------------------------------------------------------

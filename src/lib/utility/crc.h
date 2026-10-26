@@ -34,20 +34,40 @@
 #include <string_view>
 #include <vector>
 
-[[nodiscard]] uint32_t calcCheckSum (const char* data, size_t dataSize, uint32_t checksum);
+// The checksums of the models are compared on every game tick (and are part
+// of the network protocol), so these small functions are defined inline:
+// a call per byte used to be a noticeable part of the game time.
+//------------------------------------------------------------------------------
+[[nodiscard]] inline uint32_t calcCheckSum (const char* data, size_t dataSize, uint32_t checksum)
+{
+	for (const char* i = data; i != data + dataSize; ++i)
+	{
+		checksum = checksum << 1 | checksum >> 31; // Rotate left by one.
+		checksum += *i;
+	}
+	return checksum;
+}
 
-[[nodiscard]] uint32_t calcCheckSum (bool data, uint32_t checksum);
-[[nodiscard]] uint32_t calcCheckSum (char data, uint32_t checksum);
-[[nodiscard]] uint32_t calcCheckSum (signed char data, uint32_t checksum);
-[[nodiscard]] uint32_t calcCheckSum (unsigned char data, uint32_t checksum);
-[[nodiscard]] uint32_t calcCheckSum (signed short data, uint32_t checksum);
-[[nodiscard]] uint32_t calcCheckSum (unsigned short data, uint32_t checksum);
-[[nodiscard]] uint32_t calcCheckSum (signed int data, uint32_t checksum);
-[[nodiscard]] uint32_t calcCheckSum (unsigned int data, uint32_t checksum);
-[[nodiscard]] uint32_t calcCheckSum (signed long data, uint32_t checksum);
-[[nodiscard]] uint32_t calcCheckSum (unsigned long data, uint32_t checksum);
-[[nodiscard]] uint32_t calcCheckSum (signed long long data, uint32_t checksum);
-[[nodiscard]] uint32_t calcCheckSum (unsigned long long data, uint32_t checksum);
+//------------------------------------------------------------------------------
+template <typename T>
+[[nodiscard]] inline uint32_t calcCheckSumOfBytes (T x, uint32_t checksum)
+{
+	return calcCheckSum (reinterpret_cast<const char*> (&x), sizeof (x), checksum);
+}
+
+[[nodiscard]] inline uint32_t calcCheckSum (bool data, uint32_t checksum) { return calcCheckSumOfBytes (static_cast<uint8_t> (data), checksum); }
+[[nodiscard]] inline uint32_t calcCheckSum (char data, uint32_t checksum) { return calcCheckSumOfBytes (static_cast<uint8_t> (data), checksum); }
+[[nodiscard]] inline uint32_t calcCheckSum (signed char data, uint32_t checksum) { return calcCheckSumOfBytes (static_cast<uint8_t> (data), checksum); }
+[[nodiscard]] inline uint32_t calcCheckSum (unsigned char data, uint32_t checksum) { return calcCheckSumOfBytes (static_cast<uint8_t> (data), checksum); }
+[[nodiscard]] inline uint32_t calcCheckSum (signed short data, uint32_t checksum) { return calcCheckSumOfBytes (SDL_SwapLE16 (static_cast<uint16_t> (data)), checksum); }
+[[nodiscard]] inline uint32_t calcCheckSum (unsigned short data, uint32_t checksum) { return calcCheckSumOfBytes (SDL_SwapLE16 (static_cast<uint16_t> (data)), checksum); }
+[[nodiscard]] inline uint32_t calcCheckSum (signed int data, uint32_t checksum) { return calcCheckSumOfBytes (SDL_SwapLE32 (static_cast<uint32_t> (data)), checksum); }
+[[nodiscard]] inline uint32_t calcCheckSum (unsigned int data, uint32_t checksum) { return calcCheckSumOfBytes (SDL_SwapLE32 (static_cast<uint32_t> (data)), checksum); }
+[[nodiscard]] inline uint32_t calcCheckSum (signed long data, uint32_t checksum) { return calcCheckSumOfBytes (SDL_SwapLE64 (static_cast<uint64_t> (data)), checksum); }
+[[nodiscard]] inline uint32_t calcCheckSum (unsigned long data, uint32_t checksum) { return calcCheckSumOfBytes (SDL_SwapLE64 (static_cast<uint64_t> (data)), checksum); }
+[[nodiscard]] inline uint32_t calcCheckSum (signed long long data, uint32_t checksum) { return calcCheckSumOfBytes (SDL_SwapLE64 (static_cast<uint64_t> (data)), checksum); }
+[[nodiscard]] inline uint32_t calcCheckSum (unsigned long long data, uint32_t checksum) { return calcCheckSumOfBytes (SDL_SwapLE64 (static_cast<uint64_t> (data)), checksum); }
+
 [[nodiscard]] uint32_t calcCheckSum (float data, uint32_t checksum);
 [[nodiscard]] uint32_t calcCheckSum (double data, uint32_t checksum);
 
