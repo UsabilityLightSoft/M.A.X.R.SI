@@ -148,6 +148,18 @@ if(WIN32)
   target_link_libraries(ai_headless ws2_32)
 endif()
 
+# maxr ai client (шаг 15): ИИИ входит в сетевую игру как игрок; код ИИИ — из
+# src/ai_headless без его main (ai_headless_main.cpp)
+file(GLOB_RECURSE maxr_ai_client_SRCS "src/ai_client/*.cpp" "src/ai_client/*.h"
+     "src/ai_headless/*.cpp" "src/ai_headless/*.h")
+list(FILTER maxr_ai_client_SRCS EXCLUDE REGEX "/ai_headless_main\\.cpp$")
+add_executable(maxr_ai_client ${maxr_ai_client_SRCS} ${RESOURCE_FILE})
+target_include_directories(maxr_ai_client PUBLIC src src/ai_headless)
+target_link_libraries(maxr_ai_client maxr_lib)
+if(WIN32)
+  target_link_libraries(maxr_ai_client ws2_32)
+endif()
+
 # maxr
 file(GLOB_RECURSE maxr_SRCS "src/ui/*.cpp" "src/ui/*.h")
 add_executable(maxr ${maxr_SRCS} ${RESOURCE_FILE})
