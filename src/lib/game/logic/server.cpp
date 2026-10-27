@@ -120,6 +120,12 @@ void cServer::setResolveStalledTurnEnd (bool value)
 }
 
 //------------------------------------------------------------------------------
+void cServer::setScriptedLanding (bool value)
+{
+	model.setScriptedLanding (value);
+}
+
+//------------------------------------------------------------------------------
 void cServer::saveGameState (int saveGameNumber, const std::string& saveName) const
 {
 	if (SDL_ThreadID() != SDL_GetThreadID (serverThread))

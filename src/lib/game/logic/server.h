@@ -81,6 +81,12 @@ public:
 	*/
 	void setResolveStalledTurnEnd (bool value);
 
+	/**
+	* Headless-only: scripted landings of test players (see cModel::setScriptedLanding).
+	* Must be set identically on the server and all clients before start().
+	*/
+	void setScriptedLanding (bool value);
+
 	void resyncClientModel (int playerNr = -1) const;
 	void enableFreezeMode (eFreezeMode mode);
 	void disableFreezeMode (eFreezeMode mode);

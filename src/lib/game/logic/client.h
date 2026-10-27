@@ -84,6 +84,12 @@ public:
 	*/
 	void setResolveStalledTurnEnd (bool value);
 
+	/**
+	* Headless-only: scripted landings of test players (see cModel::setScriptedLanding).
+	* Must be set identically on the server and all clients before the game starts.
+	*/
+	void setScriptedLanding (bool value);
+
 	void pushMessage (std::unique_ptr<cNetMessage>) override;
 
 	//

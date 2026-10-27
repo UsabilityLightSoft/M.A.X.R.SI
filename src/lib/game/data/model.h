@@ -125,6 +125,15 @@ public:
 	* identically on the server and all client models.
 	*/
 	void setResolveStalledTurnEnd (bool value) { resolveStalledTurnEnd = value; }
+
+	/**
+	* Headless only: scripted landings of test players (scenarios, crash tests). The
+	* server checks the units bought for the landing by the rules of the landing window
+	* (cActionInitNewGame); with this switch any vehicle can be bought. Must be set
+	* identically on the server and all client models. Not part of the game state.
+	*/
+	void setScriptedLanding (bool value) { scriptedLanding = value; }
+	bool isScriptedLanding() const { return scriptedLanding; }
 	/** number of turn ends, that reached the stall limit / were forced (headless diagnostics) */
 	unsigned int getStalledTurnEnds() const { return stalledTurnEnds; }
 	unsigned int getForcedTurnEnds() const { return forcedTurnEnds; }
@@ -385,6 +394,8 @@ private:
 	unsigned int remainingMovementsStartTime = 0;
 	unsigned int stalledTurnEnds = 0;
 	unsigned int forcedTurnEnds = 0;
+	// see setScriptedLanding, not part of the game state
+	bool scriptedLanding = false;
 
 	// see isTurnStartPlayedOut, not part of the game state
 	bool turnStartRunning = false;

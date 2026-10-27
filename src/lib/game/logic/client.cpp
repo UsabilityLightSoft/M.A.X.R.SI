@@ -116,6 +116,12 @@ void cClient::setResolveStalledTurnEnd (bool value)
 }
 
 //------------------------------------------------------------------------------
+void cClient::setScriptedLanding (bool value)
+{
+	model.setScriptedLanding (value);
+}
+
+//------------------------------------------------------------------------------
 void cClient::pushMessage (std::unique_ptr<cNetMessage> message)
 {
 	if (message->getType() == eNetMessageType::GAMETIME_SYNC_SERVER)
