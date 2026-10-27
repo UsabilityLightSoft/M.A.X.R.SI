@@ -19,10 +19,8 @@
 
 #include "ui/graphical/menu/widgets/special/textlistviewitem.h"
 
-#include "SDLutility/tosdl.h"
+#include "SDLutility/drawing.h"
 #include "ui/widgets/label.h"
-
-#include <algorithm>
 
 //------------------------------------------------------------------------------
 cTextListViewItem::cTextListViewItem (const std::string& text) :
@@ -51,18 +49,8 @@ void cTextListViewItem::draw (SDL_Surface& destination, const cBox<cPosition>& c
 
 	if (!dimmed || isHidden() || !getArea().intersects (clipRect)) return;
 
-	// cover the text with the background color of the lists (0x181818), partly transparent
-	const auto area = getArea().intersection (clipRect);
-	const auto size = area.getSize();
-	if (dimSurface == nullptr || dimSurface->w < size.x() || dimSurface->h < size.y())
-	{
-		dimSurface = UniqueSurface (SDL_CreateRGBSurface (0, std::max (size.x(), getSize().x()), std::max (size.y(), getSize().y()), 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000));
-		SDL_FillRect (dimSurface.get(), nullptr, SDL_MapRGBA (dimSurface->format, 0x18, 0x18, 0x18, 170));
-		SDL_SetSurfaceBlendMode (dimSurface.get(), SDL_BLENDMODE_BLEND);
-	}
-	SDL_Rect source{0, 0, size.x(), size.y()};
-	SDL_Rect position = toSdlRect (area);
-	SDL_BlitSurface (dimSurface.get(), &source, &destination, &position);
+	// the text covered with the background color of the lists, partly transparent
+	drawDimmed (destination, getArea().intersection (clipRect));
 }
 
 //------------------------------------------------------------------------------

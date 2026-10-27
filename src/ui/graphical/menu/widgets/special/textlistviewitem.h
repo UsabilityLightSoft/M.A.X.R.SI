@@ -20,7 +20,6 @@
 #ifndef ui_graphical_menu_widgets_special_textlistviewitemH
 #define ui_graphical_menu_widgets_special_textlistviewitemH
 
-#include "SDLutility/uniquesurface.h"
 #include "ui/graphical/menu/widgets/abstractlistviewitem.h"
 
 #include <string>
@@ -49,7 +48,6 @@ protected:
 
 private:
 	bool dimmed = false;
-	UniqueSurface dimSurface;
 };
 
 #endif // ui_graphical_menu_widgets_special_textlistviewitemH
