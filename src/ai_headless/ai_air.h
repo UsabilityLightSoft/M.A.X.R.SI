@@ -117,6 +117,7 @@ public:
 		int lost = 0;          // потеряно самолётов
 		int enemyAa = 0;       // известных зениток врага (здания и машины)
 		int enemyAir = 0;      // металла в авиации врага (память)
+		int awacHides = 0;     // Р7: AWAC ушёл в укрытие в конце хода (за партию)
 	};
 	const sCounts& counts() const { return counts_; }
 
@@ -285,6 +286,19 @@ private:
 	// зенитки и места гибели — сетка на ход (aaDanger без исключения — по ней)
 	std::vector<char> aaGrid_;
 	void buildAaGrid();
+	// Р7 (п. 118): AWAC в конце хода не висит в зоне врага на его ход — подлёт к точке облёта с запасом хода, в заходе 2+ —
+	// в укрытие (у своих истребителей, мобильных и морских зениток, иначе у базы), если рядом ПВО, армия или истребители врага
+	// (видимые сейчас: память врага обновляется только в начале хода — Gen_Straits 42, ход 164: AWAC прилетел к мобильной
+	// зенитке, увидел её по прибытии без хода в запасе и погиб в ход врага)
+	void refreshVisibleThreats (const cModel& model, const cPlayer& player, const cMapView& view);
+	bool awacHide (const cModel& model, const cPlayer& player, const cMapView& view, const cVehicle& a, std::vector<cOrder>& out, int pass);
+	std::vector<std::pair<cPosition, int>> enemyFighters_; // истребители врага (память и видимые): клетка, досягаемость за его ход
+	bool fighterThreat (const cPosition& p) const;
+	static bool awacHideOff ();
+	int visibleRefreshTurn_ = -1;
+	int visibleRefreshPass_ = -1;
+	bool scout_ = false; // Р7 (п. 119): враг не найден к kFindTurn — AWAC ищет его, авиазавод раньше шахт
+	std::vector<cPosition> workers_; // Р7: свои геологи и стройщики — скаут врага у них цель бомбардировщиков
 	// цель из памяти ещё годна: не уничтожена нашим огнём; клетка видна — и она там видна
 	bool targetAlive (const cModel& model, const cPlayer& player, const sEnemyMemory& m) const;
 };

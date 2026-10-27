@@ -45,6 +45,9 @@ constexpr int kReserve = 24;        // очков хода на отход по�
 constexpr int kNearEnemy = 26;      // у базы врага (Чебышёв от зданий) — AWAC по kAwacStep клеток за заход
 constexpr int kAwacStep = 4;
 constexpr int kAwacRing = 13;       // облёт базы врага (обзор AWAC 12)
+constexpr int kAwacReserve = 32;    // Р7 (п. 118): AWAC летит на разведку, оставив очков хода на отход в укрытие (8 клеток)
+constexpr int kFindTurn = 120;      // Р7 (п. 119): враг не найден к этому ходу — авиазавод и AWAC раньше шахт
+constexpr int kWorkerGuardR = 6;    // Р7 (п. 104, схема Владыки): скаут врага ближе к нашему геологу или стройщику — цель
 constexpr int kServiceHp = 50;      // самолёт с hp ниже (%) — в ангар
 constexpr int kEnemyAirFresh = 15;  // авиация врага в памяти не старше — угроза (истребители)
 constexpr int kSubNear = 24;        // подлодка врага у нашей верфи и кораблей (Чебышёв) — цель бомбардировщиков (п. 100)
@@ -172,7 +175,7 @@ nlohmann::json cAirForce::toJson() const
 		{"transports", counts_.transports}, {"airFactories", counts_.airFactories}, {"hangars", counts_.hangars},
 		{"strikes", counts_.strikes}, {"hits", counts_.hits}, {"kills", counts_.kills}, {"subStrikes", counts_.subStrikes},
 		{"intercepts", counts_.intercepts}, {"raids", counts_.raids}, {"raidDisables", counts_.raidDisables}, {"ferries", counts_.ferries},
-		{"aaFerries", counts_.aaFerries},
+		{"aaFerries", counts_.aaFerries}, {"awacHides", counts_.awacHides},
 		{"lost", counts_.lost}, {"enemyAa", counts_.enemyAa}, {"enemyAir", counts_.enemyAir}, {"focus", posJ (focus_)},
 		{"focusKnown", focusKnown_}, {"sides", sides}, {"bestSide", bestSide_},
 		{"raid", {{"state", static_cast<int> (raid_.state)}, {"target", raid_.target == kNoUnit ? -1 : static_cast<long long> (raid_.target)},
@@ -441,8 +444,9 @@ void cAirForce::update (const cModel& model, const cPlayer& player, const cWorld
 	yard_ = cPosition (-1, -1);
 	const int strikes = counts_.strikes, hits = counts_.hits, kills = counts_.kills, subStrikes = counts_.subStrikes,
 		intercepts = counts_.intercepts, raids = counts_.raids, raidDisables = counts_.raidDisables, ferries = counts_.ferries, lost = counts_.lost,
-		aaFerries = counts_.aaFerries;
+		aaFerries = counts_.aaFerries, awacHides = counts_.awacHides;
 	counts_ = {};
+	counts_.awacHides = awacHides;
 	counts_.strikes = strikes;
 	counts_.hits = hits;
 	counts_.kills = kills;
@@ -510,6 +514,13 @@ void cAirForce::update (const cModel& model, const cPlayer& player, const cWorld
 
 	// картина врага: зенитки, авиация, подлодки у нашей верфи и кораблей, где база
 	buildAa (model, player, world);
+	// Р7 (п. 118): истребители врага (память не старше kArmyFresh) — досягаемость за его ход: ход + дальность + 1
+	enemyFighters_.clear();
+	for (const auto& kv : world.enemies())
+	{
+		const sEnemyMemory& m = kv.second;
+		if (m.plane && m.hitsAir() && world.age (m) <= kArmyFresh) enemyFighters_.emplace_back (m.pos, m.speed + m.range + 1);
+	}
 	armyDanger_.assign (static_cast<size_t> (W_) * H_, 0);
 	for (const auto& kv : world.enemies())
 	{
@@ -564,6 +575,14 @@ void cAirForce::update (const cModel& model, const cPlayer& player, const cWorld
 			{"why", known ? "centre of the seen enemy buildings" : "enemy not seen: the point opposite our base"}});
 	focusKnown_ = known;
 
+	// Р7: свои геологи и стройщики (у них скаут врага — цель бомбардировщиков); эко-сферы врага (окно отчётов — видно каждому)
+	workers_.clear();
+	for (const auto& v : player.getVehicles())
+		if ((v->getStaticUnitData().vehicleData.canSurvey || !v->getStaticUnitData().canBuild.empty()) && !v->isUnitLoaded())
+			workers_.push_back (v->getPosition());
+	bool enemyEco = false;
+	for (const auto& pl : model.getPlayerList())
+		if (pl->getId() != player.getId() && !pl->isDefeated && (pl->getNumEcoSpheres() > 0 || pl->getScore() > 0)) enemyEco = true;
 	// программа (простой вариант — сколько металла в авиацию, потом решает Модель)
 	const auto& mp = defense.map();
 	eProgram p = eProgram::None;
@@ -580,6 +599,12 @@ void cAirForce::update (const cModel& model, const cPlayer& player, const cWorld
 	{
 		p = eProgram::Strike;
 		why = "enemy only beyond water and no sea near the base: planes are the way to reach him";
+	}
+	else if (enemyEco && factories >= 1)
+	{
+		// Р7 (п. 94): враг строит эко-сферы — бомбардировщики их уничтожают (уничтоженная теряет все свои очки)
+		p = eProgram::Strike;
+		why = "enemy eco-spheres (report window): bombers destroy them, all their points are lost";
 	}
 	else if (factories >= 2 && ((income >= kAirIncome && turn >= kAirTurn) || (income >= kAirLateIncome && turn >= kAirLateTurn)))
 	{
@@ -615,7 +640,17 @@ void cAirForce::update (const cModel& model, const cPlayer& player, const cWorld
 	bomberWant_ = program_ == eProgram::Strike ? (antiSub_ ? 3 : (income >= 36 ? 4 : 2)) : 0;
 	// авиатранспорт (П17): коммандос далеко идти (чужие, налёт, диверсия)
 	transportWant_ = program_ == eProgram::Strike && (!commandos.ferryRequests().empty() || commandos.counts().commandos >= 2);
-	wantFactory_ = !disabled && counts_.airFactories == 0 && factories >= 1 && (program_ == eProgram::Strike || (fightersWanted_ && income >= kAirLateIncome));
+	// Р7 (п. 119): враг не найден к ходу kFindTurn (ни одного его здания не видели) — разведка раньше шахт: авиазавод и AWAC, он
+	// ищет у точки напротив нашей базы (ИИИ против себя, Gen_Continents 44: за 400 ходов врага не нашёл никто — ничья вместо игры)
+	const char* scoutOff = std::getenv ("MAXR_SCOUT"); // опыт «вариант против варианта»: MAXR_SCOUT=0 — без разведки п. 119
+	const bool scout = !disabled && !(scoutOff != nullptr && scoutOff[0] == '0') && !focusKnown_ && turn >= kFindTurn && factories >= 1;
+	if (scout != scout_)
+		event ("scout", {{"on", scout}, {"focus", posJ (focus_)},
+			{"why", scout ? "enemy not found by turn " + std::to_string (kFindTurn) + ": an AWAC looks for him before more mines"
+						  : "enemy found (or air disabled)"}});
+	scout_ = scout;
+	wantFactory_ = !disabled && counts_.airFactories == 0 && factories >= 1
+		&& (program_ == eProgram::Strike || (fightersWanted_ && income >= kAirLateIncome) || scout_);
 	wantHangar_ = counts_.airFactories > 0 && counts_.hangars == 0 && counts_.bombers + counts_.fighters + counts_.awacs > 0;
 	urgent_ = antiSub_ || (fightersWanted_ && counts_.fighters == 0);
 	// авиазавод и ангар раньше шахт: подлодки у верфи, упор «воздух» уверенно или (своя суша — остров: < kIslandSharePct всей суши,
@@ -623,7 +658,8 @@ void cAirForce::update (const cModel& model, const cPlayer& player, const cWorld
 	// был в 11 партиях из 32; на материках ранний авиазавод съедал экономику — Gen_Continents 0.542 → 0.430 (s13p3w)
 	const bool island = mp.landSharePct > 0 && mp.landSharePct < kIslandSharePct;
 	factoryUrgent_ = !disabled && (antiSub_ || (std::string (mp.emphasis) == "air" && mp.sure)
-		|| ((island || (mp.enemyLand == 0 && mp.sure)) && program_ == eProgram::Strike && strikeSince_ >= 0 && turn - strikeSince_ >= kFactoryWait));
+		|| ((island || (mp.enemyLand == 0 && mp.sure)) && program_ == eProgram::Strike && strikeSince_ >= 0 && turn - strikeSince_ >= kFactoryWait)
+		|| (scout_ && counts_.awacs == 0)); // Р7: враг не найден — AWAC раньше шахт
 
 	// раз в несколько ходов — оценка сторон базы врага (журнал: AWAC ищет стороны без ПВО)
 	if (focusKnown_ && program_ == eProgram::Strike && turn_ % 5 == 0) scoreSides (model, world);
@@ -690,6 +726,7 @@ sID cAirForce::nextPlane (const cModel& model, const cPlayer& player, const cRol
 	std::vector<sStep> steps;
 	if (antiSub_) steps.push_back ({eRole::Bomber, 2, "enemy subs at our shipyard or ships: bombers hit subs"});
 	if (fightersWanted_) steps.push_back ({eRole::Fighter, std::min (2, fighterWant_), "enemy planes seen: hunters"});
+	if (scout_) steps.push_back ({eRole::Awac, 1, "enemy not found: AWAC looks for him (the point opposite our base)"}); // Р7 (п. 119)
 	if (program_ == eProgram::Strike)
 	{
 		steps.push_back ({eRole::Awac, 1, "AWAC: find enemy AA and the sides without it (sees 12, AA hits 8)"});
@@ -737,6 +774,10 @@ int cAirForce::strikeValue (const cModel& model, const sEnemyMemory& m) const
 			return m.armed() ? (near ? 200 : 120) : 60;
 		}
 		if (sd.canAttack != 0 && m.range >= 6) return 55; // артиллерия, ракеты — бьют нашу армию издали
+		// Р7 (схема Владыки, п. 6): скаут врага у наших геологов и стройщиков — охота на скаутов (геолога он убивает за 2 хода)
+		if (m.armed() && m.scan >= 8)
+			for (const auto& w : workers_)
+				if (cheb (w, m.pos) <= kWorkerGuardR) return 60;
 		if (!sd.canBuild.empty() || sd.vehicleData.canSurvey) return 40; // стройщики — экономика
 		if (m.armed()) return 20;
 		return 10;
@@ -744,6 +785,7 @@ int cAirForce::strikeValue (const cModel& model, const sEnemyMemory& m) const
 	const int cost = ud.getDynamicUnitData (id).getBuildCost();
 	if (cost <= 2) return 0; // дороги, соединители, стены, платформы, мины
 	if ((sd.canAttack & eTerrainFlag::Air) != 0) return 0; // зенитку бомбардировщик не бьёт: она бьёт дальше (8 против 4)
+	if (sd.buildingData.canScore) return 400; // Р7: эко-сфера врага — первая цель: уничтоженная теряет все свои очки
 	if (sd.buildingData.canMineMaxRes > 0) return 100;
 	if (sd.produceEnergy > 0 || sd.ID == sID (1, 7) || sd.ID == sID (1, 8)) return sd.buildingData.isBig ? 95 : 60;
 	if (sd.canBuild == "Ship") return 85;
@@ -1084,6 +1126,7 @@ void cAirForce::awacPlan (const cModel& model, const cPlayer& player, const cMap
 		goal = onDir (W_, H_, focus_, ring, kAwacRing);
 		if (!focusKnown_) why = "awac: look for the enemy base (opposite our base)";
 	}
+	(void) pass;
 	// точка в ПВО — ближайшая безопасная на луче от базы врага
 	if (aaDanger (goal))
 	{
@@ -1100,11 +1143,135 @@ void cAirForce::awacPlan (const cModel& model, const cPlayer& player, const cMap
 		}
 	}
 	auto path = flyPath (a, view, goal, true, kNoUnit, cap);
+	// Р7 (п. 118): запас хода на отход в укрытие (следующий заход): увиденное по прибытии ПВО врага не застанет AWAC без хода
+	{
+		int budget = a.data.getSpeed() - (awacHideOff() ? 0 : kAwacReserve);
+		cPosition prev = a.getPosition();
+		size_t n = 0;
+		for (; n < path.size(); ++n)
+		{
+			const int c = cPathCalculator::calcNextCost (prev, path[n], &a, &view);
+			if (c > budget) break;
+			budget -= c;
+			prev = path[n];
+		}
+		path.resize (n);
+	}
 	if (!path.empty())
 	{
 		pushMove (a, std::move (path), why, out);
-		if (cap > 0) wantPass_ = true; // шаг — и ещё заход: посмотреть, что открылось
+		wantPass_ = true; // шаг — и ещё заход: посмотреть, что открылось, и при опасности уйти в укрытие
 	}
+}
+
+//------------------------------------------------------------------------------
+// опыт «вариант против варианта»: MAXR_AWAC_HIDE=0 — AWAC без запаса хода и укрытия (как до Р7)
+bool cAirForce::awacHideOff()
+{
+	const char* e = std::getenv ("MAXR_AWAC_HIDE");
+	return e != nullptr && e[0] == '0';
+}
+
+//------------------------------------------------------------------------------
+bool cAirForce::fighterThreat (const cPosition& p) const
+{
+	for (const auto& [pos, reach] : enemyFighters_)
+		if (dist2 (p, pos) <= static_cast<long long> (reach) * reach) return true;
+	return false;
+}
+
+//------------------------------------------------------------------------------
+// заход 2+: враги, видимые сейчас (память врага — с начала хода): зенитки и мобильная ПВО, армия, истребители — к картам опасности
+void cAirForce::refreshVisibleThreats (const cModel& model, const cPlayer& player, const cMapView& view)
+{
+	bool changed = false;
+	for (const auto& p : model.getPlayerList())
+	{
+		if (p->getId() == player.getId()) continue;
+		auto add = [&] (const cUnit& u, bool building) {
+			if (!view.canSeeUnit (u) || u.isDisabled()) return;
+			const auto& sd = u.getStaticUnitData();
+			const bool armed = sd.canAttack != 0 && u.data.getDamage() > 0 && u.data.getRange() > 0;
+			if (!armed) return;
+			const bool plane = sd.factorAir > 0;
+			const bool hitsAir = (sd.canAttack & eTerrainFlag::Air) != 0;
+			const int speed = building ? 0 : u.data.getSpeedMax() / 4;
+			if (plane)
+			{
+				if (hitsAir) enemyFighters_.emplace_back (u.getPosition(), speed + u.data.getRange() + 1);
+				return;
+			}
+			if (hitsAir && std::none_of (aa_.begin(), aa_.end(), [&] (const sAaSource& s) { return s.id == u.getId(); }))
+			{
+				sAaSource s;
+				s.pos = u.getPosition();
+				s.big = u.getIsBig();
+				s.id = u.getId();
+				s.building = building;
+				s.reach = u.data.getRange() + speed + 1;
+				aa_.push_back (s);
+				changed = true;
+			}
+			if (!building && sd.factorGround > 0 && !armyDanger_.empty())
+				for (int dy = -kArmyDangerR; dy <= kArmyDangerR; ++dy)
+					for (int dx = -kArmyDangerR; dx <= kArmyDangerR; ++dx)
+					{
+						const int x = u.getPosition().x() + dx, y = u.getPosition().y() + dy;
+						if (x < 0 || y < 0 || x >= W_ || y >= H_) continue;
+						armyDanger_[static_cast<size_t> (y) * W_ + x] = 1;
+					}
+		};
+		for (const auto& v : p->getVehicles()) add (*v, false);
+		for (const auto& b : p->getBuildings()) add (*b, true);
+	}
+	if (changed) buildAaGrid();
+}
+
+//------------------------------------------------------------------------------
+bool cAirForce::awacHide (const cModel& model, const cPlayer& player, const cMapView& view, const cVehicle& a, std::vector<cOrder>& out, int pass)
+{
+	(void) model;
+	const cPosition at = a.getPosition();
+	auto danger = [&] (const cPosition& p) { return aaDanger (p) || armyNear (p) || fighterThreat (p); };
+	if (awacHideOff() || !danger (at)) return false;
+	const int budget = a.data.getSpeed();
+	if (budget < 4) return false;
+	// свои ПВО (Владыка 27.10.2026: AWAC держится за истребителями, мобильными и морскими зенитками); нет — у своей базы
+	std::vector<cPosition> friends;
+	for (const auto& v : player.getVehicles())
+	{
+		if (v.get() == &a || v->isUnitLoaded() || v->isDisabled()) continue;
+		const auto& sd = v->getStaticUnitData();
+		if ((sd.canAttack & eTerrainFlag::Air) == 0 || v->data.getDamage() <= 0) continue;
+		friends.push_back (v->getPosition());
+	}
+	const int R = budget / 4 + 1;
+	cPosition best (-1, -1);
+	long long bestKey = std::numeric_limits<long long>::max();
+	for (int dy = -R; dy <= R; ++dy)
+		for (int dx = -R; dx <= R; ++dx)
+		{
+			const cPosition c = at + cPosition (dx, dy);
+			if (!view.isValidPosition (c) || reservedCell (c) || danger (c)) continue;
+			if (c != at && !view.possiblePlace (a, c)) continue;
+			const int cost = flightCost (at, c);
+			if (cost > budget) continue;
+			long long near = friends.empty() && home_.x() >= 0 ? dist2 (c, home_) : std::numeric_limits<long long>::max();
+			for (const auto& f : friends) near = std::min (near, dist2 (c, f));
+			const long long key = std::min<long long> (near, 1000000) * 1000 + cost * 10 + (static_cast<long long> (c.y()) * W_ + c.x()) % 7;
+			if (key < bestKey)
+			{
+				bestKey = key;
+				best = c;
+			}
+		}
+	if (best.x() < 0) return false;
+	auto path = flyPath (a, view, best, false, kNoUnit, 0); // из зоны — кратчайшим путём (самолёту местность не мешает)
+	if (path.empty()) return false;
+	++counts_.awacHides;
+	event ("awac hide", {{"unitId", a.getId()}, {"from", posJ (at)}, {"to", posJ (path.back())}, {"pass", pass}, {"friends", friends.size()},
+		{"why", aaDanger (at) ? "enemy AA reaches this cell on his turn" : (armyNear (at) ? "enemy army near (mobile AA)" : "enemy fighters reach this cell")}});
+	return pushMove (a, std::move (path), "awac: scouted, hide out of the enemy reach (near our fighters and AA)", out);
 }
 
 //------------------------------------------------------------------------------
@@ -1875,7 +2042,14 @@ std::vector<cOrder> cAirForce::planPass (const cModel& model, const cPlayer& pla
 		if (ordered) continue;
 		if (r == eRole::Awac)
 		{
-			// AWAC у базы врага — ещё шаг (обзор открылся)
+			// Р7 (п. 118): рядом ПВО, армия или истребители врага (видимые сейчас) — в укрытие; иначе у базы врага — ещё шаг
+			if (visibleRefreshTurn_ != turn_ || visibleRefreshPass_ != pass)
+			{
+				refreshVisibleThreats (model, player, view);
+				visibleRefreshTurn_ = turn_;
+				visibleRefreshPass_ = pass;
+			}
+			if (awacHide (model, player, view, *v, out, pass)) continue;
 			awacPlan (model, player, view, world, *v, out, pass);
 			continue;
 		}
