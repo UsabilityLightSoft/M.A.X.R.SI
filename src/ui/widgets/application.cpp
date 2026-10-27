@@ -126,6 +126,8 @@ void cApplication::execute()
 
 				if (shouldDrawFramesPerSecond) drawFramesPerSecond (frameCounter->getFramesPerSecond());
 
+				// menus smaller than the screen fill the window
+				Video.setViewArea (getVisibleWindowsArea());
 				Video.draw();
 				frameCounter->frameDrawn();
 			}
@@ -151,6 +153,27 @@ void cApplication::center (cWindow& window)
 	position.x() = (Video.getResolutionX() / 2 - window.getSize().x() / 2);
 	position.y() = (Video.getResolutionY() / 2 - window.getSize().y() / 2);
 	window.moveTo (position);
+}
+
+//------------------------------------------------------------------------------
+cBox<cPosition> cApplication::getVisibleWindowsArea() const
+{
+	cBox<cPosition> area;
+	bool empty = true;
+	for (auto it = modalWindows.rbegin(); it != modalWindows.rend(); ++it)
+	{
+		const auto& window = *it;
+		if (window == nullptr) continue;
+
+		if (empty)
+			area = window->getArea();
+		else
+			area.add (window->getArea());
+		empty = false;
+
+		if (window->getBackgroundType() == eWindowBackgrounds::Black) break;
+	}
+	return area;
 }
 
 //------------------------------------------------------------------------------

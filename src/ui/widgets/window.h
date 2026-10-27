@@ -125,6 +125,12 @@ public:
 	virtual bool wantsCentered() const { return true; }
 
 	/**
+	 * What the window does with the background behind it.
+	 * A window with a black background hides all windows below it.
+	 */
+	eWindowBackgrounds getBackgroundType() const { return backgroundType; }
+
+	/**
 	 * Triggered when @ref handleRemoved is called.
 	 */
 	cSignal<void()> terminated;

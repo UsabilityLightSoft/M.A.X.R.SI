@@ -23,11 +23,14 @@
 #include "SDLutility/sdlcomponent.h"
 #include "SDLutility/uniquesurface.h"
 #include "settings.h"
+#include "utility/box.h"
+#include "utility/position.h"
 #include "utility/signal/signal.h"
 #include "utility/signal/signalconnectionmanager.h"
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 
 class cKeyboard;
 struct sVideoSettings;
@@ -55,17 +58,61 @@ public:
 
 	/**
 	 * Prepares the window, buffer and renderer to display the game screen.
+	 * The window gets a frame, can be resized and maximized;
+	 * the screen buffer is scaled to the window size.
 	 */
 	void prepareGameScreen();
 
 	/**
-	* Sets whether app should appear windowed or in fullscreen mode
+	* Sets whether app should appear windowed or in fullscreen mode.
+	* Fullscreen covers the desktop without changing the video mode of the display.
 	*
 	* @param bWindowMode pass true if app should work in windowed mode
 	*                    pass false it app should start in fullscreen
 	* @param bApply set to true if app should apply new windowMode too
 	*/
 	void setWindowMode (bool bWindowMode, bool bApply = false);
+
+	/**
+	 * Sets the size of the window (client area in pixels) and whether it is maximized,
+	 * used by @ref prepareGameScreen. Without a size a default size is chosen.
+	 */
+	void setWindowGeometry (std::optional<cPosition> size, bool maximized);
+
+	/**
+	 * Writes the current window size and maximized state to the video settings.
+	 */
+	void storeWindowGeometry (sVideoSettings&) const;
+
+	/**
+	 * Sets the part of the screen buffer that is displayed.
+	 * It is scaled to fill the window as much as possible while keeping the aspect ratio.
+	 * Areas smaller than the menu size (640x480) are extended to the menu size.
+	 * A box outside of the buffer (or the whole buffer) displays the whole buffer.
+	 */
+	void setViewArea (const cBox<cPosition>&);
+
+	/**
+	 * Converts a position in the window (as reported by SDL mouse events)
+	 * to the position in the screen buffer that is displayed there.
+	 * Positions outside of the displayed picture give positions outside of the view area.
+	 */
+	cPosition windowToBuffer (const cPosition&) const;
+
+	/**
+	 * Integer factor for the mouse cursor, matching the current scale of the picture.
+	 */
+	int getCursorScale() const { return cursorScale; }
+
+	/**
+	 * Increased each time the mapping from window positions to buffer positions changes.
+	 */
+	unsigned int getPresentationVersion() const { return presentationVersion; }
+
+	/**
+	 * Handles window events (size changes, maximization, ...)
+	 */
+	void handleWindowEvent (const SDL_WindowEvent&);
 
 	/**
 	* Get whether app should appear windowed or in fullscreen mode
@@ -161,6 +208,8 @@ public:
 
 	mutable cSignal<void()> resolutionChanged;
 
+	mutable cSignal<void()> cursorScaleChanged;
+
 	// Screenbuffers ///////////////////////////////////
 	static SDL_Surface* buffer; // Der Bildschirm-Buffer
 
@@ -180,11 +229,22 @@ private:
 
 	void detectResolutions();
 
+	/** Size of the window (client area) when it is neither maximized nor fullscreen and no size has been stored. */
+	cPosition getDefaultWindowSize() const;
+	/** Size of the client area of a window that fills the usable area of the display. */
+	cPosition getMaximalWindowSize() const;
+
+	/** Computes how the view area is scaled to the current window size. */
+	void updatePresentation();
+	/** Gets the texture for the intermediate integer upscaling of the view area. */
+	SDL_Texture* getScaledTexture (int width, int height);
+
 private:
 	std::shared_ptr<SDLComponent> sdlComponent; // to ensure order of construction/destruction
 	SDL_Window* sdlWindow = nullptr;
 	SDL_Renderer* sdlRenderer = nullptr;
 	SDL_Texture* sdlTexture = nullptr;
+	SDL_Texture* scaledTexture = nullptr;
 
 	int resolutionX;
 	int resolutionY;
@@ -194,6 +254,40 @@ private:
 	int colorDepth;
 
 	bool windowMode = false;
+
+	/** Size of the client area of the window when it is not maximized (and not fullscreen). */
+	std::optional<cPosition> windowedSize;
+	bool windowMaximized = true;
+	/** The window shows the game (and no longer the splash screen). */
+	bool gameScreenPrepared = false;
+
+	/** The part of the buffer which is displayed. The whole buffer, if not set. */
+	std::optional<SDL_Rect> viewArea;
+	/** False, if the renderer can not do the intermediate upscaling (no render targets). */
+	bool sharpScalingAvailable = true;
+	/** Maximal texture size of the renderer, 0 if unknown. */
+	cPosition maximalTextureSize;
+
+	/**
+	 * How the view area is displayed in the window:
+	 * The source rectangle of the buffer is drawn to the destination rectangle of the window.
+	 * Integer scale factors draw the pixels as they are (nearest neighbour).
+	 * Other scale factors first enlarge the picture by an integer factor (nearest neighbour)
+	 * and then scale it smoothly to the destination size ("sharp bilinear"),
+	 * so that the pixel graphic stays sharp without uneven pixel sizes.
+	 */
+	struct sPresentation
+	{
+		SDL_Rect source{0, 0, 0, 0};
+		SDL_Rect destination{0, 0, 0, 0};
+		cPosition windowSize; // in the units of mouse events
+		cPosition outputSize; // in pixels
+		int prescale = 1; // integer factor of the intermediate texture, 1 = no intermediate texture
+		bool smooth = false;
+	};
+	sPresentation presentation;
+	unsigned int presentationVersion = 0;
+	int cursorScale = 1;
 
 	cSignalConnectionManager signalConnectionManager;
 

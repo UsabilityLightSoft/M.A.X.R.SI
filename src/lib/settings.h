@@ -36,6 +36,8 @@ struct sVideoSettings
 	int colourDepth = 32;
 	int displayIndex = 0;
 	bool windowMode = true;
+	std::optional<cPosition> windowSize; // client area of the window, when it is not maximized
+	bool windowMaximized = true;
 
 	template <ArchiveInOrOut Archive>
 	void serialize (Archive& archive)
@@ -46,6 +48,8 @@ struct sVideoSettings
 		archive & NVP (colourDepth);
 		archive & NVP (displayIndex);
 		archive & NVP (windowMode);
+		archive & NVP (windowSize);
+		archive & NVP (windowMaximized);
 		// clang-format on
 	}
 };

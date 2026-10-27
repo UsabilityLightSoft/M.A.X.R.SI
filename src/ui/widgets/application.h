@@ -22,6 +22,8 @@
 
 #include "input/keyboard/keysequence.h"
 #include "input/mouse/mousebuttontype.h"
+#include "utility/box.h"
+#include "utility/position.h"
 #include "utility/signal/signalconnectionmanager.h"
 
 #include <SDL.h>
@@ -87,6 +89,12 @@ private:
 	void addShortcut (cKeySequence, Action);
 
 	void center (cWindow&);
+
+	/**
+	 * The part of the screen with visible windows: the windows above the last window
+	 * that hides everything below it.
+	 */
+	cBox<cPosition> getVisibleWindowsArea() const;
 
 	cWindow* getActiveWindow();
 

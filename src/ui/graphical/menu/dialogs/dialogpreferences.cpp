@@ -237,8 +237,9 @@ void cDialogPreferences::saveValues()
 	bool needRestart = false;
 	if (settings.getVideoSettings().windowMode != windowCheckBox->isChecked())
 	{
+		// window or fullscreen without changing the video mode: no restart needed
 		settings.getVideoSettings().windowMode = windowCheckBox->isChecked();
-		needRestart = true;
+		Video.setWindowMode (windowCheckBox->isChecked(), true);
 	}
 
 	settings.setScrollSpeed (scrollSpeedSlider->getValue());

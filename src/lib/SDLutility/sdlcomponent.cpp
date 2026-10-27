@@ -26,6 +26,12 @@
 //------------------------------------------------------------------------------
 SDLComponent::SDLComponent (bool withVideo)
 {
+	if (withVideo)
+	{
+		// The window is measured in pixels of the display and the game scales its picture itself:
+		// without this Windows enlarges the whole window on displays with a scale factor (blurred).
+		SDL_SetHint (SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+	}
 	auto flags = SDL_INIT_TIMER;
 	if (SDL_Init (withVideo ? SDL_INIT_VIDEO | flags : flags) == -1)
 	{

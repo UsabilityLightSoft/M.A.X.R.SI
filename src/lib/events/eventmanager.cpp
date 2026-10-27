@@ -52,7 +52,41 @@ void cEventManager::run()
 			break;
 		}
 	}
+	// The picture has been scaled or moved in the window (window resized, menu shown instead of the game):
+	// the mouse points now to another position of the screen buffer.
+	if (Video.getPresentationVersion() != lastPresentationVersion)
+	{
+		lastPresentationVersion = Video.getPresentationVersion();
+		SDL_Window* mouseFocus = SDL_GetMouseFocus();
+		if (lastMouseWindowPosition && mouseFocus != nullptr)
+		{
+			SDL_MouseMotionEvent motion{};
+			motion.type = SDL_MOUSEMOTION;
+			motion.timestamp = SDL_GetTicks();
+			motion.windowID = SDL_GetWindowID (mouseFocus);
+			motion.state = SDL_GetMouseState (nullptr, nullptr);
+			sendMouseMotion (motion, *lastMouseWindowPosition);
+		}
+	}
 	SDL_Delay (1);
+}
+
+//------------------------------------------------------------------------------
+void cEventManager::sendMouseMotion (const SDL_MouseMotionEvent& sdlEvent, const cPosition& windowPosition)
+{
+	lastMouseWindowPosition = windowPosition;
+
+	const auto position = Video.windowToBuffer (windowPosition);
+	if (lastMouseBufferPosition == position) return;
+	const cPosition offset = lastMouseBufferPosition ? cPosition (position - *lastMouseBufferPosition) : cPosition (0, 0);
+	lastMouseBufferPosition = position;
+
+	SDL_MouseMotionEvent motion = sdlEvent;
+	motion.x = position.x();
+	motion.y = position.y();
+	motion.xrel = offset.x();
+	motion.yrel = offset.y();
+	mouseMotionEvent (cEventMouseMotion (motion));
 }
 
 //------------------------------------------------------------------------------
@@ -69,10 +103,28 @@ bool cEventManager::handleSdlEvent (const SDL_Event& event)
 			break;
 		case SDL_MOUSEBUTTONDOWN:
 		case SDL_MOUSEBUTTONUP:
+		{
 			// NOTE: we do not handle all mouse buttons yet.
 			if (event.button.button != SDL_BUTTON_LEFT && event.button.button != SDL_BUTTON_RIGHT && event.button.button != SDL_BUTTON_MIDDLE) break;
-			mouseButtonEvent (cEventMouseButton (event.button));
+			const cPosition windowPosition (event.button.x, event.button.y);
+			if (lastMouseWindowPosition != windowPosition)
+			{
+				// the mouse has to be where the button has been pressed
+				SDL_MouseMotionEvent motion{};
+				motion.type = SDL_MOUSEMOTION;
+				motion.timestamp = event.button.timestamp;
+				motion.windowID = event.button.windowID;
+				motion.which = event.button.which;
+				motion.state = SDL_GetMouseState (nullptr, nullptr);
+				sendMouseMotion (motion, windowPosition);
+			}
+			SDL_MouseButtonEvent button = event.button;
+			const auto position = Video.windowToBuffer (windowPosition);
+			button.x = position.x();
+			button.y = position.y();
+			mouseButtonEvent (cEventMouseButton (button));
 			break;
+		}
 		case SDL_MOUSEWHEEL:
 			mouseWheelEvent (cEventMouseWheel (event.wheel));
 			break;
@@ -80,9 +132,10 @@ bool cEventManager::handleSdlEvent (const SDL_Event& event)
 			return false;
 			break;
 		case SDL_MOUSEMOTION:
-			mouseMotionEvent (cEventMouseMotion (event.motion));
+			sendMouseMotion (event.motion, cPosition (event.motion.x, event.motion.y));
 			break;
 		case SDL_WINDOWEVENT:
+			Video.handleWindowEvent (event.window);
 			Video.draw();
 			break;
 		default: break;
