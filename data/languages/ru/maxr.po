@@ -91,6 +91,9 @@ msgstr "%s атакует врага"
 msgid "Comp~AttackingStatusStr"
 msgstr "атакует"
 
+msgid "Comp~Build_Queue_Empty"
+msgstr "Очередь пуста - дважды щёлкните машину в списке, чтобы добавить"
+
 msgid "Comp~Building_Disabled"
 msgstr "Производство остановлено."
 

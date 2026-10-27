@@ -93,6 +93,9 @@ msgstr ""
 msgid "Comp~AttackingStatusStr"
 msgstr ""
 
+msgid "Comp~Build_Queue_Empty"
+msgstr ""
+
 msgid "Comp~Building_Disabled"
 msgstr ""
 

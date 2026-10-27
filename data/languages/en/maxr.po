@@ -91,6 +91,9 @@ msgstr "%s is attacking the enemy"
 msgid "Comp~AttackingStatusStr"
 msgstr "attacking"
 
+msgid "Comp~Build_Queue_Empty"
+msgstr "The queue is empty - double click a vehicle in the list to add it"
+
 msgid "Comp~Building_Disabled"
 msgstr "Building turned off"
 

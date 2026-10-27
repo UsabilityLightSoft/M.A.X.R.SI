@@ -32,8 +32,20 @@
 #include "ui/graphical/menu/widgets/special/unitlistviewitembuild.h"
 #include "ui/uidefines.h"
 #include "ui/widgets/application.h"
+#include "SDLutility/drawing.h"
+#include "input/mouse/mouse.h"
 #include "ui/widgets/label.h"
+#include "ui/widgets/tooltip.h"
+#include "utility/color.h"
 #include "utility/language.h"
+
+namespace
+{
+	/** How long the list of vehicles is highlighted after "Done" with an empty queue (milliseconds) */
+	constexpr Uint32 emptyQueueHighlightTime = 1600;
+	/** How long the hint stays after such a click without the mouse over "Done" (milliseconds) */
+	constexpr Uint32 emptyQueueHintTime = 3000;
+} // namespace
 
 //------------------------------------------------------------------------------
 cWindowBuildVehicles::cWindowBuildVehicles (const cBuilding& building_, const cMapView& map, std::shared_ptr<const cUnitsData> unitsData, std::shared_ptr<const cTurnTimeClock> turnTimeClock) :
@@ -63,6 +75,8 @@ cWindowBuildVehicles::cWindowBuildVehicles (const cBuilding& building_, const cM
 	okButton->moveTo (getPosition() + cPosition (387, 452));
 
 	repeatCheckBox = emplaceChild<cCheckBox> (getPosition() + cPosition (447, 322), lngPack.i18n ("Comp~Repeat"), eUnicodeFontType::LatinNormal, eCheckBoxTextAnchor::Left, eCheckBoxType::Standard);
+	// unchecked: an empty box, not a pale check mark (that looked checked)
+	repeatCheckBox->setMarkHiddenWhenUnchecked (true);
 
 	generateSelectionList (building, map, *unitsData);
 	generateBuildList (building);
@@ -71,6 +85,61 @@ cWindowBuildVehicles::cWindowBuildVehicles (const cBuilding& building_, const cM
 	repeatCheckBox->setChecked (building.getRepeatBuild());
 
 	signalConnectionManager.connect (building.destroyed, [this]() { closeOnUnitDestruction(); });
+
+	signalConnectionManager.connect (selectedUnitList->itemAdded, [this]() { updateDoneButton(); });
+	signalConnectionManager.connect (selectedUnitList->itemRemoved, [this]() { updateDoneButton(); });
+
+	// last child: drawn on top of everything
+	emptyQueueHint = emplaceChild<cToolTip>();
+	updateDoneButton();
+}
+
+//------------------------------------------------------------------------------
+void cWindowBuildVehicles::updateDoneButton()
+{
+	okButton->setDimmed (getSelectedUnitsCount() == 0);
+	if (getSelectedUnitsCount() > 0) emptyQueueClicked = false;
+}
+
+//------------------------------------------------------------------------------
+void cWindowBuildVehicles::okClicked()
+{
+	if (getSelectedUnitsCount() == 0)
+	{
+		// nothing to build: show the list, from which vehicles are added (double click), and why
+		emptyQueueClicked = true;
+		emptyQueueClickTime = SDL_GetTicks();
+		return;
+	}
+	cWindowAdvancedHangar::okClicked();
+}
+
+//------------------------------------------------------------------------------
+void cWindowBuildVehicles::draw (SDL_Surface& destination, const cBox<cPosition>& clipRect)
+{
+	const Uint32 now = SDL_GetTicks();
+	const auto* mouse = getActiveMouse();
+	const bool mouseOverDone = mouse && okButton->isAt (mouse->getPosition());
+	const bool recentClick = emptyQueueClicked && now - emptyQueueClickTime < emptyQueueHintTime;
+	if (okButton->isDimmed() && (mouseOverDone || recentClick))
+	{
+		emptyQueueHint->showFor (okButton->getArea(), lngPack.i18n ("Comp~Build_Queue_Empty"), getArea());
+	}
+	else
+	{
+		emptyQueueHint->hide();
+	}
+
+	cWindowAdvancedHangar::draw (destination, clipRect);
+
+	if (emptyQueueClicked && now - emptyQueueClickTime < emptyQueueHighlightTime && (now - emptyQueueClickTime) / 200 % 2 == 0)
+	{
+		// blinking frame around the list of vehicles
+		auto area = selectionUnitList->getArea();
+		area.getMinCorner() -= cPosition (3, 3);
+		area.getMaxCorner() += cPosition (3, 3);
+		drawRectangle (destination, area, cRgbColor (0xFF, 0xE0, 0x40), 2);
+	}
 }
 
 //------------------------------------------------------------------------------
