@@ -971,6 +971,15 @@ msgstr ""
 msgid "Settings~Tracks"
 msgstr ""
 
+msgid "Settings~UiScale"
+msgstr ""
+
+msgid "Settings~UiScale_Auto"
+msgstr ""
+
+msgid "Settings~UiScale_WindowTooSmall"
+msgstr ""
+
 msgid "Settings~Unlimited_11"
 msgstr ""
 

@@ -20,6 +20,7 @@
 #ifndef ui_graphical_menu_widgets_special_textlistviewitemH
 #define ui_graphical_menu_widgets_special_textlistviewitemH
 
+#include "SDLutility/uniquesurface.h"
 #include "ui/graphical/menu/widgets/abstractlistviewitem.h"
 
 #include <string>
@@ -33,10 +34,22 @@ public:
 
 	const std::string& getText() const;
 
+	/**
+	 * A dimmed item is shown darker, e.g. a value that can not be used at the moment.
+	 */
+	void setDimmed (bool);
+	bool isDimmed() const { return dimmed; }
+
+	void draw (SDL_Surface& destination, const cBox<cPosition>& clipRect) override;
+
 	void handleResized (const cPosition& oldSize) override;
 
 protected:
 	cLabel* label = nullptr;
+
+private:
+	bool dimmed = false;
+	UniqueSurface dimSurface;
 };
 
 #endif // ui_graphical_menu_widgets_special_textlistviewitemH

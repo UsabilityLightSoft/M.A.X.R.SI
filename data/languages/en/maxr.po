@@ -978,6 +978,15 @@ msgstr "Vehicledamage"
 msgid "Settings~Tracks"
 msgstr "Vehicletracks"
 
+msgid "Settings~UiScale"
+msgstr "UI scale"
+
+msgid "Settings~UiScale_Auto"
+msgstr "Auto %s"
+
+msgid "Settings~UiScale_WindowTooSmall"
+msgstr "Window too small for %s"
+
 msgid "Settings~Unlimited_11"
 msgstr "No limit"
 

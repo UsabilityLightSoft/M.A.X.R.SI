@@ -80,6 +80,11 @@ public:
 	double getUiScaleFactor() const { return uiScaleFactor; }
 
 	/**
+	 * The scale of the user interface that the automatic setting gives for the current window and display.
+	 */
+	double getAutoUiScaleFactor() const;
+
+	/**
 	 * Size of the window (client area) in pixels.
 	 */
 	cPosition getOutputSize() const;

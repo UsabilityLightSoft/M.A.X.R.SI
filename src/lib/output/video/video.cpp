@@ -220,6 +220,12 @@ void cVideo::setUiScale (int percent)
 }
 
 //------------------------------------------------------------------------------
+double cVideo::getAutoUiScaleFactor() const
+{
+	return computeUiScale (0, getOutputSize(), getDisplayScale());
+}
+
+//------------------------------------------------------------------------------
 cPosition cVideo::getOutputSize() const
 {
 	int width = 0;

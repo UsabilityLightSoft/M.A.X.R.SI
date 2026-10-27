@@ -979,6 +979,15 @@ msgstr "Повреждения техники"
 msgid "Settings~Tracks"
 msgstr "Следы транспорта"
 
+msgid "Settings~UiScale"
+msgstr "Масштаб"
+
+msgid "Settings~UiScale_Auto"
+msgstr "Авто %s"
+
+msgid "Settings~UiScale_WindowTooSmall"
+msgstr "Окно мало для %s"
+
 msgid "Settings~Unlimited_11"
 msgstr "нет"
 
