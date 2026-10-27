@@ -8,15 +8,22 @@ as upstream ([License.md](License.md)).
 
 ## What is new
 
-- **AI player** ([passport](si/AI_PASSPORT.md)): plays a whole game through fog of war — economy, research, army
-  operations, base defence, navy. It joins a normal network game as one more player (`maxr_ai_client`), so you can
-  play against it alone or with friends. "Turn based" mode only for now.
+- **AI player** AI-3.2 ([passport](si/AI_PASSPORT.md)): plays a whole game through fog of war — economy, research,
+  army operations, base defence, navy, aircraft (AWAC, bombers, fighters, air transport) and infiltrators. It joins a
+  normal network game as one more player (`maxr_ai_client`), so you can play against it alone or with friends. "Turn
+  based" mode only for now.
 - **Engine fixes**, also offered upstream: free metal from factories, use of freed memory when a factory repeats its
   queue, endless turning of a shooter, crash after a cluster
   attack, factory started with nothing to build, workers counted twice, alien units outside the map, hidden units not
   detected after unloading, mines laid next to a detector, detectors waking up blind, no reaction fire on unloading,
-  disabled units still scanning; faster path search and scan map checksums.
-- **Five large generated maps** up to 250×250 (`Gen_*`): continents, archipelago, straits, lakes, mixed.
+  disabled units still scanning; faster path search and scan map checksums. Second batch (fixes 17–32): disabled units
+  do not fire and do not work (a disabled constructor pauses its building), scan and sentry maps, server checks of the
+  landing (one credit per started 5 units of cargo), of big buildings, of transfers and of four more actions, non-latin
+  paths and user names, the path search, a timer race at the end of a game; a detector searches by itself, a vehicle
+  and an action wait for the step of an invisible unit; disabled aliens recover; two rules of the fork: a draw at the
+  same best score (as in M.A.X.) and a stolen vehicle noticed at the next turn of its owner.
+- **Seven large generated maps** up to 250×250 (`Gen_*`): continents, archipelago, straits, lakes, mixed and two sea
+  maps with the bases at the coast (`Gen_Coast` — no way by land, `Gen_Gulf`).
 - `ai_headless` — AI against AI without a window (deterministic, for tournaments and training data).
 
 ## Play on Windows
@@ -34,7 +41,15 @@ a copy of upstream `develop`.
 M.A.X.R.SI — форк ремейка M.A.X.R. с **компьютерным противником (ИИИ)** и исправлениями движка. ИИИ играет целую
 партию сквозь туман войны и входит в обычную сетевую игру как ещё один игрок — можно играть против него одному или с
 друзьями (пока только режим «Turn based»). Скачать — [Releases](../../releases), распаковать в папку **без русских букв
-в пути**, запустить «Играть против ИИИ.cmd». Что умеет ИИИ — [паспорт](si/AI_PASSPORT.md). Исправления движка
+в пути**, запустить «Играть против ИИИ.cmd». Что умеет ИИИ — [паспорт](si/AI_PASSPORT.md).
+
+В ветке `main` сейчас — ИИИ-3.2: к хозяйству, армии, обороне и флоту добавлены авиация (AWAC, бомбардировщики,
+истребители, авиатранспорт) и коммандос; чемпион по-прежнему поколение 3. Движок — правки 01–16 и вторая пачка 17–32:
+выключенный не стреляет и не работает (конструктор ставит стройку на паузу), карты обзора и дозора, сервер проверяет
+высадку (кредит за каждые начатые 5 единиц груза), большие здания, передачу и ещё четыре действия, пути и имя
+пользователя с русскими буквами, поиск пути, гонка таймера; сыщик ищет своим зрением; машина и действие ждут шага
+невидимого; выключенные пришельцы просыпаются; правила форка — ничья при равенстве очков и угон, замеченный в начале
+хода хозяина. Карты — семь больших сгенерированных, из них две морские с базами у берега. Исправления движка
 предложены авторам M.A.X.R.
 
 ---
