@@ -16,14 +16,17 @@
  * «подъехал — выстрелил» (выстрел в конце пути); шаг 10 — исследования и
  * золото (ai_tech): центры исследований по доходу, тема по пользе против
  * видимого врага, переработка золота и покупка улучшений, обновление машин в
- * депо. Детерминированный, тестируемый, fallback для LLM-советника.
+ * депо; шаг 13 — оборона (ai_defense), флот (ai_navy), коммандос (ai_commando) и авиация (ai_air).
+ * Детерминированный, тестируемый, fallback для LLM-советника.
  ***************************************************************************/
 
 #ifndef ai_headless_ai_rule_brainH
 #define ai_headless_ai_rule_brainH
 
+#include "ai_air.h"
 #include "ai_army_ops.h"
 #include "ai_brain.h"
+#include "ai_commando.h"
 #include "ai_defense.h"
 #include "ai_navy.h"
 #include "ai_roles.h"
@@ -104,6 +107,9 @@ private:
 	cBaseDefense defense_;
 	// шаг 13, часть 2: флот (П11–П14) — программа, верфь и док, корабли и высадка (ai_navy)
 	cNavy navy_;
+	// шаг 13, часть 3: свои коммандос (П2, П18) и авиация (П15–П17, П10) — ai_commando, ai_air
+	cCommandos commando_;
+	cAirForce air_;
 	// шаг 13: минёр уже включил закладку в этом ходу — в следующем заходе выключить
 	std::vector<unsigned int> minesToggled_;
 	// шаг 11: нужен ли ещё заход в этом ходу (после decideTurn / decidePass)

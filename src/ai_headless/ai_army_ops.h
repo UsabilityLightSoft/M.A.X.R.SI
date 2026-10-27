@@ -159,6 +159,10 @@ public:
 		std::vector<const cVehicle*> fighters; // свои боевые наземные машины ролей строя и поддержки
 		std::vector<const cVehicle*> scoutUnits; // шаг 9: разведчики (роль Scout) — разведка и корректировка
 		const cRoleBook* roles = nullptr;      // шаг 9: роли машин
+		// шаг 13, часть 3 (П25): у врага пушки бьют дальше обзора скаута — разведку у его зданий ведёт AWAC, скауты туда не
+		// ходят (клетки ближе scoutAvoidR к этим точкам)
+		const std::vector<cPosition>* scoutAvoid = nullptr;
+		int scoutAvoidR = 0;
 	};
 
 	// начало хода: состав, роли (резерв, разведка), цели, силы, переходы состояний

@@ -1903,6 +1903,17 @@ void cArmyOps::planScouts (const sContext& ctx, const std::vector<unsigned int>&
 					if (seen >= ctx.turn - 20) continue;
 					if (ctx.world->groundThreat (p) > 0) continue;
 					if (containsPos (tried, p)) continue;
+					if (ctx.scoutAvoid != nullptr)
+					{
+						bool avoid = false;
+						for (const auto& a : *ctx.scoutAvoid)
+							if (cheb (a, p) <= ctx.scoutAvoidR)
+							{
+								avoid = true;
+								break;
+							}
+						if (avoid) continue;
+					}
 					bool near = false;
 					for (const auto& t : taken)
 						if (cheb (t, p) <= 15) near = true;

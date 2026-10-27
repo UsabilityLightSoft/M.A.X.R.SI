@@ -686,6 +686,9 @@ const sID kIdShipyard (1, 12);     // верфь: 2×2 на воде, строи
 const sID kIdDock (1, 6);          // док: 2×2 на воде, ремонт и боезапас кораблей внутри
 const sID kIdGunMissile (1, 17);   // ракетная пушка: дальность 11 (улучшение дальности за золото — П25)
 const sID kIdPlatform (1, 25);     // платформа: на воде и берегу — «суша» для стройки (П14, острова)
+// шаг 13, часть 3: авиация (П15–П17, П10)
+const sID kIdAirFactory (1, 9);    // авиазавод: строит самолёты
+const sID kIdHangar (1, 20);       // ангар: 12 самолётов, ремонт и боезапас за металл подбазы
 
 // --- шаг 10: исследования, золото, обновление (подобраны опытом «вариант против варианта»,
 // отчёт шага 10 §4) ---
@@ -1495,6 +1498,11 @@ std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 		// шаг 13, часть 2: флот (П11–П14) — программа по упору карты, верфь, док, охрана стройки верфи
 		const bool richNow = econ.metalMaxStored > 0 && econ.metalStored * 5 >= econ.metalMaxStored * 4;
 		navy_.update (model, *player, world_, roles_, defense_, richNow, econ.metalMaxProd, turn);
+		// шаг 13, часть 3: коммандос (П2, П18) и авиация (П15–П17, П10)
+		const int bigFactories = countBuildings (*player, kIdFactory);
+		commando_.update (model, *player, world_, roles_, defense_, econ.metalMaxProd, bigFactories, turn);
+		air_.update (model, *player, world_, roles_, defense_, navy_, commando_, econ.metalMaxProd, bigFactories, turn);
+		commando_.setFerryAvailable (air_.counts().transports > 0);
 	}
 	minesToggled_.clear();
 	strategicDecisions (playerId, model, orders);
@@ -1505,7 +1513,8 @@ std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 		|| stats_.moveFire > 0 || stats_.kites > 0 || stats_.repairs > 0 || stats_.rearms > 0
 		|| stats_.bought > 0 || stats_.refitLoads > 0 || stats_.refits > 0
 		|| stats_.defenseBuilds > 0 || stats_.guardMoves > 0 || stats_.aaHolds > 0 || stats_.minesLaid > 0
-		|| navy_.mode() != cNavy::eMode::None || navy_.counts().fleetMetal > 0)
+		|| navy_.mode() != cNavy::eMode::None || navy_.counts().fleetMetal > 0
+		|| air_.program() != cAirForce::eProgram::None || air_.counts().planeMetal > 0 || commando_.counts().commandos > 0)
 	{
 		int visible = 0;
 		for (const auto& kv : world_.enemies())
@@ -1542,13 +1551,22 @@ std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 			+ "g/" + std::to_string (navy_.counts().subs) + "s/" + std::to_string (navy_.counts().transports) + "t yards "
 			+ std::to_string (navy_.counts().shipyards) + " docks " + std::to_string (navy_.counts().docks) + " landing "
 			+ navy_.landingStateName() + " cargo " + std::to_string (navy_.counts().cargo) + " landed " + std::to_string (navy_.counts().landed)
-			+ " waves " + std::to_string (navy_.counts().waves));
+			+ " waves " + std::to_string (navy_.counts().waves)
+			// шаг 13, часть 3: авиация и коммандос
+			+ " air " + air_.programName() + " planes " + std::to_string (air_.counts().awacs) + "a/" + std::to_string (air_.counts().bombers)
+			+ "b/" + std::to_string (air_.counts().fighters) + "f/" + std::to_string (air_.counts().transports) + "t airfac "
+			+ std::to_string (air_.counts().airFactories) + " hangars " + std::to_string (air_.counts().hangars) + " strikes "
+			+ std::to_string (air_.counts().strikes) + " hits " + std::to_string (air_.counts().hits) + " raids " + std::to_string (air_.counts().raids)
+			+ " commandos " + std::to_string (commando_.counts().commandos) + "/" + std::to_string (commando_.commandosWanted()) + " rank "
+			+ std::to_string (commando_.counts().maxRank) + " captures " + std::to_string (commando_.counts().captures) + " cdisables "
+			+ std::to_string (commando_.counts().disables) + " aliens " + std::to_string (commando_.counts().aliensKnown));
 	}
 	// шаг 11 (для шага 16): явное «стоять» с причиной и мир правил — в журнал хода
 	noteWorld (playerId, model, orders);
 	// шаг 11: второй заход — когда есть чем стрелять: после движения и выстрелов этого захода
 	// могут найтись цели, которые оставшиеся выстрелы убьют наверняка, и обнаруженные диверсанты
-	wantPass_ = !minesToggled_.empty() || navy_.wantsPass(); // шаг 13: минёр включил закладку — выключить в следующем заходе; флот — выгрузка
+	wantPass_ = !minesToggled_.empty() || navy_.wantsPass() // шаг 13: минёр включил закладку — выключить в следующем заходе; флот — выгрузка
+		|| air_.wantsPass() || commando_.wantsPass();          // шаг 13, ч. 3: второй выстрел, отход, налёт; коммандос подошёл — действовать
 	if (const cPlayer* player = model.getPlayer (playerId); player != nullptr && !player->isDefeated)
 		for (const auto& v : player->getVehicles())
 			if (v->getStaticUnitData().canAttack > 0 && v->data.getShotsMax() > 0 && !v->isDisabled() && !v->isUnitLoaded())
@@ -1570,6 +1588,8 @@ std::vector<nlohmann::json> cRuleBrain::takeJournalEvents()
 	auto events = ops_.takeEvents();
 	for (auto& e : defense_.takeEvents()) events.push_back (std::move (e)); // шаг 13: карта (П3) и оборона
 	for (auto& e : navy_.takeEvents()) events.push_back (std::move (e)); // шаг 13, часть 2: флот
+	for (auto& e : commando_.takeEvents()) events.push_back (std::move (e)); // шаг 13, часть 3: коммандос
+	for (auto& e : air_.takeEvents()) events.push_back (std::move (e)); // шаг 13, часть 3: авиация
 	for (auto& e : extraEvents_) events.push_back (std::move (e));
 	extraEvents_.clear();
 	return events;
@@ -1646,17 +1666,31 @@ std::vector<cOrder> cRuleBrain::decidePass (int playerId, const cModel& model, i
 	for (auto& o : navy_.planPass (model, *player, world_, roles_, pass)) out.push_back (std::move (o));
 	const auto& map = model.getMap();
 	cMapView view (map, sharedPlayerOf (model, playerId));
+	// шаг 13, часть 3: коммандос подошёл — выключить или захватить; авиация — налёт, второй выстрел, отход, высадка
+	for (auto& o : commando_.planPass (model, *player, view, world_, pass)) out.push_back (std::move (o));
+	for (auto& o : air_.planPass (model, *player, view, world_, roles_, commando_, pass)) out.push_back (std::move (o));
+	const bool modulesWant = air_.wantsPass() || commando_.wantsPass();
 	std::vector<sEnemy> enemies;
 	collectVisibleEnemies (*player, model, view, enemies);
-	if (enemies.empty()) return out;
+	if (enemies.empty())
+	{
+		wantPass_ = modulesWant;
+		return out;
+	}
 
 	// стрелки: свободные боевые машины с выстрелом и боезапасом (разведчики не стреляют — разведка)
 	std::vector<const cVehicle*> shooters;
 	for (const auto& v : player->getVehicles())
 		if (isIdle (*v) && isCombatUnit (*v) && v->data.getAmmo() > 0 && !v->isAttacking() && !v->isBeingAttacked()
-			&& roles_.roleOf (*v) != eRole::Scout && roles_.roleOf (*v) != eRole::Submarine) // шаг 13, ч. 2: подлодка стреляет только по кораблям (флот)
+			&& roles_.roleOf (*v) != eRole::Scout && roles_.roleOf (*v) != eRole::Submarine // шаг 13, ч. 2: подлодка стреляет только по кораблям (флот)
+			&& !air_.claimed (v->getId()) && !commando_.claimed (v->getId()) // шаг 13, ч. 3: самолёты и коммандос — свои модули
+			&& !isAirRole (roles_.roleOf (*v)) && roles_.roleOf (*v) != eRole::Commando)
 			shooters.push_back (v.get());
-	if (shooters.empty()) return out;
+	if (shooters.empty())
+	{
+		wantPass_ = modulesWant; // как прежде: стрелков нет — заход только ради модулей части 3
+		return out;
+	}
 	std::vector<bool> used (shooters.size(), false);
 
 	// кто бьёт цель e и сколько за выстрел (кассетная — не по цели, у которой рядом свои);
@@ -1733,7 +1767,7 @@ std::vector<cOrder> cRuleBrain::decidePass (int playerId, const cModel& model, i
 	}
 
 	// ещё заход — если стреляли: у стрелков могли остаться выстрелы, а поле изменилось
-	wantPass_ = !out.empty();
+	wantPass_ = !out.empty() || modulesWant;
 	if (!out.empty())
 		Log.info ("ai_rule p" + std::to_string (playerId) + " t" + std::to_string (world_.turn()) + " pass " + std::to_string (pass)
 			+ ": kills " + std::to_string (kills) + " infiltrator shots " + std::to_string (infiltratorShots)
@@ -1783,6 +1817,38 @@ void cRuleBrain::strategicDecisions (int playerId, const cModel& model, std::vec
 				credits -= cost;
 			}
 		}
+		// шаг 13, часть 3 (П10): дальность истребителя +1 за золото — вражеские истребители первыми получат урон, им дальше
+		// облетать зону поражения, а свои бьют и уходят в невидимость; (П2): обзор коммандос +1 — увидеть пехоту и коммандос
+		// врага раньше, чем они его, и обойти
+		auto buyOne = [&] (const sID& id, int kind, int have, int need, const char* why) {
+			if (have < need) return;
+			const cDynamicUnitData* cur = player->getLastUnitData (id);
+			if (cur == nullptr) return;
+			const cDynamicUnitData& orig = model.getUnitsData()->getDynamicUnitData (id, player->getClan());
+			const int curV = kind == 2 ? cur->getRange() : cur->getScan();
+			const int origV = kind == 2 ? orig.getRange() : orig.getScan();
+			if (curV > origV) return; // уже куплено (или исследовано)
+			std::array<int, 8> steps {};
+			steps[kind] = 1;
+			cUnitUpgrade upg;
+			int cost = 0;
+			if (!makeUnitUpgrade (model, *player, id, steps, upg, cost) || cost > credits) return;
+			cOrder o;
+			o.type = eOrderType::BuyUpgrades;
+			o.playerId = playerId;
+			o.unitType = {id.firstPart, id.secondPart};
+			o.upgradeSteps = steps;
+			o.upgradeCost = cost;
+			o.level = "strategy";
+			o.reason = why;
+			out.push_back (std::move (o));
+			stats_.bought += cost;
+			credits -= cost;
+		};
+		buyOne (roles_.typeFor (eRole::Fighter, "Plane"), 2, air_.counts().fighters, 2,
+			"buy upgrades: fighter range+1 (П10: enemy fighters take the first hit, ours strike and leave)");
+		buyOne (roles_.typeFor (eRole::Commando, "Human"), 6, commando_.counts().commandos, 2,
+			"buy upgrades: commando scan+1 (П2: see enemy infantry and commandos before they see us)");
 		for (const auto& p : tech_.purchases (model, *player, credits, income))
 		{
 			cOrder o;
@@ -2159,8 +2225,8 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			if (nFactory < 1) wants.push_back (kIdFactory);
 			if (energyShort && (stationHelps || stationByCut)) wants.push_back (kIdEnergy);
 			// шаг 13 (П7): учебный центр — пехота видит коммандос; ему нужен человек (жилой блок даёт 3)
-			const bool trainingWanted = defense_.wantTrainingHall() && consumersOk && totalOf (kIdTraining) < 1
-				&& (defense_.commandoAlarm() || rich); // без тревоги — из лишнего металла (склад ≥ 80%)
+			const bool trainingWanted = (defense_.wantTrainingHall() || commando_.wantTrainingHall()) && consumersOk && totalOf (kIdTraining) < 1
+				&& (defense_.commandoAlarm() || rich || commando_.wantTrainingHall()); // без тревоги — из лишнего металла (склад ≥ 80%); шаг 13, ч. 3 — коммандос (чужие, диверсия)
 			const bool habitatForTraining = trainingWanted
 				&& econ.humanFree + 3 * (totalOf (kIdHabitat) - countBuildings (*player, kIdHabitat)) < 1;
 			if (trainingWanted && defense_.commandoAlarm())
@@ -2179,6 +2245,11 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			// «берег» — после фабрик (из лишнего металла или в ответ на флот врага)
 			const bool yardOk = navy_.wantShipyard() && consumersOk && nFactory >= 1 && totalOf (kIdShipyard) < 1;
 			if (yardOk && navy_.shipyardEarly()) wants.push_back (kIdShipyard);
+			// шаг 13, часть 3 (п. 100): подлодки врага у нашей верфи и кораблей, или враг только за водой без моря у базы — авиазавод
+			// и ангар раньше шахт (бомбардировщик бьёт подлодку; ждать «экономики» — потерять верфь, как в части 2)
+			const bool airUrgent = air_.factoryUrgent() && consumersOk && nFactory >= 1;
+			if (airUrgent && air_.wantAirFactory() && totalOf (kIdAirFactory) < 1) wants.push_back (kIdAirFactory);
+			if (air_.factoryUrgent() && air_.wantHangar() && totalOf (kIdHangar) < 1) wants.push_back (kIdHangar);
 			// переработка — раньше шахт: после шахт строилась к ходу ~80 и стоила 0.035 D (отчёт §4)
 			if (consumersOk && nFactory >= kGoldMinFactories && nRefinery < refineryTarget) wants.push_back (kIdGoldRefinery);
 			if (site.valid()) wants.push_back (kIdMine);
@@ -2190,6 +2261,10 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 				wants.push_back (kIdTraining);
 			}
 			if (consumersOk && nFactory >= 1 && nFactory < factoryTarget) wants.push_back (kIdFactory);
+			// шаг 13, часть 3 (П15–П17, П10): авиазавод и ангар — после фабрик (экономика сначала: программа авиации
+			// включается по доходу и ходу, урок флота части 2)
+			if (air_.wantAirFactory() && consumersOk && nFactory >= 1 && totalOf (kIdAirFactory) < 1) wants.push_back (kIdAirFactory);
+			if (air_.wantHangar() && totalOf (kIdHangar) < 1) wants.push_back (kIdHangar);
 			if (yardOk && !navy_.shipyardEarly()) wants.push_back (kIdShipyard);
 			// шаг 13 (П4): депо — укрытие мобильного радара (и обновление машин)
 			if (defense_.wantDepot() && rich && consumersOk && nFactory >= 1 && totalOf (kIdDepot) < 1) wants.push_back (kIdDepot);
@@ -2473,7 +2548,8 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 	auto groundFactory = [] (const cBuilding& b) {
 		const auto& cb = b.getStaticUnitData().canBuild;
 		return cb == "BigGroundVehicle" || cb == "SmallGroundVehicle" || cb == "Human" // шаг 13: учебный центр — пехота
-			|| cb == "Ship"; // шаг 13, часть 2: верфь — корабли (ai_navy)
+			|| cb == "Ship"   // шаг 13, часть 2: верфь — корабли (ai_navy)
+			|| cb == "Plane"; // шаг 13, часть 3: авиазавод — самолёты (ai_air)
 	};
 	std::vector<cOrder> prodOrders; // после стройки: выехавший юнит не займёт площадку
 	// добыча металла упала (движок отдал мощность шахт нефти или золоту) и работающим
@@ -2525,11 +2601,28 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 		const std::string& kind = b.getStaticUnitData().canBuild;
 		// шаг 13, часть 2 (П11–П14): верфь — корабль по программе флота (ai_navy пишет в журнал, из чего выбирал)
 		if (kind == "Ship") return navy_.nextShip (model, *player, roles_, comp_, kind);
-		// шаг 13 (П7): учебный центр — пехота, пока постов охраны больше, чем пехоты (с очередью)
+		// шаг 13, часть 3 (П15–П17, П10): авиазавод — самолёт по программе авиации (ai_air пишет в журнал, из чего выбирал)
+		if (kind == "Plane") return air_.nextPlane (model, *player, roles_, comp_, kind);
+		// шаг 13 (П7): учебный центр — пехота, пока постов охраны больше, чем пехоты (с очередью); шаг 13, ч. 3 (П2) —
+		// коммандос по программе ai_commando (тревога «диверсант» — сначала пехота)
 		if (kind == "Human")
 		{
 			const sID inf = roles_.typeFor (eRole::Guard, kind);
-			if (inf == sID() || comp_.count (eRole::Guard) >= defense_.guardsWanted()) return sID();
+			const sID cmd = roles_.typeFor (eRole::Commando, kind);
+			const bool guardsShort = inf != sID() && comp_.count (eRole::Guard) < defense_.guardsWanted();
+			if (guardsShort && defense_.commandoAlarm())
+			{
+				comp_.noteQueued (roles_, inf);
+				return inf;
+			}
+			if (cmd != sID() && comp_.count (eRole::Commando) < commando_.commandosWanted())
+			{
+				comp_.noteQueued (roles_, cmd);
+				extraEvents_.push_back ({{"event", "commando"}, {"level", "operational"}, {"what", "build commando"},
+					{"have", comp_.count (eRole::Commando)}, {"want", commando_.commandosWanted()}, {"why", commando_.programWhy()}});
+				return cmd;
+			}
+			if (!guardsShort) return sID();
 			comp_.noteQueued (roles_, inf);
 			return inf;
 		}
@@ -2538,6 +2631,15 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			++konstruktQueued;
 			return kIdKonstrukt;
 		}
+		// шаг 13, часть 3 (П2): БМП — коммандос за воду, когда авиатранспорта нет (под водой её видит только корвет)
+		if (kind == "SmallGroundVehicle" && commando_.apcWanted() > comp_.count (eRole::Apc))
+			if (const sID apc = roles_.typeFor (eRole::Apc, kind); apc != sID())
+			{
+				comp_.noteQueued (roles_, apc);
+				extraEvents_.push_back ({{"event", "commando"}, {"level", "operational"}, {"what", "build apc"},
+					{"why", "commando target beyond water, no air transport: APC under water"}});
+				return apc;
+			}
 		const sID t = kind == "SmallGroundVehicle" ? comp_.nextSmall (roles_, kind) : comp_.nextBig (roles_, kind);
 		if (t != sID()) comp_.noteQueued (roles_, t);
 		return t;
@@ -2573,7 +2675,8 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			// ПВО по угрозе с воздуха — срочно: быстрая скорость, если металл хода есть
 			const bool urgent = roles_.roleOfType (first) == eRole::AntiAir
 				|| (roles_.roleOfType (first) == eRole::Guard && defense_.commandoAlarm()) // шаг 13: диверсант — охрана срочно
-				|| (roles_.roleOfType (first) == eRole::Corvette && navy_.counts().corvettes == 0); // шаг 13, ч. 2: первый корвет — охрана верфи
+				|| (roles_.roleOfType (first) == eRole::Corvette && navy_.counts().corvettes == 0) // шаг 13, ч. 2: первый корвет — охрана верфи
+				|| ((roles_.roleOfType (first) == eRole::Fighter || roles_.roleOfType (first) == eRole::Bomber) && air_.urgent()); // шаг 13, ч. 3
 			const int speed = ((speedUp || urgent) && budget >= factoryMetalPerRound (b, 1)) ? 1 : 0;
 			cOrder o;
 			o.type = eOrderType::ChangeBuildList;
@@ -3107,7 +3210,8 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 	std::vector<const cVehicle*> attackers;
 	for (const auto& vehicle : player->getVehicles())
 		if (isIdle (*vehicle) && isCombatUnit (*vehicle) && roles_.roleOf (*vehicle) != eRole::Scout && kite.count (vehicle->getId()) == 0
-			&& roles_.roleOf (*vehicle) != eRole::Submarine) // шаг 13, ч. 2: выстрел раскрывает подлодку — бьёт только корабли (флот)
+			&& roles_.roleOf (*vehicle) != eRole::Submarine // шаг 13, ч. 2: выстрел раскрывает подлодку — бьёт только корабли (флот)
+			&& !isAirRole (roles_.roleOf (*vehicle)) && roles_.roleOf (*vehicle) != eRole::Commando) // шаг 13, ч. 3: самолёты и коммандос — свои модули
 			attackers.push_back (vehicle.get());
 	const std::vector<int> focus = coordinateFocusFire (attackers, enemies, view, map.get());
 
@@ -3120,6 +3224,25 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 	opCtx.world = &world_;
 	opCtx.turn = world_.turn();
 	opCtx.roles = &roles_;
+	// шаг 13, часть 3 (П25): враг бьёт дальше, чем видит скаут (ракетная пушка 11 против обзора 9), а AWAC есть — разведку у
+	// зданий врага ведёт AWAC (и радары), скауты туда не ходят (их бьют из тумана)
+	std::vector<cPosition> scoutAvoid;
+	if (air_.counts().awacs > 0)
+	{
+		int scoutScan = 9;
+		if (const sID sc = roles_.typeFor (eRole::Scout, "SmallGroundVehicle"); sc != sID())
+			if (const auto* d = player->getLastUnitData (sc)) scoutScan = d->getScan();
+		int longest = 0;
+		for (const auto& kv : world_.enemies())
+			if (kv.second.building && kv.second.hitsGround()) longest = std::max (longest, kv.second.range);
+		if (longest > scoutScan)
+		{
+			for (const auto& kv : world_.enemies())
+				if (kv.second.building && kv.second.owner >= 0) scoutAvoid.push_back (kv.second.pos);
+			opCtx.scoutAvoid = &scoutAvoid;
+			opCtx.scoutAvoidR = longest + 2;
+		}
+	}
 	// шаг 13, часть 2: груз флота (к транспорту и в нём) и высаженные на чужую сушу — не армия своей суши
 	const int homeRegion = defense_.map().landRegion;
 	// на чужой суше: область танка клетки есть и не наша (амфибия на берегу или воде — области нет, она дома: Donuts —
@@ -3324,6 +3447,10 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 			for (size_t k = 0; k < cands.size() && static_cast<int> (k) < navy_.guardsWanted(); ++k) shipGuards.push_back (std::get<1> (cands[k]));
 		}
 	}
+	// шаг 13, часть 3: коммандос (П2, П18) — чужие, диверсия, налёт; авиация (П15–П17, П10) — AWAC, бомбардировщики,
+	// истребители, авиатранспорт, налёт «AWAC + коммандос + бомбардировщики»
+	commando_.plan (model, *player, view, world_, roles_, defense_, out);
+	air_.plan (model, *player, view, world_, roles_, defense_, commando_, out);
 	// задания операций армии (шаг 8) — машинам без приказа: огонь, отход, тревога и оперативка — раньше
 	std::map<unsigned int, sOpTask> opTasks;
 	{
@@ -3485,6 +3612,8 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 
 		const auto& sd = vehicle->getStaticUnitData();
 		const eRole role = roles_.roleOf (*vehicle);
+		// шаг 13, часть 3: самолёты и коммандос — приказы дали свои модули (ai_air, ai_commando)
+		if (air_.claimed (vehicle->getId()) || commando_.claimed (vehicle->getId()) || isAirRole (role)) continue;
 
 		// --- боевой юнит ---
 		if (isCombatUnit (*vehicle))

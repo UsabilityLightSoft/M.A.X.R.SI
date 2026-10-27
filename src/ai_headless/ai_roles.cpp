@@ -68,6 +68,12 @@ const char* roleName (eRole r)
 		case eRole::Submarine: return "submarine";
 		case eRole::SeaTransport: return "seatransport";
 		case eRole::NavalOther: return "navalother";
+		case eRole::Awac: return "awac";
+		case eRole::Bomber: return "bomber";
+		case eRole::Fighter: return "fighter";
+		case eRole::AirTransport: return "airtransport";
+		case eRole::AirOther: return "airother";
+		case eRole::Apc: return "apc";
 		case eRole::Other: return "other";
 		default: return "none";
 	}
@@ -87,12 +93,26 @@ eRole cRoleBook::classify (const cStaticUnitData& sd, int range, int scan, int s
 		if (shipArmed && (sd.canAttack & eTerrainFlag::Ground) != 0) return eRole::NavalGun;
 		return eRole::NavalOther;
 	}
+	// шаг 13, часть 3: самолёты — по способностям (П15–П17, П10)
+	if (sd.factorAir > 0)
+	{
+		const bool planeArmed = sd.canAttack != 0 && damage > 0 && range > 0 && shotsMax > 0;
+		if (sd.storageUnitsMax > 0) return eRole::AirTransport;
+		if (planeArmed && (sd.canAttack & (eTerrainFlag::Ground | eTerrainFlag::Sea | eTerrainFlag::AreaSub)) != 0) return eRole::Bomber;
+		if (planeArmed && (sd.canAttack & eTerrainFlag::Air) != 0) return eRole::Fighter;
+		if (!planeArmed && scan >= 2 * refScan_ + 2) return eRole::Awac;
+		return eRole::AirOther;
+	}
 	if (sd.vehicleData.canSurvey) return eRole::Surveyor;
 	// шаг 13: охрана базы — по способностям (данные), не по номерам типов
 	if (sd.vehicleData.canDisable || sd.vehicleData.canCapture) return eRole::Commando;
 	if (sd.vehicleData.isHuman) return eRole::Guard;
 	if (sd.vehicleData.canPlaceMines) return eRole::MineLayer;
 	const bool armed = sd.canAttack != 0 && damage > 0 && range > 0 && shotsMax > 0;
+	// шаг 13, часть 3 (П2): БМП — наземная машина без оружия, что возит пехоту (и коммандос)
+	if (!armed && sd.factorGround > 0 && sd.storageUnitsMax > 0
+		&& std::find (sd.storeUnitsTypes.begin(), sd.storeUnitsTypes.end(), "Human") != sd.storeUnitsTypes.end())
+		return eRole::Apc;
 	if (!armed && !sd.canRepair && !sd.canRearm && sd.factorAir == 0 && sd.factorGround > 0 && sd.storageUnitsMax == 0 && scan >= 2 * refScan_ + 4)
 		return eRole::Scanner; // мобильный радар: зоркий, без оружия и груза
 	if (!armed) return sd.canRepair ? eRole::Repair : (sd.canRearm ? eRole::Supply : eRole::Other);
@@ -136,11 +156,15 @@ void cRoleBook::build (const cModel& model, const cPlayer& player)
 	}
 	for (const auto& sd : ud.getStaticUnitsData())
 	{
-		if (!sd.ID.isAVehicle() || sd.isAlien) continue;
+		if (!sd.ID.isAVehicle()) continue;
 		const cDynamicUnitData* last = player.getLastUnitData (sd.ID);
 		if (last == nullptr) continue;
 		const cDynamicUnitData* dd = &ud.getDynamicUnitData (sd.ID, player.getClan());
-		roles_[sd.ID] = classify (sd, dd->getRange(), dd->getScan(), dd->getSpeedMax(), dd->getShotsMax(), dd->getDamage());
+		eRole r = classify (sd, dd->getRange(), dd->getScan(), dd->getSpeedMax(), dd->getShotsMax(), dd->getDamage());
+		// шаг 13, часть 3 (П2): техника чужих — только захваченная коммандос (своей фабрики у неё нет, typeFor её не
+		// выберет); вооружённая наземная — в строй как танк: броня 14 и самопочинка держат удар лучше любого нашего танка
+		if (sd.isAlien && isSupportRole (r)) r = eRole::Tank;
+		roles_[sd.ID] = r;
 		cost_[sd.ID] = last->getBuildCost(); // цена — текущая (исследование «стоимость»)
 		order_.push_back (sd.ID);
 	}
