@@ -816,7 +816,10 @@ void cAiClient::startGame (std::shared_ptr<cClient> c, bool newGame, bool tapped
 		say ("победил " + winnerName);
 		if (!gameOver) finishGame (winner.getId() == playerId ? "won" : "lost");
 	});
-	gameSignals.connect (model.suddenDeathMode, []() { say ("ничья по очкам — «внезапная смерть»: игра идёт до перевеса"); });
+	gameSignals.connect (model.playerHasDrawn, [this] (const cPlayer& drawnPlayer) {
+		say ("ничья по очкам: " + drawnPlayer.getName());
+		if (drawnPlayer.getId() == playerId && !gameOver) finishGame ("draw");
+	});
 	gameSignals.connect (model.playerHasLost, [this] (const cPlayer& loser) {
 		say ("проиграл " + loser.getName());
 		if (loser.getId() == playerId && !gameOver) finishGame ("defeated");
