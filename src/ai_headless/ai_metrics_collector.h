@@ -15,6 +15,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <filesystem>
 #include <map>
 #include <string>
 #include <vector>
@@ -66,7 +67,7 @@ public:
 	// итоги игрока для metrics.json (после finish)
 	nlohmann::json playerSummary (int playerId) const;
 	// ряд по ходам: строка JSON на ход
-	bool writeTurns (const std::string& path) const;
+	bool writeTurns (const std::filesystem::path& path) const;
 
 private:
 	struct sRes

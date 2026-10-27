@@ -6,6 +6,7 @@
 
 #include "ai_game_state.h"
 #include "ai_order_validator.h"
+#include "ai_paths.h"
 #include "ai_types.h"
 #include "ai_upgrades.h"
 
@@ -120,11 +121,11 @@ nlohmann::json orderToJson (const cOrder& o)
 
 } // namespace
 
-cAiEngine::cAiEngine (std::string outDir) :
+cAiEngine::cAiEngine (std::filesystem::path outDir) :
 	outDir_ (std::move (outDir)),
-	journal_ (outDir_ + "/journal.jsonl")
+	journal_ (outDir_ / "journal.jsonl")
 {
-	std::filesystem::create_directories (outDir_ + "/digest");
+	std::filesystem::create_directories (outDir_ / "digest");
 	if (!journal_.open())
 		Log.error ("ai_engine: cannot open journal " + journal_.getPath());
 
@@ -278,8 +279,8 @@ void cAiEngine::act (sCtx& ctx)
 	// в запрос советника она не идёт: там дайджест без неё)
 	auto digest = buildGameStateDigest (model, ctx.playerId);
 	digest["visibility"] = buildVisibility (model, ctx.playerId);
-	const std::string digestPath = outDir_ + "/digest/turn" + std::to_string (turn)
-		+ "_p" + std::to_string (ctx.playerId) + ".json";
+	const std::filesystem::path digestPath = outDir_ / "digest" / ("turn" + std::to_string (turn)
+		+ "_p" + std::to_string (ctx.playerId) + ".json");
 	std::ofstream digestFile (digestPath);
 	if (digestFile.is_open())
 	{
@@ -287,7 +288,7 @@ void cAiEngine::act (sCtx& ctx)
 		digestFile.close();
 	}
 	else
-		Log.error ("ai_engine: cannot write digest " + digestPath);
+		Log.error ("ai_engine: cannot write digest " + pathText (digestPath));
 
 	journal_.log ({{"event", "turn_start"}, {"player", ctx.playerId}, {"turn", turn},
 		{"brain", ctx.brain->name()}});
@@ -468,16 +469,16 @@ void cAiEngine::continuePass (sCtx& ctx, int turn)
 
 	// снимок захода — сжатый: машины и не свои или повреждённые здания (полный — в заходе 1)
 	const auto digest = buildPassDigest (model, ctx.playerId, ctx.pass);
-	const std::string dir = outDir_ + "/digest/passes";
+	const std::filesystem::path dir = outDir_ / "digest" / "passes";
 	std::error_code ec;
 	std::filesystem::create_directories (dir, ec);
-	const std::string path = dir + "/turn" + std::to_string (turn) + "_p" + std::to_string (ctx.playerId)
-		+ "_k" + std::to_string (ctx.pass) + ".json";
+	const std::filesystem::path path = dir / ("turn" + std::to_string (turn) + "_p" + std::to_string (ctx.playerId)
+		+ "_k" + std::to_string (ctx.pass) + ".json");
 	std::ofstream file (path);
 	if (file.is_open())
 		file << digest.dump() << "\n";
 	else
-		Log.error ("ai_engine: cannot write digest " + path);
+		Log.error ("ai_engine: cannot write digest " + pathText (path));
 
 	const auto brainStart = std::chrono::steady_clock::now();
 	const auto orders = ctx.brain->decidePass (ctx.playerId, model, ctx.pass);
@@ -783,16 +784,16 @@ void cAiEngine::writeMetrics (const sGameResult& result)
 	}
 	m["players"] = std::move (players);
 
-	const std::string path = outDir_ + "/metrics.json";
+	const std::filesystem::path path = outDir_ / "metrics.json";
 	std::ofstream f (path);
 	if (f.is_open())
 	{
 		f << m.dump (2) << "\n";
 		f.close();
-		Log.info ("ai_engine: metrics written to " + path);
+		Log.info ("ai_engine: metrics written to " + pathText (path));
 	}
 	else
-		Log.error ("ai_engine: cannot write metrics " + path);
+		Log.error ("ai_engine: cannot write metrics " + pathText (path));
 }
 
 sGameResult cAiEngine::finalize (eGameEnd end, int endTurn)
@@ -804,9 +805,9 @@ sGameResult cAiEngine::finalize (eGameEnd end, int endTurn)
 		result = decideGameResult (model, end, endTurn);
 		metrics_.finish (model, endTurn);
 		writeMetrics (result);
-		const std::string turnsPath = outDir_ + "/metrics_turns.jsonl";
+		const std::filesystem::path turnsPath = outDir_ / "metrics_turns.jsonl";
 		if (!metrics_.writeTurns (turnsPath))
-			Log.error ("ai_engine: cannot write " + turnsPath);
+			Log.error ("ai_engine: cannot write " + pathText (turnsPath));
 	}
 	journal_.close();
 	// шаг 13: время мозга — только в stdout (по часам: в журналы и метрики не идёт)

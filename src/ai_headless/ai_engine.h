@@ -16,6 +16,7 @@
 #include "utility/signal/signalconnectionmanager.h"
 
 #include <chrono>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <string>
@@ -31,8 +32,8 @@ struct cOrder;
 class cAiEngine
 {
 public:
-	// outDir — куда писать digest/, journal.jsonl, metrics.json.
-	explicit cAiEngine (std::string outDir);
+	// outDir — куда писать digest/, journal.jsonl, metrics.json (широкий путь: ai_paths.h).
+	explicit cAiEngine (std::filesystem::path outDir);
 	~cAiEngine();
 
 	// подключить AI-игрока (client + мозг). playerId == id игрока.
@@ -108,7 +109,7 @@ private:
 	void writeMetrics (const sGameResult& result);
 
 	std::vector<sCtx> players_;
-	std::string outDir_;
+	std::filesystem::path outDir_;
 	cDecisionJournal journal_;
 	long orderCounter_ = 0;
 	cMetricsCollector metrics_; // ряд по ходам — из модели первого игрока

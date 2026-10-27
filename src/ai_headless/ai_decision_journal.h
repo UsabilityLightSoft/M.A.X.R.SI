@@ -10,6 +10,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <filesystem>
 #include <fstream>
 #include <string>
 
@@ -18,10 +19,11 @@ namespace ai
 
 // Простой append-only JSONL-журнал. Небуферизованная запись строки целиком —
 // при обрыве процесса файл остаётся валидным до последней полной строки.
+// Путь — широкий (std::filesystem::path): каталог с русскими буквами (ai_paths.h).
 class cDecisionJournal
 {
 public:
-	explicit cDecisionJournal (std::string path) : path (std::move (path)) {}
+	explicit cDecisionJournal (std::filesystem::path path) : path (std::move (path)) {}
 
 	bool open()
 	{
@@ -40,10 +42,15 @@ public:
 
 	void close() { out.close(); }
 
-	const std::string& getPath() const { return path; }
+	// путь текстом UTF-8 — для журнала движка
+	std::string getPath() const
+	{
+		const auto text = path.u8string();
+		return std::string (text.begin(), text.end());
+	}
 
 private:
-	std::string path;
+	std::filesystem::path path;
 	std::ofstream out;
 };
 

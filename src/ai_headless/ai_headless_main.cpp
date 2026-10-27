@@ -65,6 +65,7 @@
 #include "ai_engine.h"
 #include "ai_external_brain.h"
 #include "ai_llm_advisor.h"
+#include "ai_paths.h"
 #include "ai_rule_brain.h"
 #include "ai_red_brain.h"
 #include "ai_scenario_brain.h"
@@ -626,7 +627,8 @@ try
 
 	const int maxTurns = argc > 1 ? std::atoi (argv[1]) : 10;
 	const std::string mapFile = argc > 2 ? argv[2] : "Delta.wrl";
-	const std::string outDir = argc > 3 ? argv[3] : "ai_out";
+	// каталог вывода — широким путём: и с русскими буквами (ai_paths.h, PLAN.md §7 п. 91)
+	const std::filesystem::path outDir = ai::argPath (argc, argv, 3, "ai_out");
 	// сторож: сколько мс без смены хода терпим до выхода. Дефолт 900000 (15 мин):
 	// на больших армиях проигрывание хода идёт в real-time (~9000 тиков × 10 мс ≈
 	// 90 с на ход), и 90-секундный лимит обрывал партию на ходе ~127.
@@ -734,8 +736,8 @@ try
 	// затирают друг друга), а net-лог (с debug — 7–14 МБ на партию) копится в
 	// <Документы>/maxr/log_files. cLog::setLogPath уже открытый файл не переоткрывает,
 	// поэтому пути из cSettings::setPaths для headless не действуют.
-	const std::string engineLogPath = outDir + "/maxr.log";
-	const std::string netLogPath = outDir + "/net.log";
+	const std::filesystem::path engineLogPath = outDir / "maxr.log";
+	const std::filesystem::path netLogPath = outDir / "net.log";
 	{
 		std::error_code ec;
 		std::filesystem::create_directories (outDir, ec);
@@ -943,10 +945,10 @@ try
 	std::shared_ptr<ai::cDecisionJournal> llmReplies; // полные ответы сервера (llm_replies.jsonl)
 	if (anyLlm)
 	{
-		llmJournal = std::make_shared<ai::cDecisionJournal> (outDir + "/llm.jsonl");
+		llmJournal = std::make_shared<ai::cDecisionJournal> (outDir / "llm.jsonl");
 		if (!llmJournal->open())
 			Log.error ("ai_headless: cannot open " + llmJournal->getPath());
-		llmReplies = std::make_shared<ai::cDecisionJournal> (outDir + "/llm_replies.jsonl");
+		llmReplies = std::make_shared<ai::cDecisionJournal> (outDir / "llm_replies.jsonl");
 		if (!llmReplies->open())
 			Log.error ("ai_headless: cannot open " + llmReplies->getPath());
 		llmReplies->log (gameInfo);

@@ -237,7 +237,7 @@ nlohmann::json cMetricsCollector::playerSummary (int playerId) const
 }
 
 //------------------------------------------------------------------------------
-bool cMetricsCollector::writeTurns (const std::string& path) const
+bool cMetricsCollector::writeTurns (const std::filesystem::path& path) const
 {
 	std::ofstream out (path);
 	if (!out.is_open()) return false;
