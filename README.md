@@ -8,10 +8,16 @@ as upstream ([License.md](License.md)).
 
 ## What is new
 
-- **AI player** AI-3.2 ([passport](si/AI_PASSPORT.md)): plays a whole game through fog of war — economy, research,
-  army operations, base defence, navy, aircraft (AWAC, bombers, fighters, air transport) and infiltrators. It joins a
-  normal network game as one more player (`maxr_ai_client`), so you can play against it alone or with friends. "Turn
-  based" mode only for now.
+- **AI player** `SI-R4.0-T` ([passport](si/AI_PASSPORT.md)): plays a whole game through fog of war — economy with
+  eco-spheres (a draw at the turn limit becomes a win on points), a smart surveyor, research, army operations, base
+  defence, navy with resupply at sea and sea mines, aircraft (AWAC, bombers, fighters, air transport) and infiltrators.
+  It joins a normal network game as one more player (`maxr_ai_client`), so you can play against it alone or with
+  friends. "Turn based" mode only for now; in the lobby it says in the chat why it is not ready and what to press.
+- **Speaking names of AI versions:** `SI-<type><generation>.<build>-<training>[+<advisor>]` — `SI-R4.0-T` is rules (R),
+  generation 4 (the 4th champion), build 0, tuned by tournaments (T); the frozen champions are `SI-R1` … `SI-R4`, with
+  an LLM advisor — `SI-R4.0-T+Lgemma4-12b`; the former AI-3.1 and AI-3.2 are `SI-R3.1-T` and `SI-R3.2-T`. The name is
+  the player name in the lobby and the greeting in the game chat (with the link to the passport), and it is written to
+  the journal and the metrics of every game. The full key — in the [passport](si/AI_PASSPORT.md).
 - **Engine fixes**, also offered upstream: free metal from factories, use of freed memory when a factory repeats its
   queue, endless turning of a shooter, crash after a cluster
   attack, factory started with nothing to build, workers counted twice, alien units outside the map, hidden units not
@@ -21,7 +27,10 @@ as upstream ([License.md](License.md)).
   landing (one credit per started 5 units of cargo), of big buildings, of transfers and of four more actions, non-latin
   paths and user names, the path search, a timer race at the end of a game; a detector searches by itself, a vehicle
   and an action wait for the step of an invisible unit; disabled aliens recover; two rules of the fork: a draw at the
-  same best score (as in M.A.X.) and a stolen vehicle noticed at the next turn of its owner.
+  same best score (as in M.A.X.) and a stolen vehicle noticed at the next turn of its owner. New: a resync restores the
+  client model in full — the cargo of transports and depots, the units of a live client, the unit versions after
+  research (fix 33); a saved game without GUI info no longer stops the dedicated server (fix 36); the self destruction
+  of a land or sea mine no longer crashes the game (fix 37).
 - **Seven large generated maps** up to 250×250 (`Gen_*`): continents, archipelago, straits, lakes, mixed and two sea
   maps with the bases at the coast (`Gen_Coast` — no way by land, `Gen_Gulf`).
 - `ai_headless` — AI against AI without a window (deterministic, for tournaments and training data).
@@ -29,7 +38,8 @@ as upstream ([License.md](License.md)).
 ## Play on Windows
 
 Download `M.A.X.R.SI-…-windows-x64.zip` from [Releases](../../releases), unzip it to a folder **without non-Latin
-letters in the path**, run `Играть против ИИИ.cmd` ("Play against the AI"), start a game and choose "Turn based".
+letters in the path**, run `Играть против ИИИ.cmd` ("Play against the AI"), start a game and choose "Turn based" (the
+AI tells in the lobby chat what to switch, if it is not ready).
 
 ## Build
 
@@ -40,17 +50,24 @@ a copy of upstream `develop`.
 
 M.A.X.R.SI — форк ремейка M.A.X.R. с **компьютерным противником (ИИИ)** и исправлениями движка. ИИИ играет целую
 партию сквозь туман войны и входит в обычную сетевую игру как ещё один игрок — можно играть против него одному или с
-друзьями (пока только режим «Turn based»). Скачать — [Releases](../../releases), распаковать в папку **без русских букв
-в пути**, запустить «Играть против ИИИ.cmd». Что умеет ИИИ — [паспорт](si/AI_PASSPORT.md).
+друзьями (пока только режим «По очереди»; если ИИИ не готов, он пишет в чат лобби почему и что нажать). Скачать —
+[Releases](../../releases), распаковать в папку **без русских букв в пути**, запустить «Играть против ИИИ.cmd». Что
+умеет ИИИ — [паспорт](si/AI_PASSPORT.md).
 
-В ветке `main` сейчас — ИИИ-3.2: к хозяйству, армии, обороне и флоту добавлены авиация (AWAC, бомбардировщики,
-истребители, авиатранспорт) и коммандос; чемпион по-прежнему поколение 3. Движок — правки 01–16 и вторая пачка 17–32:
-выключенный не стреляет и не работает (конструктор ставит стройку на паузу), карты обзора и дозора, сервер проверяет
-высадку (кредит за каждые начатые 5 единиц груза), большие здания, передачу и ещё четыре действия, пути и имя
-пользователя с русскими буквами, поиск пути, гонка таймера; сыщик ищет своим зрением; машина и действие ждут шага
+В ветке `main` — ИИИ `SI-R4.0-T`, поколение 4 (чемпион `base4`): против прежнего чемпиона `SI-R3` D = 0.736 по вердикту
+игры и 0.610 по материалу. К хозяйству, армии, обороне, флоту, авиации и коммандос добавлены эко-сферы и победа по очкам,
+умный геолог, снабжение флота в море и морские мины у верфи, AWAC в укрытии. **Имена версий говорящие:**
+`SI-<тип><поколение>.<сборка>-<обучение>[+<советник>]` — `SI-R4.0-T`: правила (R), поколение 4, сборка 0, настроен
+турнирами (T); замороженные чемпионы — `SI-R1` … `SI-R4`, с советником-LLM — `SI-R4.0-T+Lgemma4-12b`; прежние «ИИИ-3.1» и
+«ИИИ-3.2» — `SI-R3.1-T` и `SI-R3.2-T`. Имя видно в лобби (имя игрока), в приветствии в чате партии (со ссылкой на
+паспорт), в журнале и метриках каждой партии; расшифровка — в паспорте. Движок — правки 01–16, вторая пачка 17–32 и
+новые 33, 36, 37: выключенный не стреляет и не работает (конструктор ставит стройку на паузу), карты обзора и дозора,
+сервер проверяет высадку (кредит за каждые начатые 5 единиц груза), большие здания, передачу и ещё четыре действия, пути
+и имя пользователя с русскими буквами, поиск пути, гонка таймера; сыщик ищет своим зрением; машина и действие ждут шага
 невидимого; выключенные пришельцы просыпаются; правила форка — ничья при равенстве очков и угон, замеченный в начале
-хода хозяина. Карты — семь больших сгенерированных, из них две морские с базами у берега. Исправления движка
-предложены авторам M.A.X.R.
+хода хозяина; пересинхронизация восстанавливает модель клиента целиком (33); сохранение без сведений окна не
+останавливает выделенный сервер (36); самоуничтожение мины не роняет игру (37). Карты — семь больших сгенерированных, из
+них две морские с базами у берега. Исправления движка предложены авторам M.A.X.R.
 
 ---
 
