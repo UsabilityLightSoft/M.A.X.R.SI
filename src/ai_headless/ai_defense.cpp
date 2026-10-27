@@ -234,6 +234,19 @@ void cBaseDefense::updateMap (const cModel& model, const cPlayer& player, const 
 	}
 	m.enemyLand = ours > 0 ? 1 : (elsewhere > 0 ? 0 : -1);
 	const bool seaNear = m.seaDistance >= 0 && m.seaDistance <= kSeaNear;
+	// Р7 (п. 114): пути по суше к врагу нет (догадка по симметрии — пока его зданий не видели)
+	if (m.enemyLand == 0)
+		m.noLandPath = true;
+	else if (m.enemyLand < 0 && m.landRegion >= 0)
+	{
+		const cPosition opp (W_ - 1 - home.x(), H_ - 1 - home.y());
+		int oppRegion = -1;
+		for (int r = 0; r <= 4 && oppRegion < 0; ++r)
+			for (int dy = -r; dy <= r && oppRegion < 0; ++dy)
+				for (int dx = -r; dx <= r && oppRegion < 0; ++dx)
+					if (std::max (std::abs (dx), std::abs (dy)) == r) oppRegion = world.tankRegionOf (opp + cPosition (dx, dy));
+		m.noLandPath = oppRegion >= 0 && oppRegion != m.landRegion;
+	}
 	if (m.enemyLand == 1)
 	{
 		m.emphasis = "land";

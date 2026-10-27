@@ -423,6 +423,8 @@ constexpr int kRetreatToRepairer = 6;
 // малая фабрика: когда добыча металла главной базы не меньше; таких фабрик не больше
 constexpr int kSmallFactoryIncome = 10;
 constexpr int kMaxSmallFactories = 1;
+// Р7 (п. 114): пути по суше к врагу нет — сухопутной армии сверх этого (с очередью) — только из лишнего металла
+constexpr int kLandArmyCap = 16;
 // Р7 (п. 94): план эко-сферы не начался за столько ходов — снять, площадку не брать kEcoBadSiteTurns ходов
 constexpr int kEcoPlanStale = 12;
 constexpr int kEcoBadSiteTurns = 40;
@@ -1016,7 +1018,10 @@ const cBuilding* trappingBuilding (const cMap& map, const cPlayer& player, const
 			const cPosition c = pos + cPosition (dx, dy);
 			if (!map.isValidPosition (c)) continue;
 			for (const cBuilding* b : map.getField (c).getBuildings())
-				if (b->getOwner() == &player && !b->getIsBig() && b->getStaticData().canSelfDestroy && !b->isBeingAttacked())
+				if (b->getOwner() == &player && !b->getIsBig() && b->getStaticData().canSelfDestroy && !b->isBeingAttacked()
+					// Р7: не мину (самоуничтожение мины — взрыв по своей клетке; в Р7 своя морская мина у верфи рядом с
+					// конструктором на берегу роняла движок) и не постройку на воде — наземному стройщику туда не проехать
+					&& !b->getStaticData().explodesOnContact && !map.isWater (c))
 					return b;
 		}
 	return nullptr;
@@ -2649,9 +2654,12 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 	{
 		const cVehicle& v = *vp;
 		const eRole vr = roles_.roleOf (v);
-		// шаг 13 (П8): минёр тоже берёт металл у базы (мина — единица металла), пока поле не заложено
-		if ((vr != eRole::Repair && vr != eRole::Supply && vr != eRole::MineLayer) || !isIdle (v) || main == nullptr) continue;
+		// шаг 13 (П8): минёр тоже берёт металл у базы (мина — единица металла), пока поле не заложено; Р7 (п. 113, 117) — и
+		// грузовое судно (боезапас флоту в море), и морской минёр (мины у верфи) — у верфи и зданий базы у воды
+		if ((vr != eRole::Repair && vr != eRole::Supply && vr != eRole::MineLayer && vr != eRole::SeaSupply && vr != eRole::SeaMineLayer)
+			|| !isIdle (v) || main == nullptr) continue;
 		if (vr == eRole::MineLayer && defense_.mineField().empty()) continue;
+		if (vr == eRole::SeaMineLayer && navy_.seaMineField().empty()) continue;
 		const int cap = v.getStaticUnitData().storageResMax;
 		const int stored = v.getStoredResources();
 		if (stored >= cap) continue;
@@ -2738,6 +2746,17 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 	const bool speedUp = richNow && allWorking && !buildersStarved;
 	const int nKonstrukt = countVehicles (*player, kIdKonstrukt);
 	const int konstruktTarget = econ.metalMaxProd >= 20 ? 3 : 2;
+	// Р7 (п. 114): армия своей суши и враг на ней (вооружённые машины, виденные недавно) — для «пути по суше нет»
+	const int armyNow = comp_.count (eRole::Tank) + comp_.count (eRole::Assault) + comp_.count (eRole::Artillery) + comp_.count (eRole::Missile);
+	bool enemyOnOurLand = false;
+	if (navy_.landLocked())
+		for (const auto& kv : world_.enemies())
+			if (!kv.second.building && kv.second.armed() && world_.age (kv.second) <= 10
+				&& world_.tankRegionOf (kv.second.pos) == defense_.map().landRegion)
+			{
+				enemyOnOurLand = true;
+				break;
+			}
 	int konstruktQueued = 0;
 	for (const auto& b : player->getBuildings())
 		if (groundFactory (*b))
@@ -2788,6 +2807,18 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 					{"why", "commando target beyond water, no air transport: APC under water"}});
 				return apc;
 			}
+		// Р7 (п. 114): пути по суше к врагу нет — сухопутная армия по нужде обороны (враг на нашей суше), сверх kLandArmyCap —
+		// только из лишнего металла (склад ≥ 80%): металл — флоту и авиации, а не сотням танков без дороги
+		if (kind != "SmallGroundVehicle" && navy_.landLocked() && !rich && !enemyOnOurLand && armyNow >= kLandArmyCap)
+		{
+			if (!landCapNoted_)
+			{
+				landCapNoted_ = true;
+				extraEvents_.push_back ({{"event", "navy"}, {"level", "operational"}, {"what", "land army cap"}, {"army", armyNow},
+					{"cap", kLandArmyCap}, {"why", "no land path to the enemy: the land army only for defence, metal to the fleet and air"}});
+			}
+			return sID();
+		}
 		const sID t = kind == "SmallGroundVehicle" ? comp_.nextSmall (roles_, kind) : comp_.nextBig (roles_, kind);
 		if (t != sID()) comp_.noteQueued (roles_, t);
 		return t;

@@ -54,6 +54,10 @@ constexpr int kSpotRange = 5;       // корректировщик (подло�
 constexpr int kCorvetteGuardR = 4;  // корвет охраны — не дальше от охраняемого (Чебышёв)
 constexpr int kYardIncome = 30;     // упор «море»: верфь — с добычи металла в ход (экономика сначала)
 constexpr int kYardTurn = 220;      // или с этого хода (бедная сторона — экономика важнее)
+constexpr int kEarlyYardSea = 8;    // Р7 (п. 114): пути по суше нет, море не дальше от базы — верфь раньше…
+constexpr int kEarlyYardIncome = 16; // …с добычи (своя шахта сверх стартовой)…
+constexpr int kEarlyYardTurn = 60;  // …или с этого хода
+constexpr int kSeaMines = 10;       // Р7 (п. 117): морских мин у верфи — не больше
 constexpr int kReconWaves = 1;      // разведка высадкой (один разведчик) — один раз за партию
 constexpr int kTankWaves = 2;       // волн десанта бойцами — не больше за партию
 constexpr int kSoftRadius = 10;     // «мягкая» цель высаженных: вооружённых врагов не ближе (клеток)
@@ -291,12 +295,15 @@ void cNavy::update (const cModel& model, const cPlayer& player, const cWorldMode
 	}
 	// корабли по ролям
 	const int landed = counts_.landed, waves = counts_.waves, cargo = counts_.cargo, recon = counts_.reconWaves, tank = counts_.tankWaves;
+	const int emptyTurns = counts_.emptyShipTurns + counts_.emptyShips, rearms = counts_.rearmOrders; // Р7: за партию
 	counts_ = {};
 	counts_.reconWaves = recon;
 	counts_.tankWaves = tank;
 	counts_.landed = landed;
 	counts_.waves = waves;
 	counts_.cargo = cargo;
+	counts_.emptyShipTurns = emptyTurns;
+	counts_.rearmOrders = rearms;
 	for (const auto& v : player.getVehicles())
 	{
 		const eRole r = roles.roleOf (*v);
@@ -307,6 +314,7 @@ void cNavy::update (const cModel& model, const cPlayer& player, const cWorldMode
 			case eRole::NavalGun: ++counts_.guns; break;
 			case eRole::Submarine: ++counts_.subs; break;
 			case eRole::SeaTransport: ++counts_.transports; break;
+			case eRole::SeaSupply: ++counts_.supplies; ++counts_.other; break;
 			default: ++counts_.other; break;
 		}
 		counts_.fleetMetal += v->data.getBuildCost();
@@ -404,8 +412,63 @@ void cNavy::update (const cModel& model, const cPlayer& player, const cWorldMode
 	modeWhy_ = why;
 	// верфь — когда экономика поднялась: враг за водой нас тоже не достанет, спешить некуда, а металл ранних
 	// ходов — шахтам (по доходу — от 20, иначе с хода 100; «берег» — уже из лишнего металла)
+	// Р7 (п. 114): пути по суше к врагу нет, а море у самой базы — верфь раньше (с первой шахты сверх стартовой или с хода 60) и
+	// раньше прочих шахт: иначе сотни танков без дороги (Gen_Coast: верфь на 120–270-м ходу, в 7 партиях из 16 — не раньше 390-го)
+	const char* llOff = std::getenv ("MAXR_LANDLOCK"); // опыт «вариант против варианта»: MAXR_LANDLOCK=0 — как до Р7
+	const bool landLocked = mode_ == eMode::Sea && mp.noLandPath && !(llOff != nullptr && llOff[0] == '0');
+	if (landLocked != landLocked_)
+		event ("land locked", {{"on", landLocked}, {"seaDistance", mp.seaDistance}, {"enemyLand", mp.enemyLand},
+			{"why", landLocked ? (mp.enemyLand == 0 ? "enemy buildings seen only beyond water" : "enemy not seen: the point opposite our base is on other land")
+							   : "a land path to the enemy exists (or no sea program)"}});
+	landLocked_ = landLocked;
+	early_ = landLocked_ && mp.seaDistance >= 0 && mp.seaDistance <= kEarlyYardSea && shipyards_.empty();
 	wantShipyard_ = mode_ != eMode::None && shipyards_.empty()
-		&& (mode_ == eMode::Coast || income >= kYardIncome || turn_ >= kYardTurn || enemyShipMetal_ > 0);
+		&& (mode_ == eMode::Coast || income >= kYardIncome || turn_ >= kYardTurn || enemyShipMetal_ > 0
+			|| (early_ && (income >= kEarlyYardIncome || turn_ >= kEarlyYardTurn)));
+	// Р7 (п. 117): морские мины у своей верфи — страховка, пока флот мал: подлодки врага топят свежую верфь раньше корветов и
+	// бомбардировщиков (мина бьёт подлодку, своим кораблям не мешает). Нужны при своей верфи и угрозе с моря (корабли, подлодки
+	// или верфь врага, упор «море»)
+	{
+		const char* off = std::getenv ("MAXR_SEAMINES"); // опыт «вариант против варианта»: MAXR_SEAMINES=0 — без мин
+		const bool threat = enemySubs_ > 0 || enemyShipMetal_ > 0 || defense.enemyShipyardSeen() || mode_ == eMode::Sea;
+		const bool want = !(off != nullptr && off[0] == '0') && yardPos_.x() >= 0 && threat;
+		if (want != wantSeaMines_)
+		{
+			seaMinesWhy_ = want ? (enemySubs_ > 0 ? "enemy subs seen" : (enemyShipMetal_ > 0 || defense.enemyShipyardSeen() ? "enemy fleet or shipyard seen"
+																		  : "sea program: the enemy comes by sea"))
+							   : "no shipyard or no threat from the sea";
+			event ("sea mines", {{"on", want}, {"why", seaMinesWhy_}, {"yard", {yardPos_.x(), yardPos_.y()}}});
+		}
+		wantSeaMines_ = want;
+		seaMineField_.clear();
+		if (wantSeaMines_)
+		{
+			// кольцо воды 2–3 клетки вокруг верфи (2×2), через клетку (шахматкой — свои корабли и так проходят, а чужая подлодка у
+			// верфи на мину наступит), не больше kSeaMines; клетки со своей миной — уже заложены
+			std::vector<std::pair<long long, cPosition>> cells;
+			int laid = 0;
+			for (int dy = -3; dy <= 4; ++dy)
+				for (int dx = -3; dx <= 4; ++dx)
+				{
+					const cPosition c = yardPos_ + cPosition (dx, dy);
+					const int r = std::max ({-dx, dx - 1, -dy, dy - 1}); // Чебышёв до 2×2 верфи
+					if (r < 2 || r > 3 || !map.isValidPosition (c) || !map.isWater (c)) continue;
+					if (((c.x() + c.y()) & 1) != 0) continue;
+					bool mine = false, other = false;
+					for (const cBuilding* b : map.getField (c).getBuildings())
+					{
+						if (b->getStaticUnitData().buildingData.explodesOnContact && b->getOwner() == &player) mine = true;
+						else other = true;
+					}
+					if (mine) ++laid;
+					if (mine || other) continue;
+					cells.emplace_back (static_cast<long long> (r) * 100000 + static_cast<long long> (c.y()) * W_ + c.x(), c);
+				}
+			std::sort (cells.begin(), cells.end(), [] (const auto& a, const auto& b) { return a.first < b.first; });
+			for (const auto& c : cells)
+				if (laid + static_cast<int> (seaMineField_.size()) < kSeaMines) seaMineField_.push_back (c.second);
+		}
+	}
 	const int armed = counts_.corvettes + counts_.guns + counts_.subs;
 	bool damaged = false;
 	for (const auto& v : player.getVehicles())
@@ -451,8 +514,13 @@ sID cNavy::nextShip (const cModel& model, const cPlayer& player, const cRoleBook
 		// сначала — охрана верфи и разведка (найти врага), потом охрана транспорта и транспорт; канонерок больше —
 		// только когда есть что обстреливать (здания врага у нашей воды): флот без целей — металл впустую
 		steps.push_back ({eRole::Corvette, 1, "guard the shipyard: only corvettes see subs"});
+		if (wantSeaMines_ && !seaMineField_.empty()) // Р7 (п. 117)
+			steps.push_back ({eRole::SeaMineLayer, 1, "sea mines around the shipyard: insurance while the fleet is small (a mine hits a sub)"});
 		steps.push_back ({eRole::Submarine, 1, "hidden scout: find the enemy, spot for gunboats"});
 		steps.push_back ({eRole::NavalGun, 2, "escort the transport, bombard the shore"});
+		// Р7 (п. 113): грузовое судно — пополняет боезапас в море (канонерка пуста после 7 ходов огня; Владыка: «корабли
+		// перезаряжаются в море, а не в доке»)
+		steps.push_back ({eRole::SeaSupply, 1, "cargo ship: rearm the fleet at sea (a gunboat is empty after 7 turns of fire)"});
 		steps.push_back ({eRole::SeaTransport, 1, "landing on the enemy land (6 vehicles)"});
 		if (coastTargets_ > 0)
 		{
@@ -460,17 +528,27 @@ sID cNavy::nextShip (const cModel& model, const cPlayer& player, const cRoleBook
 			steps.push_back ({eRole::NavalGun, 4, "enemy buildings within gunboat range of our sea: bombard"});
 			steps.push_back ({eRole::Submarine, 2, "spot for gunboats, hunt enemy ships"});
 			steps.push_back ({eRole::NavalGun, 6, "enemy buildings within gunboat range of our sea: bombard"});
+			steps.push_back ({eRole::SeaSupply, 2, "cargo ship: rearm 6 gunboats at sea"});
 		}
 	}
 	else
 	{
 		steps.push_back ({eRole::Corvette, 1, "coast guard: only corvettes see subs"});
+		if (wantSeaMines_ && !seaMineField_.empty()) // Р7 (п. 117)
+			steps.push_back ({eRole::SeaMineLayer, 1, "sea mines around the shipyard: insurance while the fleet is small (a mine hits a sub)"});
 		if (coastTargets_ > 0)
 		{
 			steps.push_back ({eRole::Submarine, 1, "spotter for gunboats (a gunboat sees 4, hits 7)"});
 			steps.push_back ({eRole::NavalGun, 2, "enemy buildings within gunboat range of our sea"});
+			steps.push_back ({eRole::SeaSupply, 1, "cargo ship: rearm the fleet at sea"});
 		}
 	}
+	// П11 ответ на флот врага (канонерки 2 + металл/36) тоже стреляет — судно, когда канонерок от двух
+	if (enemyShipMetal_ > 0 && comp.count (eRole::NavalGun) >= 2)
+		steps.push_back ({eRole::SeaSupply, 1, "cargo ship: rearm the gunboats that fight enemy ships"});
+	// опыт «вариант против варианта»: MAXR_SEASUPPLY=0 — без грузового судна (как до Р7)
+	if (const char* off = std::getenv ("MAXR_SEASUPPLY"); off != nullptr && off[0] == '0')
+		steps.erase (std::remove_if (steps.begin(), steps.end(), [] (const sStep& s) { return s.role == eRole::SeaSupply; }), steps.end());
 	nlohmann::json options = nlohmann::json::array();
 	for (const auto& s : steps) options.push_back ({roleName (s.role), comp.count (s.role), s.want});
 	for (const auto& s : steps)
@@ -1214,6 +1292,22 @@ void cNavy::plan (const cModel& model, const cPlayer& player, const cMapView& vi
 				++counts_.dockOrders;
 				continue;
 			}
+			// Р7 (п. 113): пустой — боезапас внутри (за металл подбазы), потом выход
+			if (s->data.getAmmoMax() > 0 && s->data.getAmmo() < s->data.getAmmoMax())
+			{
+				if (!metal) continue;
+				cOrder o;
+				o.type = eOrderType::Rearm;
+				o.playerId = playerId_;
+				o.unitId = dock->getId();
+				o.unitId2 = s->getId();
+				o.level = "micro";
+				o.reason = "navy: rearm the ship in the dock";
+				out.push_back (std::move (o));
+				++counts_.dockOrders;
+				++counts_.rearmOrders;
+				continue;
+			}
 			for (const auto& c : ringOf (dock->getPosition(), dock->getIsBig()))
 			{
 				if (!map.isValidPosition (c) || reservedCell (c) || !dock->canExitTo (c, map, s->getStaticUnitData())) continue;
@@ -1317,6 +1411,7 @@ void cNavy::plan (const cModel& model, const cPlayer& player, const cMapView& vi
 			{
 				if (ud.getDynamicUnitData (id).getBuildCost() <= 2) return 0; // соединители, дороги, мины
 				if (m.armed() && m.range >= kGunboatReach) return 0;
+				if (sd.buildingData.canScore) return 8; // Р7: эко-сфера — первая цель: уничтоженная теряет все свои очки
 				if (sd.canBuild == "Ship" || std::find (sd.storeUnitsTypes.begin(), sd.storeUnitsTypes.end(), "Ship") != sd.storeUnitsTypes.end()) return 6;
 				if (sd.buildingData.canMineMaxRes > 0) return 5;
 				if (sd.produceEnergy > 0 || !sd.canBuild.empty()) return 4;
@@ -1368,6 +1463,142 @@ void cNavy::plan (const cModel& model, const cPlayer& player, const cMapView& vi
 		}
 		if (strikeTarget_ != 0) strikePos_ = world.enemies().at (strikeTarget_).pos;
 		else strikePos_ = cPosition (-1, -1);
+	}
+
+	// 3½) Р7 (п. 113): снабжение в море. Грузовое судно пополняет боезапас соседним кораблям (приказ Rearm — единица металла
+	//     из трюма за полный боезапас) и идёт к пустым — к фронту, на клетку вне досягаемости врага; трюм почти пуст —
+	//     металл у верфи (оперативка правил, как у снабженцев армии). Пустой корабль (боезапаса меньше залпа) не стоит у цели:
+	//     к судну, нет судна — в док, нет дока — к верфи (туда придёт судно). Владыка 27.10.2026: «корабли перезаряжаются в
+	//     море, а не в доке».
+	{
+		auto ammoShort = [] (const cVehicle& v) { return v.data.getAmmoMax() > 0 && v.data.getAmmo() < std::max (1, v.data.getShotsMax()); };
+		std::vector<const cVehicle*> supplies;
+		for (const cVehicle* o : others)
+			if (roles.roleOf (*o) == eRole::SeaSupply && !isBusy (o->getId())) supplies.push_back (o);
+		std::vector<const cVehicle*> needy; // кому нужен боезапас: меньше доли — раньше, при равенстве — по id
+		for (auto* group : {&corvettes, &guns, &subs})
+			for (const cVehicle* v : *group)
+				if (v->data.getAmmoMax() > 0 && v->data.getAmmo() < v->data.getAmmoMax()) needy.push_back (v);
+		std::sort (needy.begin(), needy.end(), [] (const cVehicle* a, const cVehicle* b) {
+			const long long ka = static_cast<long long> (a->data.getAmmo()) * b->data.getAmmoMax();
+			const long long kb = static_cast<long long> (b->data.getAmmo()) * a->data.getAmmoMax();
+			return ka != kb ? ka < kb : a->getId() < b->getId();
+		});
+		for (auto* group : {&corvettes, &guns, &subs})
+			for (const cVehicle* v : *group)
+				if (ammoShort (*v)) ++counts_.emptyShips;
+		std::set<unsigned int> rearmed;
+		for (const cVehicle* s : supplies)
+		{
+			int metal = s->getStoredResources();
+			bool acted = false;
+			for (const cVehicle* d : needy)
+			{
+				if (metal <= 0) break;
+				if (rearmed.count (d->getId()) != 0 || !s->canSupply (d, eSupplyType::REARM)) continue;
+				cOrder o;
+				o.type = eOrderType::Rearm;
+				o.playerId = playerId_;
+				o.unitId = s->getId();
+				o.unitId2 = d->getId();
+				o.level = "micro";
+				o.reason = "navy: cargo ship rearms " + d->getStaticUnitData().getDefaultName() + " at sea";
+				out.push_back (std::move (o));
+				rearmed.insert (d->getId());
+				++counts_.rearmOrders;
+				--metal;
+				acted = true;
+			}
+			markBusy (s->getId());
+			if (acted || metal <= 0) continue; // без металла — оперативка ведёт к верфи за металлом
+			// к самому пустому кораблю, которому ещё не дали боезапас, — на клетку рядом вне досягаемости врага
+			const cVehicle* target = nullptr;
+			for (const cVehicle* d : needy)
+				if (rearmed.count (d->getId()) == 0 && d->data.getAmmo() * 2 < d->data.getAmmoMax() && cheb (d->getPosition(), s->getPosition()) <= 40)
+				{
+					target = d;
+					break;
+				}
+			cPosition dest (-1, -1);
+			const char* why = "cargo ship to an empty ship";
+			if (target != nullptr)
+			{
+				if (cheb (target->getPosition(), s->getPosition()) <= 1) continue; // рядом — пополнит, когда тот встанет
+				dest = freeNear (view, world, *s, target->getPosition(), 1, 2, 0);
+			}
+			else if (!guns.empty())
+			{
+				// у канонерок (фронт), чуть позади: там понадобится
+				long long sx = 0, sy = 0;
+				for (const cVehicle* g : guns)
+				{
+					sx += g->getPosition().x();
+					sy += g->getPosition().y();
+				}
+				const long long n = static_cast<long long> (guns.size());
+				const cPosition c (static_cast<int> (sx / n), static_cast<int> (sy / n));
+				if (cheb (c, s->getPosition()) > 4) dest = freeNear (view, world, *s, c, 2, 5, 0);
+				why = "cargo ship keeps near the gunboats";
+			}
+			else if (cheb (s->getPosition(), home) > 6)
+			{
+				dest = freeNear (view, world, *s, home, 2, 5, 0);
+				why = "cargo ship waits at the shipyard";
+			}
+			const size_t b0 = out.size();
+			if (dest.x() >= 0 && moveTo (*s, view, world, dest, eThreatLayer::Fire, why, out)) took (b0);
+		}
+		// пустые корабли: к судну с металлом, нет — в док, нет — к верфи
+		int dockRoom = dock != nullptr ? static_cast<int> (dock->getStaticUnitData().storageUnitsMax) - static_cast<int> (dock->storedUnits.size()) : 0;
+		for (auto* group : {&guns, &corvettes, &subs})
+			for (const cVehicle* v : *group)
+			{
+				if (isBusy (v->getId()) || !ammoShort (*v) || rearmed.count (v->getId()) != 0) continue;
+				const cVehicle* sup = nullptr;
+				for (const cVehicle* s : supplies)
+					if (s->getStoredResources() > 0 && (sup == nullptr || cheb (s->getPosition(), v->getPosition()) < cheb (sup->getPosition(), v->getPosition())))
+						sup = s;
+				if (sup != nullptr)
+				{
+					markBusy (v->getId());
+					if (cheb (sup->getPosition(), v->getPosition()) <= 1) continue; // рядом — судно пополнит
+					const cPosition c = freeNear (view, world, *v, sup->getPosition(), 1, 2, 0);
+					const size_t b0 = out.size();
+					if (moveTo (*v, view, world, c, eThreatLayer::Fire, "empty ship to the cargo ship", out)) took (b0);
+					continue;
+				}
+				if (dock != nullptr && dockRoom > 0)
+				{
+					markBusy (v->getId());
+					if (dock->isNextTo (v->getPosition()))
+					{
+						if (!dock->canLoad (v)) continue;
+						cOrder o;
+						o.type = eOrderType::Load;
+						o.playerId = playerId_;
+						o.unitId = dock->getId();
+						o.unitId2 = v->getId();
+						o.level = "micro";
+						o.reason = "navy: empty ship into the dock (rearm)";
+						out.push_back (std::move (o));
+						--dockRoom;
+						++counts_.dockOrders;
+						continue;
+					}
+					const size_t b0 = out.size();
+					if (moveTo (*v, view, world, freeNear (view, world, *v, dock->getPosition(), 1, 2, 0), eThreatLayer::Fire, "empty ship to the dock", out))
+					{
+						took (b0);
+						--dockRoom;
+					}
+					continue;
+				}
+				// ни судна, ни дока — у верфи (туда придёт судно), а не у цели
+				markBusy (v->getId());
+				if (cheb (v->getPosition(), home) <= 6) continue;
+				const size_t b0 = out.size();
+				if (moveTo (*v, view, world, freeNear (view, world, *v, home, 2, 5, 0), eThreatLayer::Fire, "empty ship back to the shipyard", out)) took (b0);
+			}
 	}
 
 	// 4) подлодки (П12): охота на корабли, транспорты, верфь и постройки на воде врага (выстрел раскрывает —
@@ -1664,6 +1895,45 @@ void cNavy::plan (const cModel& model, const cPlayer& player, const cMapView& vi
 		}
 	}
 
+	// 6½) Р7 (п. 117): морской минёр — мины у своей верфи: на клетке поля вне угрозы — включить закладку (мина ложится сразу),
+	//     в следующем заходе выключить (иначе мина ляжет на каждой клетке пути); иначе — к ближайшей клетке поля; без металла
+	//     оперативка ведёт его к базе
+	for (const cVehicle* o : others)
+	{
+		if (roles.roleOf (*o) != eRole::SeaMineLayer || isBusy (o->getId())) continue;
+		if (o->isUnitLayingMines() || seaMineField_.empty() || o->getStoredResources() <= 0) continue; // к верфи — ниже (7)
+		markBusy (o->getId());
+		const cPosition up = o->getPosition();
+		if (std::find (seaMineField_.begin(), seaMineField_.end(), up) != seaMineField_.end() && seaDanger (up) == 0)
+		{
+			cOrder ord;
+			ord.type = eOrderType::ToggleLayMines;
+			ord.playerId = playerId_;
+			ord.unitId = o->getId();
+			ord.level = "micro";
+			ord.reason = "navy: sea minelayer lays a mine around the shipyard";
+			out.push_back (std::move (ord));
+			minesToggled_.push_back (o->getId());
+			++seaMinesLaid_;
+			wantPass_ = true;
+			continue;
+		}
+		cPosition best (-1, -1);
+		long long bestD = std::numeric_limits<long long>::max();
+		for (const auto& c : seaMineField_)
+		{
+			if (seaDanger (c) > 0 || reservedCell (c) || (c != up && !view.possiblePlace (*o, c))) continue;
+			const long long d = dist2 (c, up);
+			if (d < bestD)
+			{
+				bestD = d;
+				best = c;
+			}
+		}
+		const size_t b0 = out.size();
+		if (best.x() >= 0 && moveTo (*o, view, world, best, eThreatLayer::Fire, "sea minelayer to the mine field around the shipyard", out)) took (b0);
+	}
+
 	// 7) прочие корабли — у верфи
 	for (const cVehicle* o : others)
 	{
@@ -1705,6 +1975,42 @@ std::vector<cOrder> cNavy::planPass (const cModel& model, const cPlayer& player,
 				wantPass_ = true;
 			}
 		}
+	// Р7 (п. 117): морской минёр включил закладку в прошлом заходе (мина легла) — выключить
+	for (unsigned int id : std::exchange (minesToggled_, {}))
+		if (const cVehicle* m = model.getVehicleFromID (id); m != nullptr && m->getOwner() == &player && m->isUnitLayingMines())
+		{
+			cOrder o;
+			o.type = eOrderType::ToggleLayMines;
+			o.playerId = player.getId();
+			o.unitId = id;
+			o.level = "micro";
+			o.reason = std::string ("pass ") + std::to_string (pass) + ": navy: sea minelayer stops laying";
+			out.push_back (std::move (o));
+		}
+	// Р7 (п. 113): грузовое судно и пустой корабль сошлись в прошлом заходе — пополнить боезапас (единица металла из трюма)
+	for (const auto& sv : player.getVehicles())
+	{
+		const cVehicle& s = *sv;
+		if (roles.roleOf (s) != eRole::SeaSupply || s.isUnitLoaded() || s.isDisabled() || s.isUnitMoving()) continue;
+		int metal = s.getStoredResources();
+		for (const auto& dv : player.getVehicles())
+		{
+			if (metal <= 0) break;
+			const cVehicle& d = *dv;
+			if (&d == &s || d.isUnitMoving() || d.data.getAmmoMax() <= 0 || d.data.getAmmo() >= d.data.getAmmoMax()) continue;
+			if (!isNavalRole (roles.roleOf (d)) || !s.canSupply (&d, eSupplyType::REARM)) continue;
+			cOrder o;
+			o.type = eOrderType::Rearm;
+			o.playerId = player.getId();
+			o.unitId = s.getId();
+			o.unitId2 = d.getId();
+			o.level = "micro";
+			o.reason = std::string ("pass ") + std::to_string (pass) + ": navy: cargo ship rearms " + d.getStaticUnitData().getDefaultName() + " at sea";
+			out.push_back (std::move (o));
+			++counts_.rearmOrders;
+			--metal;
+		}
+	}
 	// подлодки: второй выстрел по видимому кораблю или постройке на воде врага
 	const auto sp = sharedPlayer (model, player.getId());
 	const cMapView view (model.getMap(), sp);
@@ -1851,7 +2157,9 @@ nlohmann::json cNavy::toJson() const
 		{"transports", counts_.transports}, {"other", counts_.other}, {"fleetMetal", counts_.fleetMetal}, {"shipyards", counts_.shipyards},
 		{"docks", counts_.docks}, {"landing", landingStateName()}, {"cargo", counts_.cargo}, {"landed", counts_.landed},
 		{"waves", counts_.waves}, {"strikeTarget", strikeTarget_}, {"coastTargets", coastTargets_}, {"enemySubs", enemySubs_},
-		{"enemyShipMetal", enemyShipMetal_}, {"beach", {landing_.beach.x(), landing_.beach.y()}}, {"targetRegion", landing_.targetRegion}};
+		{"enemyShipMetal", enemyShipMetal_}, {"beach", {landing_.beach.x(), landing_.beach.y()}}, {"targetRegion", landing_.targetRegion},
+		{"supplies", counts_.supplies}, {"emptyShips", counts_.emptyShips}, {"emptyShipTurns", counts_.emptyShipTurns}, {"rearms", counts_.rearmOrders},
+		{"seaMines", seaMinesLaid_}, {"seaMineField", seaMineField_.size()}};
 }
 
 } // namespace ai

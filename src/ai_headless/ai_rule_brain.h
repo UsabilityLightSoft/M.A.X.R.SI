@@ -120,6 +120,8 @@ private:
 	cEcoPlan eco_;
 	// шаг 13: минёр уже включил закладку в этом ходу — в следующем заходе выключить
 	std::vector<unsigned int> minesToggled_;
+	// Р7 (п. 114): потолок сухопутной армии «пути по суше нет» уже записан в журнал
+	bool landCapNoted_ = false;
 	// Р7 (п. 94): площадки эко-сфер, где стройка не началась за kEcoPlanStale ходов (занята, не подойти), — (клетка, ход)
 	std::vector<std::pair<cPosition, int>> badEcoSites_;
 	// шаг 11: нужен ли ещё заход в этом ходу (после decideTurn / decidePass)

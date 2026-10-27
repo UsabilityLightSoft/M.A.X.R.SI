@@ -79,8 +79,13 @@ public:
 	const char* modeName() const;
 	// стройка (оперативка правил): верфь (П11), раньше шахт — при упоре «море»; док (П14)
 	bool wantShipyard() const { return wantShipyard_; }
-	// верфь — после шахт и фабрик (опыт: верфь на 36-м ходу на Gen_Archipelago задержала шахты, доход вдвое ниже)
-	bool shipyardEarly() const { return false; }
+	// верфь — после шахт и фабрик (опыт: верфь на 36-м ходу на Gen_Archipelago задержала шахты, доход вдвое ниже); Р7 (п. 114):
+	// пути по суше к врагу нет, а море у самой базы (цепочка соединителей короткая) — раньше шахт: флот — главная сила
+	bool shipyardEarly() const { return early_; }
+	// Р7 (п. 114): пути по суше к врагу нет (упор «море») — сухопутная армия только по нужде обороны
+	bool landLocked() const { return landLocked_; }
+	// Р7 (п. 117): морские мины у своей верфи — клетки поля без своих мин (по порядку закладки); минёр берёт металл у базы
+	const std::vector<cPosition>& seaMineField() const { return seaMineField_; }
 	bool wantDock() const { return wantDock_; }
 	// водоём, где ставить верфь и док (номер — cBaseDefense::seaLabelOf)
 	int homeSea() const { return homeSea_; }
@@ -125,6 +130,10 @@ public:
 		int reconWaves = 0; // волн разведки высадкой за партию
 		int tankWaves = 0;  // волн десанта бойцами за партию
 		int bombardOrders = 0, subOrders = 0, corvetteOrders = 0, dockOrders = 0;
+		int emptyShips = 0;  // Р7: боевых кораблей с боезапасом меньше залпа (в этот ход)
+		int emptyShipTurns = 0; // Р7: то же, сумма по ходам партии («корабле-ходов» без залпа)
+		int rearmOrders = 0; // Р7: пополнений боезапаса за партию (судно в море, док)
+		int supplies = 0;    // Р7: грузовых судов
 	};
 	const sCounts& counts() const { return counts_; }
 	const char* landingStateName() const;
@@ -208,6 +217,14 @@ private:
 	std::vector<cPosition> unloadSpots_; // где транспорт выгружал на чужой суше (последние 4): высаженные там не стоят
 	void noteUnloadSpot (const cPosition& p);
 	bool modeLogged_ = false;
+	bool early_ = false;      // Р7: верфь раньше шахт
+	bool landLocked_ = false; // Р7: пути по суше к врагу нет
+	// Р7 (п. 117): морские мины у верфи
+	bool wantSeaMines_ = false;
+	std::string seaMinesWhy_;
+	std::vector<cPosition> seaMineField_;      // клетки поля без своих мин
+	std::vector<unsigned int> minesToggled_;   // минёр включил закладку в этом заходе — выключить в следующем
+	int seaMinesLaid_ = 0;                     // мин заложено за партию
 	bool wantShipyard_ = false;
 	bool wantDock_ = false;
 	int homeSea_ = -1;
