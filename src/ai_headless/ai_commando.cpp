@@ -49,6 +49,12 @@ constexpr int kRaidStale = 30;       // налёт без готовности �
 constexpr int kHomeHold = 5;         // без дела — у центра базы (Чебышёв)
 constexpr int kAlienEnemyGap = 15;   // чужие ближе к зданиям врага — не трогать: его пехота и армия найдут коммандос
 constexpr int kStatusEvery = 10;
+// Р7 (п. 127, Владыка 27.10.2026: «немного прокачать — и в дело»): после правки 32 выключенный пришелец просыпается к
+// следующему ходу, и «сначала выключить всех, потом захватывать выключенных» стало бесконечной тренировкой (выключений чужих
+// 714 → 24 973, захватов 648 → 157). Тренировка (выключение — опыт) — до этого звания; дальше выключать чужих незачем:
+// захват в лоб (шанс тот же, что у выключенного, неудача у ничейной техники тревоги не даёт), затем диверсия и налёт.
+// Опыт: MAXR_CMD_TRAIN_RANK.
+constexpr int kTrainRank = 3;
 
 int cheb (const cPosition& a, const cPosition& b)
 {
@@ -301,6 +307,8 @@ void cCommandos::update (const cModel& model, const cPlayer& player, const cWorl
 	int trainIncome = kTrainIncome, trainTurn = kTrainTurn;
 	if (const char* e = std::getenv ("MAXR_CMD_TRAIN")) trainIncome = std::atoi (e);
 	if (const char* e = std::getenv ("MAXR_CMD_TURN")) trainTurn = std::atoi (e);
+	trainRank_ = kTrainRank; // Р7: звание, до которого коммандос тренируется на чужих
+	if (const char* e = std::getenv ("MAXR_CMD_TRAIN_RANK")) trainRank_ = std::atoi (e);
 	const bool on = income >= trainIncome || (turn >= trainTurn && income >= kTrainLateIncome);
 	const bool keep = wantTraining_ && income * 3 >= trainIncome * 2;
 	wantTraining_ = want > 0 && factories >= 1 && (on || keep);
@@ -597,13 +605,15 @@ bool cCommandos::act (const cModel& model, const cPlayer& player, const cVehicle
 }
 
 //------------------------------------------------------------------------------
-// работа у чужих: сначала выключить невыключенную машину (опыт, тревоги нет), потом захватывать выключенные —
-// дороже и с лучшим шансом раньше; своя цель держится, пока она есть; одна машина — одному коммандос
+// работа у чужих: новичок выключает невыключенную машину (опыт, тревоги нет) и захватывает выключенную; обученный (звание ≥
+// kTrainRank, Р7) не тренируется — захватывает в лоб: дороже и с лучшим шансом раньше; своя цель держится, пока она есть; одна
+// машина — одному коммандос
 unsigned int cCommandos::pickAlien (const cModel& model, const cMapView& view, const cWorldModel& world, const cVehicle& c, bool& steal,
 	bool ferry) const
 {
 	(void) view;
 	const int myRegion = world.regionOf (c, c.getPosition());
+	const bool trained = rankOf (c) >= trainRank_;
 	std::set<unsigned int> taken;
 	for (const auto& [id, t] : tasks_)
 		if (id != c.getId() && t.task == eTask::Alien && t.target != kNoUnit) taken.insert (t.target);
@@ -620,7 +630,7 @@ unsigned int cCommandos::pickAlien (const cModel& model, const cMapView& view, c
 		if (u == nullptr || u->getOwner() != nullptr) continue;
 		// пешком — только своя суша (область коммандос); другая — только если есть авиатранспорт
 		if (!ferry && world.regionOf (c, a.pos) != myRegion) continue;
-		const bool st = a.disabled; // выключена — захватывать; иначе — выключить (опыт)
+		const bool st = a.disabled || trained; // выключена или коммандос обучен — захватывать; иначе — выключить (опыт)
 		const int chance = c.getCommandoData().computeChance (u, st);
 		if (chance <= 0) continue;
 		// дорога (Чебышёв) — главное; среди близких — выключить раньше захвата (опыт поднимает шанс захвата), захват —
@@ -1019,7 +1029,8 @@ void cCommandos::planOne (const cModel& model, const cPlayer& player, const cMap
 					{"distance", cheb (c.getPosition(), u->getPosition())}, {"rank", rankOf (c)}});
 				t = {eTask::Alien, target, u->getPosition(), turn_, steal ? "capture" : "train"};
 			}
-			const char* why = steal ? "alien: capture (no alarm, no owner)" : "alien: train on it (no alarm, rank grows)";
+			const char* why = !steal ? "alien: train on it (no alarm, rank grows)"
+				: (u->isDisabled() ? "alien: capture (no alarm, no owner)" : "alien: trained, capture head-on (no alarm, no owner; no endless training)");
 			if (besideUnit (*u, c.getPosition()))
 			{
 				if (c.data.getShots() > 0) act (model, player, c, *u, steal, why, out, pass);
