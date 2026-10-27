@@ -70,7 +70,7 @@ cKeysList::cKeysList() :
 	keyRange (cKeyCombination (SDLK_r)),
 	keyAmmo (cKeyCombination (SDLK_m)),
 	keyHitpoints (cKeyCombination (SDLK_t)),
-	keyColors (cKeyCombination (SDLK_f)),
+	keyColors (cKeyCombination (SDLK_o)), // not "f": that is keyCenterUnit
 	keyStatus (cKeyCombination (SDLK_p)),
 	keySurvey (cKeyCombination (SDLK_h)),
 	keyCenterUnit (cKeyCombination (SDLK_f)),
@@ -121,6 +121,15 @@ void cKeysList::loadFromJsonFile (const std::filesystem::path& path)
 	{
 		cJsonArchiveIn in (json);
 		serialize (in);
+
+		// key files of older versions have "f" for both: colors and center unit
+		const cKeySequence oldDefault{cKeyCombination (SDLK_f)};
+		if (keyColors == oldDefault && keyCenterUnit == oldDefault)
+		{
+			keyColors = cKeySequence (cKeyCombination (SDLK_o));
+			Log.info ("Key for colors changed from f to o: f centers the selected unit");
+			saveToFile();
+		}
 
 		Log.debug ("Done");
 	}
