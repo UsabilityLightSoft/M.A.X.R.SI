@@ -435,22 +435,9 @@ void cVideo::setViewArea (const cBox<cPosition>& area)
 	if (buffer == nullptr) return;
 
 	const SDL_Rect bufferRect{0, 0, buffer->w, buffer->h};
-	const SDL_Rect requested = toSdlRect (area);
-	SDL_Rect rect;
-	if (!SDL_IntersectRect (&requested, &bufferRect, &rect))
-	{
-		viewArea.reset();
-		return;
-	}
-	// small windows (dialogs) are shown in the size of a menu
-	const int width = std::min (std::max (rect.w, MINWIDTH), bufferRect.w);
-	const int height = std::min (std::max (rect.h, MINHEIGHT), bufferRect.h);
-	rect.x = std::clamp (rect.x + rect.w / 2 - width / 2, 0, bufferRect.w - width);
-	rect.y = std::clamp (rect.y + rect.h / 2 - height / 2, 0, bufferRect.h - height);
-	rect.w = width;
-	rect.h = height;
+	const SDL_Rect rect = computeViewArea (toSdlRect (area), cPosition (buffer->w, buffer->h), cPosition (MINWIDTH, MINHEIGHT));
 
-	if (SDL_RectEquals (&rect, &bufferRect))
+	if (rect.w <= 0 || rect.h <= 0 || SDL_RectEquals (&rect, &bufferRect))
 		viewArea.reset();
 	else
 		viewArea = rect;
@@ -459,17 +446,7 @@ void cVideo::setViewArea (const cBox<cPosition>& area)
 //------------------------------------------------------------------------------
 cPosition cVideo::windowToBuffer (const cPosition& position) const
 {
-	const auto& p = presentation;
-	if (p.destination.w <= 0 || p.destination.h <= 0 || p.windowSize.x() <= 0 || p.windowSize.y() <= 0)
-	{
-		return position;
-	}
-	// mouse positions are in window units, the picture is drawn in pixels
-	const double pixelX = (position.x() + 0.5) * p.outputSize.x() / p.windowSize.x();
-	const double pixelY = (position.y() + 0.5) * p.outputSize.y() / p.windowSize.y();
-	const double x = p.source.x + (pixelX - p.destination.x) * p.source.w / p.destination.w;
-	const double y = p.source.y + (pixelY - p.destination.y) * p.source.h / p.destination.h;
-	return cPosition (static_cast<int> (std::floor (x)), static_cast<int> (std::floor (y)));
+	return windowToPicturePosition (position, presentation.source, presentation.destination, presentation.windowSize, presentation.outputSize);
 }
 
 //------------------------------------------------------------------------------
@@ -494,30 +471,10 @@ void cVideo::updatePresentation()
 	next.outputSize = cPosition (outputWidth, outputHeight);
 	next.windowSize = cPosition (windowWidth, windowHeight);
 
-	const double fittingScale = std::min (static_cast<double> (outputWidth) / next.source.w, static_cast<double> (outputHeight) / next.source.h);
-	const double integerScale = std::floor (fittingScale);
-	double scale = fittingScale;
-	if (integerScale >= 1 && integerScale >= fittingScale * integerScaleCoverage)
-	{
-		scale = integerScale;
-		next.smooth = false;
-	}
-	else
-	{
-		next.smooth = true;
-		if (fittingScale > 1 && sharpScalingAvailable)
-		{
-			int prescale = static_cast<int> (std::ceil (fittingScale));
-			if (maximalTextureSize.x() > 0 && maximalTextureSize.y() > 0)
-			{
-				prescale = std::min ({prescale, maximalTextureSize.x() / next.source.w, maximalTextureSize.y() / next.source.h});
-			}
-			next.prescale = prescale >= 2 ? prescale : 1;
-		}
-	}
-	const int width = std::clamp (static_cast<int> (std::lround (next.source.w * scale)), 1, outputWidth);
-	const int height = std::clamp (static_cast<int> (std::lround (next.source.h * scale)), 1, outputHeight);
-	next.destination = {(outputWidth - width) / 2, (outputHeight - height) / 2, width, height};
+	const auto scaling = computeViewScaling (cPosition (next.source.w, next.source.h), next.outputSize, sharpScalingAvailable, maximalTextureSize);
+	next.destination = scaling.destination;
+	next.prescale = scaling.prescale;
+	next.smooth = scaling.smooth;
 
 	if (!SDL_RectEquals (&next.source, &presentation.source) || !SDL_RectEquals (&next.destination, &presentation.destination) || next.windowSize != presentation.windowSize || next.outputSize != presentation.outputSize)
 	{
@@ -525,7 +482,7 @@ void cVideo::updatePresentation()
 	}
 	presentation = next;
 
-	const int newCursorScale = std::max (1, static_cast<int> (std::lround (scale * windowWidth / outputWidth)));
+	const int newCursorScale = std::max (1, static_cast<int> (std::lround (scaling.scale * windowWidth / outputWidth)));
 	if (newCursorScale != cursorScale)
 	{
 		cursorScale = newCursorScale;
@@ -1088,6 +1045,73 @@ void drawCircle (int iX, int iY, int iRadius, int iColor, SDL_Surface& surface)
 		setPixel (surface, iX - xx, iY - yy, iColor);
 	}
 	SDL_UnlockSurface (&surface);
+}
+
+//------------------------------------------------------------------------------
+sViewScaling computeViewScaling (const cPosition& pictureSize, const cPosition& outputSize, bool prescaleAvailable, const cPosition& maximalTextureSize)
+{
+	sViewScaling result;
+	if (pictureSize.x() <= 0 || pictureSize.y() <= 0 || outputSize.x() <= 0 || outputSize.y() <= 0) return result;
+
+	const double fittingScale = std::min (static_cast<double> (outputSize.x()) / pictureSize.x(), static_cast<double> (outputSize.y()) / pictureSize.y());
+	const double integerScale = std::floor (fittingScale);
+	if (integerScale >= 1 && integerScale >= fittingScale * integerScaleCoverage)
+	{
+		result.scale = integerScale;
+		result.smooth = false;
+	}
+	else
+	{
+		result.scale = fittingScale;
+		result.smooth = true;
+		if (fittingScale > 1 && prescaleAvailable)
+		{
+			int prescale = static_cast<int> (std::ceil (fittingScale));
+			if (maximalTextureSize.x() > 0 && maximalTextureSize.y() > 0)
+			{
+				prescale = std::min ({prescale, maximalTextureSize.x() / pictureSize.x(), maximalTextureSize.y() / pictureSize.y()});
+			}
+			result.prescale = prescale >= 2 ? prescale : 1;
+		}
+	}
+	const int width = std::clamp (static_cast<int> (std::lround (pictureSize.x() * result.scale)), 1, outputSize.x());
+	const int height = std::clamp (static_cast<int> (std::lround (pictureSize.y() * result.scale)), 1, outputSize.y());
+	result.destination = {(outputSize.x() - width) / 2, (outputSize.y() - height) / 2, width, height};
+	return result;
+}
+
+//------------------------------------------------------------------------------
+SDL_Rect computeViewArea (const SDL_Rect& windowsArea, const cPosition& bufferSize, const cPosition& minimalSize)
+{
+	const SDL_Rect bufferRect{0, 0, bufferSize.x(), bufferSize.y()};
+	SDL_Rect rect;
+	if (!SDL_IntersectRect (&windowsArea, &bufferRect, &rect))
+	{
+		return SDL_Rect{0, 0, 0, 0};
+	}
+	// small windows (dialogs) are shown in the size of a menu
+	const int width = std::min (std::max (rect.w, minimalSize.x()), bufferRect.w);
+	const int height = std::min (std::max (rect.h, minimalSize.y()), bufferRect.h);
+	rect.x = std::clamp (rect.x + rect.w / 2 - width / 2, 0, bufferRect.w - width);
+	rect.y = std::clamp (rect.y + rect.h / 2 - height / 2, 0, bufferRect.h - height);
+	rect.w = width;
+	rect.h = height;
+	return rect;
+}
+
+//------------------------------------------------------------------------------
+cPosition windowToPicturePosition (const cPosition& windowPosition, const SDL_Rect& source, const SDL_Rect& destination, const cPosition& windowSize, const cPosition& outputSize)
+{
+	if (destination.w <= 0 || destination.h <= 0 || windowSize.x() <= 0 || windowSize.y() <= 0)
+	{
+		return windowPosition;
+	}
+	// mouse positions are in window units, the picture is drawn in pixels: use the center of the pixel
+	const double pixelX = (windowPosition.x() + 0.5) * outputSize.x() / windowSize.x();
+	const double pixelY = (windowPosition.y() + 0.5) * outputSize.y() / windowSize.y();
+	const double x = source.x + (pixelX - destination.x) * source.w / destination.w;
+	const double y = source.y + (pixelY - destination.y) * source.h / destination.h;
+	return cPosition (static_cast<int> (std::floor (x)), static_cast<int> (std::floor (y)));
 }
 
 //------------------------------------------------------------------------------

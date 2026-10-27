@@ -299,6 +299,46 @@ extern cVideo Video;
 void applySettings (cVideo&, const sVideoSettings&);
 
 /**
+ * How a picture (a part of the screen buffer) is shown in a window:
+ * as big as possible, keeping the aspect ratio, centered.
+ * An integer scale factor (pixels as they are) is used,
+ * if it covers at least 90% of the size of the fitting scale factor.
+ * Otherwise the picture is scaled smoothly: first enlarged by an integer factor
+ * without filtering ("prescale"), then smoothly to the window ("sharp bilinear").
+ */
+struct sViewScaling
+{
+	SDL_Rect destination{0, 0, 0, 0}; // in pixels of the window
+	double scale = 1.;
+	int prescale = 1; // 1 = no intermediate upscaling
+	bool smooth = false;
+};
+
+/**
+ * @param pictureSize size of the shown part of the screen buffer
+ * @param outputSize size of the window in pixels
+ * @param prescaleAvailable whether the renderer can do the intermediate upscaling (render targets)
+ * @param maximalTextureSize maximal texture size of the renderer, 0 if unknown
+ */
+sViewScaling computeViewScaling (const cPosition& pictureSize, const cPosition& outputSize, bool prescaleAvailable, const cPosition& maximalTextureSize);
+
+/**
+ * The part of the screen buffer to show for the area of the visible windows:
+ * inside of the buffer and at least of the minimal size (smaller windows are shown in the size of a menu).
+ * An empty rectangle, if the area is outside of the buffer.
+ */
+SDL_Rect computeViewArea (const SDL_Rect& windowsArea, const cPosition& bufferSize, const cPosition& minimalSize);
+
+/**
+ * The position in the screen buffer, that is shown at a position of the window.
+ * @param source shown part of the buffer
+ * @param destination where it is drawn in the window (pixels)
+ * @param windowSize size of the window in the units of the mouse positions
+ * @param outputSize size of the window in pixels
+ */
+cPosition windowToPicturePosition (const cPosition& windowPosition, const SDL_Rect& source, const SDL_Rect& destination, const cPosition& windowSize, const cPosition& outputSize);
+
+/**
 * Works like SDL_BlittSurface.
 * But unlike SDL it respects the destination alpha channel of the surface.
 * This function is only designed to blitt from a surface
