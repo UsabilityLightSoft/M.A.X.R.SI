@@ -1,6 +1,8 @@
 ![maxr_icon](data/maxr.ico)
 # M.A.X.R.SI
 
+**SI** stands for **Super Intelligence**.
+
 A fork of [M.A.X.R.](https://github.com/maxr-dot-org/maxr) (Mechanized Assault & eXploration Reloaded) with a
 **computer opponent** — the AI player — and engine fixes. All credit for the game goes to the M.A.X.R. authors
 ([data/AUTHORS](data/AUTHORS)); the fork is made by Alexey Tkachev together with Claude (Anthropic). License — GPLv2,
@@ -37,6 +39,8 @@ As upstream (see below); extra targets: `ai_headless`, `maxr_ai_client`. Branche
 a copy of upstream `develop`.
 
 ## По-русски
+
+**SI** — Super Intelligence (Супер Интеллект).
 
 M.A.X.R.SI — форк ремейка M.A.X.R. с **компьютерным противником (ИИИ)** и исправлениями движка. ИИИ играет целую
 партию сквозь туман войны и входит в обычную сетевую игру как ещё один игрок — можно играть против него одному или с
