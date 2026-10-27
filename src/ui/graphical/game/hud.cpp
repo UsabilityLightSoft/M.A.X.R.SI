@@ -38,6 +38,8 @@
 #include "ui/widgets/shortcut.h"
 #include "utility/language.h"
 
+#include <algorithm>
+
 //------------------------------------------------------------------------------
 cHud::cHud (std::shared_ptr<cAnimationTimer> animationTimer)
 {
@@ -227,6 +229,50 @@ void cHud::draw (SDL_Surface& destination, const cBox<cPosition>& clipRect)
 	cWidget::draw (destination, clipRect);
 }
 
+namespace
+{
+	struct sHudImages
+	{
+		UniqueSurface left;
+		UniqueSurface top;
+		UniqueSurface right;
+		UniqueSurface bottom;
+		UniqueSurface logo;
+	};
+
+	//--------------------------------------------------------------------------
+	// the HUD is generated again for each size of the game picture (the window is resized):
+	// its images are read from disk only once
+	const sHudImages& getHudImages()
+	{
+		static const sHudImages images = []() {
+			const auto gfxPath = cSettings::getInstance().getGfxPath();
+			sHudImages result;
+			result.left = UniqueSurface (LoadPCX (gfxPath / "hud_left.pcx"));
+			result.top = UniqueSurface (LoadPCX (gfxPath / "hud_top.pcx"));
+			result.right = UniqueSurface (LoadPCX (gfxPath / "hud_right.pcx"));
+			result.bottom = UniqueSurface (LoadPCX (gfxPath / "hud_bottom.pcx"));
+			result.logo = UniqueSurface (LoadPCX (gfxPath / "logo.pcx"));
+			return result;
+		}();
+		return images;
+	}
+} // namespace
+
+//------------------------------------------------------------------------------
+int cHud::getChatBoxHeight (int pictureHeight)
+{
+	const int mapHeight = pictureHeight - panelTotalHeight;
+	return std::clamp (mapHeight * 15 / 100, 60, 100);
+}
+
+//------------------------------------------------------------------------------
+int cHud::getMessageListHeight (int pictureHeight)
+{
+	const int mapHeight = pictureHeight - panelTotalHeight;
+	return std::clamp (mapHeight / 4, 60, 200);
+}
+
 //------------------------------------------------------------------------------
 UniqueSurface cHud::generateSurface()
 {
@@ -235,73 +281,73 @@ UniqueSurface cHud::generateSurface()
 	SDL_FillRect (surface.get(), nullptr, 0x00FF00FF);
 	SDL_SetColorKey (surface.get(), SDL_TRUE, 0x00FF00FF);
 
-	const auto gfxPath = cSettings::getInstance().getGfxPath();
+	const auto& images = getHudImages();
 	{
-		UniqueSurface tmpSurface (LoadPCX (gfxPath / "hud_left.pcx"));
+		auto* tmpSurface = images.left.get();
 		if (tmpSurface != nullptr)
 		{
-			SDL_BlitSurface (tmpSurface.get(), nullptr, surface.get(), nullptr);
+			SDL_BlitSurface (tmpSurface, nullptr, surface.get(), nullptr);
 		}
 	}
 
 	SDL_Rect dest;
 	{
-		UniqueSurface tmpSurface (LoadPCX (gfxPath / "hud_top.pcx"));
+		auto* tmpSurface = images.top.get();
 		if (tmpSurface != nullptr)
 		{
 			SDL_Rect src = {0, 0, Uint16 (tmpSurface->w), Uint16 (tmpSurface->h)};
 			dest.x = panelLeftWidth;
 			dest.y = 0;
-			SDL_BlitSurface (tmpSurface.get(), &src, surface.get(), &dest);
+			SDL_BlitSurface (tmpSurface, &src, surface.get(), &dest);
 			src.x = tmpSurface->w - 19;
 			src.w = 18;
 			src.h = panelTopHeight;
 			dest.x = surface->w - panelTopHeight;
-			SDL_BlitSurface (tmpSurface.get(), &src, surface.get(), &dest);
+			SDL_BlitSurface (tmpSurface, &src, surface.get(), &dest);
 		}
 	}
 
 	{
-		UniqueSurface tmpSurface (LoadPCX (gfxPath / "hud_right.pcx"));
+		auto* tmpSurface = images.right.get();
 		if (tmpSurface != nullptr)
 		{
 			SDL_Rect src = {0, 0, Uint16 (tmpSurface->w), Uint16 (tmpSurface->h)};
 			dest.x = surface->w - panelRightWidth;
 			dest.y = panelTopHeight;
-			SDL_BlitSurface (tmpSurface.get(), &src, surface.get(), &dest);
+			SDL_BlitSurface (tmpSurface, &src, surface.get(), &dest);
 		}
 	}
 
 	{
-		UniqueSurface tmpSurface (LoadPCX (gfxPath / "hud_bottom.pcx"));
+		auto* tmpSurface = images.bottom.get();
 		if (tmpSurface != nullptr)
 		{
 			SDL_Rect src = {0, 0, Uint16 (tmpSurface->w), Uint16 (tmpSurface->h)};
 			dest.x = panelLeftWidth;
 			dest.y = surface->h - 24;
-			SDL_BlitSurface (tmpSurface.get(), &src, surface.get(), &dest);
+			SDL_BlitSurface (tmpSurface, &src, surface.get(), &dest);
 			src.x = tmpSurface->w - 41;
 			src.w = 23;
 			src.h = 24;
 			dest.x = surface->w - 23;
-			SDL_BlitSurface (tmpSurface.get(), &src, surface.get(), &dest);
+			SDL_BlitSurface (tmpSurface, &src, surface.get(), &dest);
 			src.x = tmpSurface->w - 17;
 			src.w = 16;
 			src.h = 22;
 			dest.x = panelLeftWidth - 16;
 			dest.y = surface->h - 22;
-			SDL_BlitSurface (tmpSurface.get(), &src, surface.get(), &dest);
+			SDL_BlitSurface (tmpSurface, &src, surface.get(), &dest);
 		}
 	}
 
 	if (Video.getResolutionY() > 480)
 	{
-		UniqueSurface tmpSurface (LoadPCX (gfxPath / "logo.pcx"));
+		auto* tmpSurface = images.logo.get();
 		if (tmpSurface != nullptr)
 		{
 			dest.x = 9;
 			dest.y = Video.getResolutionY() - panelTotalHeight - 15;
-			SDL_BlitSurface (tmpSurface.get(), nullptr, surface.get(), &dest);
+			SDL_BlitSurface (tmpSurface, nullptr, surface.get(), &dest);
 		}
 	}
 	return surface;

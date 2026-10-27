@@ -75,6 +75,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 
 //------------------------------------------------------------------------------
 cGameMapWidget::cGameMapWidget (const cBox<cPosition>& area, std::shared_ptr<const cStaticMap> staticMap_, std::shared_ptr<cAnimationTimer> animationTimer_, std::shared_ptr<cSoundManager> soundManager_, std::shared_ptr<const cFrameCounter> frameCounter) :
@@ -1839,9 +1840,20 @@ void cGameMapWidget::handleLooseMouseFocus (cApplication&) /* override */
 //------------------------------------------------------------------------------
 void cGameMapWidget::handleResized (const cPosition& oldSize)
 {
+	// the center of the shown part of the map (in map pixels at zoom 1) stays where it is
+	const double oldZoom = getZoomFactor();
+	const double centerX = pixelOffset.x() + oldSize.x() / (2. * oldZoom);
+	const double centerY = pixelOffset.y() + oldSize.y() / (2. * oldZoom);
+
 	cClickableWidget::handleResized (oldSize);
 
-	setZoomFactor (internalZoomFactor, true); // revalidates zoom and offset
+	setZoomFactor (internalZoomFactor, false); // revalidates the zoom (the minimal zoom depends on the size)
+
+	const double newZoom = getZoomFactor();
+	const cPosition newPixelOffset (static_cast<int> (std::lround (centerX - getSize().x() / (2. * newZoom))), static_cast<int> (std::lround (centerY - getSize().y() / (2. * newZoom))));
+	scroll (newPixelOffset - pixelOffset); // revalidates the offset
+
+	updateUnitMenuPosition();
 }
 
 //------------------------------------------------------------------------------
