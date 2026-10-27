@@ -206,6 +206,12 @@ msgstr "Landing position is near an other player. Please confirm the position by
 msgid "Comp~Laying"
 msgstr "minelaying"
 
+msgid "Comp~Load_HotSeat_Game_In_Single_Player"
+msgstr "This is a hot seat game (players: %s) - in a single player game their turn never comes. Load it with Multiplayer -> Load Hot Seat."
+
+msgid "Comp~Load_Network_Game_In_Single_Player"
+msgstr "This is a network game (players: %s) - in a single player game their turn never comes. Load it with Multiplayer -> TCP/IP Host -> Load Game."
+
 msgid "Comp~Metal_Insufficient"
 msgstr "Cannot start, raw materials needed."
 
@@ -767,6 +773,9 @@ msgstr "Limited to:"
 
 msgid "Others~Load"
 msgstr "Load"
+
+msgid "Others~Load_Anyway"
+msgstr "Load anyway"
 
 msgid "Others~Load_7"
 msgstr "Load"

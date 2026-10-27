@@ -208,6 +208,12 @@ msgstr "Точка высадки находится недалеко от др�
 msgid "Comp~Laying"
 msgstr "устанавливает мины"
 
+msgid "Comp~Load_HotSeat_Game_In_Single_Player"
+msgstr "Это партия ХотСит (игроки: %s) - в одиночной игре их ход не наступит. Загружайте её через \"Мультиплеер\" -> \"Загрузить ХотСит\"."
+
+msgid "Comp~Load_Network_Game_In_Single_Player"
+msgstr "Это сетевая партия (игроки: %s) - в одиночной игре их ход не наступит. Загружайте её через \"Мультиплеер\" -> \"TCP/IP Сервер\" -> \"Загрузить игру\"."
+
 msgid "Comp~Metal_Insufficient"
 msgstr "Невозможно запустить, недостаточно сырья."
 
@@ -768,6 +774,9 @@ msgstr "Только:"
 
 msgid "Others~Load"
 msgstr "Загрузить"
+
+msgid "Others~Load_Anyway"
+msgstr "Всё равно загрузить"
 
 msgid "Others~Load_7"
 msgstr "Загр."

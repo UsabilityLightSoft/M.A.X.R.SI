@@ -205,6 +205,12 @@ msgstr ""
 msgid "Comp~Laying"
 msgstr ""
 
+msgid "Comp~Load_HotSeat_Game_In_Single_Player"
+msgstr ""
+
+msgid "Comp~Load_Network_Game_In_Single_Player"
+msgstr ""
+
 msgid "Comp~Metal_Insufficient"
 msgstr ""
 
@@ -759,6 +765,9 @@ msgid "Others~Limited_To"
 msgstr ""
 
 msgid "Others~Load"
+msgstr ""
+
+msgid "Others~Load_Anyway"
 msgstr ""
 
 msgid "Others~Load_7"
