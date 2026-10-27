@@ -254,6 +254,8 @@ const char* landingStateText (eLandingPositionState s)
 	}
 }
 
+// подписи типа игры в окне «Опции» — как в data/languages/en и ru/maxr.po (Option~Type_Turns, Option~Type_Simu,
+// Option~Type_HotSeat)
 std::string gameTypeText (eGameSettingsGameType t)
 {
 	switch (t)
@@ -261,6 +263,16 @@ std::string gameTypeText (eGameSettingsGameType t)
 		case eGameSettingsGameType::Turns: return "Turn based";
 		case eGameSettingsGameType::HotSeat: return "Hot Seat";
 		default: return "Simultaneous";
+	}
+}
+
+std::string gameTypeTextRu (eGameSettingsGameType t)
+{
+	switch (t)
+	{
+		case eGameSettingsGameType::Turns: return "По очереди";
+		case eGameSettingsGameType::HotSeat: return "ХотСит";
+		default: return "Одновременно";
 	}
 }
 
@@ -300,6 +312,14 @@ private:
 	void probeStep();
 	void finishGame (const std::string& reason);
 	void chat (const std::string& text);
+	struct sNotReady
+	{
+		std::string key; // для «причина сменилась»
+		std::string ru;
+		std::string en;
+	};
+	std::vector<sNotReady> notReadyReasons() const;
+	void explainNotReady (const std::vector<sNotReady>& reasons);
 
 	sOptions opt;
 	std::string outDir;
@@ -319,7 +339,11 @@ private:
 	std::shared_ptr<cGameSettings> lobbySettings;
 	std::shared_ptr<cStaticMap> lobbyMap;
 	bool savedGameSelected = false;
-	std::string lastWarnedSettings;
+	std::string lastNotReadyKey; // причины «не готов», о которых уже сказано в чат (пусто — готов)
+	std::string mapDownload;     // карта, которую качаю у хоста
+	std::string mapDownloaded;   // карта скачана — хост должен выбрать её ещё раз
+	std::string mapMissing;      // карты нет и скачать нельзя (оригинальная карта M.A.X. или другая версия)
+	bool optionsReceived = false; // настройки и карта лобби пришли от сервера (до этого «не готов» не объяснять)
 	bool greeted = false;
 	int setupStage = 0; // --setup: 0 — карта, 1 — настройки, 2 — ждать игроков, 3 — старт запрошен
 	Clock::time_point setupAskedAt;
@@ -394,6 +418,11 @@ void cAiClient::connectSignals()
 		state = eState::Lobby;
 		stateSince = Clock::now();
 		greeted = false;
+		optionsReceived = false;
+		lastNotReadyKey.clear();
+		mapDownload.clear();
+		mapDownloaded.clear();
+		mapMissing.clear();
 		setupStage = 0;
 		say ("подключён к " + opt.host + ":" + std::to_string (opt.port) + " как игрок " + std::to_string (lobby->getLocalPlayer().getNr()));
 	});
@@ -431,17 +460,41 @@ void cAiClient::connectSignals()
 		lobbySettings = settings;
 		lobbyMap = map;
 		savedGameSelected = save.number >= 0;
+		optionsReceived = true;
+		if (lobbyMap && lobbyMap->isValid())
+		{
+			mapDownloaded.clear();
+			mapMissing.clear();
+		}
 		updateIdentity();
 	});
 	signals.connect (lobby->onNoMapNoReady, [this] (const std::filesystem::path& map) {
 		say ("нет карты " + utf8::to_string (map) + " — не готов");
 	});
+	// карта: качаю у хоста, скачана, нет и скачать нельзя — причина «не готов» (сигналы приходят до onOptionsChanged)
 	signals.connect (lobby->onMapDownloadRequest, [this] (const std::filesystem::path& map) {
 		say ("карты " + utf8::to_string (map) + " нет — качаю у хоста");
-		chat (opt.name + ": no map " + utf8::to_string (map) + ", downloading. Select the map again when done.");
+		mapDownload = utf8::to_string (map);
+		mapDownloaded.clear();
 	});
 	signals.connect (lobby->onDownloadMapFinished, [this] (std::shared_ptr<cStaticMap>) {
-		say ("карта скачана — попросите хоста выбрать её ещё раз");
+		say ("карта скачана — хост должен выбрать её ещё раз");
+		mapDownloaded = mapDownload;
+		mapDownload.clear();
+		updateIdentity();
+	});
+	signals.connect (lobby->onDownloadMapCancelled, [this]() {
+		say ("скачивание карты прервано");
+		mapDownload.clear();
+		updateIdentity();
+	});
+	signals.connect (lobby->onMissingOriginalMap, [this] (const std::filesystem::path& map) {
+		say ("нет оригинальной карты M.A.X. " + utf8::to_string (map) + " — скачать её нельзя");
+		mapMissing = utf8::to_string (map);
+	});
+	signals.connect (lobby->onIncompatibleMap, [this] (const std::filesystem::path& map, const std::filesystem::path&) {
+		say ("карта " + utf8::to_string (map) + " у меня другой версии");
+		mapMissing = utf8::to_string (map);
 	});
 	signals.connect (lobby->onChatMessage, [] (const std::string& player, const std::string& message) {
 		say ("чат: " + player + ": " + message);
@@ -451,6 +504,15 @@ void cAiClient::connectSignals()
 		for (const auto& p : notReady) who += (who.empty() ? "" : ", ") + p.getName();
 		say (std::string ("старт не принят: ") + (missingSettings ? "нет настроек или карты; " : "") + (who.empty() ? "" : "не готовы: " + who));
 		if (setupStage == 3) setupStage = 2;
+		// каждая неудачная попытка старта, где не готов я, — причина и путь в меню (отказ не готовым игрокам шлёт сервер
+		// лобби нашей сборки — cLobbyServer::handleAskToFinishLobby; хост авторов шлёт его только тому, кто нажал «OK»)
+		const int me = lobby->getLocalPlayer().getNr();
+		if (std::none_of (notReady.begin(), notReady.end(), [me] (const cPlayerBasicData& p) { return p.getNr() == me; })) return;
+		const auto reasons = notReadyReasons();
+		if (reasons.empty())
+			chat ("Я уже готов - нажмите «OK» ещё раз. / I am ready now - press OK again.");
+		else
+			explainNotReady (reasons);
 	});
 	signals.connect (lobby->onStartGamePreparation, [this]() { startPreparation(); });
 	signals.connect (lobby->onPlayerAbortGamePreparation, [this] (const std::string& player) {
@@ -530,22 +592,9 @@ void cAiClient::updateIdentity()
 		}
 	}
 
-	const bool haveMap = lobbyMap && lobbyMap->isValid() && lobbyMap->getSize().x() > 0;
-	const bool turnBased = lobbySettings && lobbySettings->gameType == eGameSettingsGameType::Turns;
-	const bool ready = (haveMap && turnBased) || savedGameSelected;
-
-	if (lobbySettings && !turnBased && !savedGameSelected)
-	{
-		const std::string key = gameTypeText (lobbySettings->gameType);
-		if (key != lastWarnedSettings)
-		{
-			lastWarnedSettings = key;
-			say ("тип игры «" + key + "» — ИИИ играет только в «Turn based»: не готов");
-			chat (name + ": I play only Game Type 'Turn based' (now: " + key + "). Options -> Game Type -> Turn based.");
-		}
-	}
-	else
-		lastWarnedSettings.clear();
+	// готов, когда есть карта и тип игры «По очереди» (или выбрано сохранение)
+	const auto reasons = notReadyReasons();
+	const bool ready = reasons.empty();
 
 	const auto& local = lobby->getLocalPlayer();
 	if (local.getName() != name || !sameColor (local.getColor(), color) || local.isReady() != ready)
@@ -554,11 +603,75 @@ void cAiClient::updateIdentity()
 		lobby->changeLocalPlayerProperties (std::string (name), color, ready);
 		if (ready && !wasReady && lobbyMap) say ("готов: карта " + utf8::to_string (lobbyMap->getFilename()) + ", Turn based");
 	}
-	if (!greeted && me >= 0)
+	if (me < 0) return;
+	if (!greeted)
 	{
 		greeted = true;
 		chat ("Привет! Я ИИИ " + name + ", играю только «По очереди». / Hi! I am the AI " + name + ", I play Turn based only.");
 		chat ("Паспорт / passport: " + passportText());
+	}
+	// не готов — почему и что нажать: при входе в лобби и каждый раз, когда причина сменилась (хост сменил настройки
+	// или карту); стал готов после объяснения — сказать и это. Настройки лобби сервер шлёт сразу после входа — до них
+	// причины нет
+	if (!optionsReceived) return;
+	std::string key;
+	for (const auto& r : reasons)
+		key += r.key + ";";
+	if (key == lastNotReadyKey) return;
+	const bool explained = !lastNotReadyKey.empty();
+	lastNotReadyKey = key;
+	if (!reasons.empty())
+		explainNotReady (reasons);
+	else if (explained && !savedGameSelected && lobbyMap)
+		chat ("Готов: карта «" + utf8::to_string (lobbyMap->getFilename()) + "», «По очереди» - жмите «OK». / Ready: map "
+			+ utf8::to_string (lobbyMap->getFilename()) + ", Turn based - press OK.");
+}
+
+//------------------------------------------------------------------------------
+// Почему не готов: причина и путь в меню подписями игры — data/languages/ru и en/maxr.po: «Выбор карты» / Choose planet
+// (Title~Choose_Planet), «Опции» / Options (Title~Options), «Тип игры:» / Game Type: (Title~Game_Type), «По очереди» /
+// Turn based (Option~Type_Turns), «Одновременно» / Simultaneous (Option~Type_Simu), «OK» (Others~OK). Стрелка — «->»,
+// тире — «-»: в шрифтах игры (ISO 8859-1, -2, -5) нет «→» и «—». Пусто — готов.
+std::vector<cAiClient::sNotReady> cAiClient::notReadyReasons() const
+{
+	std::vector<sNotReady> r;
+	if (savedGameSelected) return r;
+	const bool haveMap = lobbyMap && lobbyMap->isValid() && lobbyMap->getSize().x() > 0;
+	if (!haveMap)
+	{
+		if (!mapDownload.empty())
+			r.push_back ({"download " + mapDownload,
+				"Не готов: качаю у хоста карту «" + mapDownload + "». Когда скачается, выберите её ещё раз: «Выбор карты» -> «" + mapDownload + "» -> «OK».",
+				"Not ready: downloading the map " + mapDownload + " from the host. When done, select it again: Choose planet -> " + mapDownload + " -> OK."});
+		else if (!mapDownloaded.empty())
+			r.push_back ({"downloaded " + mapDownloaded,
+				"Не готов: карта «" + mapDownloaded + "» скачана - выберите её ещё раз: «Выбор карты» -> «" + mapDownloaded + "» -> «OK».",
+				"Not ready: the map " + mapDownloaded + " is downloaded - select it again: Choose planet -> " + mapDownloaded + " -> OK."});
+		else if (!mapMissing.empty())
+			r.push_back ({"missing " + mapMissing,
+				"Не готов: у меня нет карты «" + mapMissing + "», скачать её нельзя - выберите другую: «Выбор карты» -> карта -> «OK».",
+				"Not ready: I have no map " + mapMissing + " and cannot download it - select another one: Choose planet -> map -> OK."});
+		else
+			r.push_back ({"map", "Не готов: карта не выбрана - «Выбор карты» -> карта -> «OK».", "Not ready: no map selected - Choose planet -> map -> OK."});
+	}
+	if (!lobbySettings)
+		r.push_back ({"settings", "Не готов: нет настроек игры - «Опции» -> «Тип игры:» -> «По очереди» -> «OK».",
+			"Not ready: no game settings - Options -> Game Type: -> Turn based -> OK."});
+	else if (lobbySettings->gameType != eGameSettingsGameType::Turns)
+		r.push_back ({"type " + gameTypeText (lobbySettings->gameType),
+			"Не готов: тип игры «" + gameTypeTextRu (lobbySettings->gameType) + "» - я играю только «По очереди»: «Опции» -> «Тип игры:» -> «По очереди» -> «OK».",
+			"Not ready: Game Type " + gameTypeText (lobbySettings->gameType) + " - I play Turn based only: Options -> Game Type: -> Turn based -> OK."});
+	return r;
+}
+
+//------------------------------------------------------------------------------
+// в чат — по-русски и по-английски, каждая причина
+void cAiClient::explainNotReady (const std::vector<sNotReady>& reasons)
+{
+	for (const auto& r : reasons)
+	{
+		chat (r.ru);
+		chat (r.en);
 	}
 }
 

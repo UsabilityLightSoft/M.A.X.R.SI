@@ -453,6 +453,12 @@ void cLobbyServer::handleAskToFinishLobby (const cMuMsgAskToFinishLobby& message
 	if (errorMessage.missingSettings || errorMessage.hostNotInSavegame || !errorMessage.notReadyPlayers.empty() || !errorMessage.missingPlayers.empty())
 	{
 		sendNetMessage (errorMessage, fromPlayer);
+		// the players, who are not ready, learn about the failed start too:
+		// an AI client explains in the chat, why it is not ready
+		for (const auto& player : errorMessage.notReadyPlayers)
+		{
+			if (player.getNr() != fromPlayer) sendNetMessage (errorMessage, player.getNr());
+		}
 		return;
 	}
 	if (saveGameInfo.number != -1)
