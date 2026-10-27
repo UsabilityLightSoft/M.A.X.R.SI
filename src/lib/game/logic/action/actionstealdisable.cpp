@@ -64,10 +64,14 @@ void cActionStealDisable::execute (cModel& model) const
 			building->wasWorking = building->isUnitWorking();
 			building->stopWork (true);
 		}
+		// a disabled constructor or bulldozer pauses its work: the invested metal and the
+		// turns done are kept, it goes on, when it recovers (see cPlayer::makeTurnStart)
+		auto* targetVehicle = dynamic_cast<cVehicle*> (target);
+		const bool pauseWork = !steal && targetVehicle && (targetVehicle->isUnitBuildingABuilding() || targetVehicle->isUnitClearing());
 		// stop running movejobs, build orders, etc.
 		// cActionStop checks, that the unit belongs to the sender of the action:
 		// execute it on behalf of the owner of the target
-		if (target->getOwner())
+		if (target->getOwner() && !pauseWork)
 		{
 			cActionStop stop (*target);
 			stop.playerNr = target->getOwner()->getId();
