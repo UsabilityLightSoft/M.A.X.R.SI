@@ -417,6 +417,9 @@ void cBaseDefense::update (const cModel& model, const cPlayer& player, const cWo
 		for (const auto& p : alarmSites_)
 			for (const auto& b : player.getBuildings())
 				if (b->getPosition() == p) wallTargets_.emplace_back (p, b->getIsBig());
+	// Р7: эко-сферы — первыми (выключенная коммандос не даёт очков, а её очки — победа на пределе ходов)
+	for (const auto& b : player.getBuildings())
+		if (b->getStaticUnitData().buildingData.canScore && level_ >= 1) wallTargets_.emplace_back (b->getPosition(), b->getIsBig());
 	if (level_ >= 2)
 		for (const auto& b : player.getBuildings())
 		{
@@ -988,7 +991,8 @@ void cBaseDefense::updatePosts (const cModel& model, const cPlayer& player, cons
 		const auto& sd = b->getStaticUnitData();
 		if (sd.surfacePosition != eSurfacePosition::Ground || sd.ID == kIdBlock) continue;
 		const bool key = sd.produceEnergy > 0 || sd.ID == kIdEnergyBig || sd.ID == kIdEnergySmall || sd.buildingData.canMineMaxRes > 0
-			|| !sd.canBuild.empty() || sd.ID == kIdRadar || sd.ID == kIdGunAA || sd.buildingData.canResearch || sd.storageUnitsMax > 0;
+			|| !sd.canBuild.empty() || sd.ID == kIdRadar || sd.ID == kIdGunAA || sd.buildingData.canResearch || sd.storageUnitsMax > 0
+			|| sd.buildingData.canScore; // Р7: эко-сфера
 		if (!key) continue;
 		bool alarm = b->isDisabled();
 		for (const auto& r : recentDisables_)

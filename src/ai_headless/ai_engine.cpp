@@ -10,6 +10,7 @@
 #include "ai_types.h"
 #include "ai_upgrades.h"
 
+#include "game/data/gamesettings.h"
 #include "game/data/map/map.h"
 #include "game/data/miningresource.h"
 #include "game/data/model.h"
@@ -762,6 +763,15 @@ void cAiEngine::writeMetrics (const sGameResult& result)
 	m["endReason"] = result.endReason;
 	m["endTurn"] = result.endTurn;
 	m["materialWinRatio"] = kMaterialWinRatio;
+	// Р7: прежний вердикт (без очков эко-сфер) — для D «по материалу»; условие победы партии
+	m["winnerMaterial"] = result.winnerMaterial;
+	m["winReasonMaterial"] = result.winReasonMaterial;
+	if (const auto settings = model.getGameSettings())
+	{
+		const auto vc = settings->victoryConditionType;
+		m["victory"] = {{"type", vc == eGameSettingsVictoryCondition::Points ? "points" : (vc == eGameSettingsVictoryCondition::Death ? "death" : "turns")},
+			{"turns", settings->victoryTurns}, {"points", settings->victoryPoints}};
+	}
 	// зависшие концы хода, развязанные движком (cModel::setResolveStalledTurnEnd)
 	m["stalledTurnEnds"] = model.getStalledTurnEnds();
 	m["forcedTurnEnds"] = model.getForcedTurnEnds();
@@ -780,6 +790,7 @@ void cAiEngine::writeMetrics (const sGameResult& result)
 		p["defeated"] = player->isDefeated;
 		p["credits"] = player->getCredits();
 		p["score"] = player->getScore();
+		p["ecoSpheres"] = player->getNumEcoSpheres(); // Р7: работающих эко-сфер в конце
 		p["units"] = player->getVehicles().size() + player->getBuildings().size();
 		p["builtFactories"] = s.builtFactoriesCount;
 		p["builtMineStations"] = s.builtMineStationCount;

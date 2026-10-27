@@ -423,6 +423,9 @@ constexpr int kRetreatToRepairer = 6;
 // малая фабрика: когда добыча металла главной базы не меньше; таких фабрик не больше
 constexpr int kSmallFactoryIncome = 10;
 constexpr int kMaxSmallFactories = 1;
+// Р7 (п. 94): план эко-сферы не начался за столько ходов — снять, площадку не брать kEcoBadSiteTurns ходов
+constexpr int kEcoPlanStale = 12;
+constexpr int kEcoBadSiteTurns = 40;
 
 // путь до хода: столько клеток, сколько машина пройдёт за ход (шаг 9: сопровождение и
 // ремонтник не уходят по длинному пути на несколько ходов — каждый ход задание заново)
@@ -1316,6 +1319,51 @@ cPosition findBaseSpot (const cModel& model, const cPlayer& player, const cSubBa
 	return cPosition (-1, -1);
 }
 
+// Р7 (п. 94): место для здания, которому у тесной базы места нет (эко-сфера и жилой блок для неё; морские карты — суши у базы
+// 60–68%), — как площадка шахты: свободная клетка (2×2) кольцами от высадки до kMaxSiteRadius, связь с главной подбазой цепочкой
+// соединителей (сетка g, её тянет пионер), не на разведанных металле и нефти, не под угрозой, стройщику есть куда выехать;
+// короче цепочка и ближе к высадке (в глубине базы). (−1,−1) — нет
+cPosition findLinkedSpot (const cModel& model, const cPlayer& player, const sConnGrid& g, const cStaticUnitData& data,
+	const tFootprints& reserved, const cWorldModel& world, eThreatLayer layer, int homeRegion)
+{
+	const cMap& map = *model.getMap();
+	const bool big = data.buildingData.isBig;
+	const cPosition landing = player.getLandingPos();
+	cPosition best (-1, -1);
+	long long bestKey = std::numeric_limits<long long>::max();
+	for (int dy = -kMaxSiteRadius; dy <= kMaxSiteRadius; ++dy)
+		for (int dx = -kMaxSiteRadius; dx <= kMaxSiteRadius; ++dx)
+		{
+			const cPosition q = landing + cPosition (dx, dy);
+			if (overlapsAny (q, big, reserved) || !canPlaceIgnoringVehicles (map, player, data, q)) continue;
+			if (footprintThreatened (world, q, big, layer)) continue;
+			const auto cells = footprintCells (q, big);
+			bool ok = true;
+			for (const auto& c : cells)
+				if (exploredResource (map, player, c, eResourceType::Metal) >= 2 || exploredResource (map, player, c, eResourceType::Oil) >= 3
+					|| map.isCoast (c) || map.isWater (c) || (homeRegion >= 0 && world.tankRegionOf (c) != homeRegion))
+					ok = false; // на берег и на чужую сушу стройщик не встанет (Gen_Coast 44: площадка на берегу — 10 планов подряд)
+			if (!ok) continue;
+			const int chain = chainTo (g, q, big);
+			if (chain < 0) continue;
+			bool exitOk = false;
+			for (const auto& c : ringCells (q, big))
+				if (groundFree (map, c) && freeRegion (map, c, cells, kMinRegion) >= kMinRegion)
+				{
+					exitOk = true;
+					break;
+				}
+			if (!exitOk) continue;
+			const long long key = chain * 40LL + std::max (std::abs (dx), std::abs (dy)) * 3LL;
+			if (key < bestKey)
+			{
+				bestKey = key;
+				best = q;
+			}
+		}
+	return best;
+}
+
 // шаг 13, часть 2 (П11, П14): место верфи или дока — 2×2 на воде водоёма sea, связь с главной подбазой
 // соединителями (не длиннее kMaxChain — сетка g), выход кораблям (≥ 4 свободных клеток воды вокруг), не под
 // угрозой; ближе к anchor и короче цепочка. (−1,−1) — нет
@@ -1508,6 +1556,8 @@ std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 		commando_.update (model, *player, world_, roles_, defense_, econ.metalMaxProd, bigFactories, turn);
 		air_.update (model, *player, world_, roles_, defense_, navy_, commando_, econ.metalMaxProd, bigFactories, turn);
 		commando_.setFerryAvailable (air_.counts().transports > 0);
+		// Р7 (п. 94, 106): эко-сферы — условие победы из настроек партии, очки сторон, застой
+		eco_.update (model, *player, econ.metalMaxProd, turn);
 	}
 	minesToggled_.clear();
 	strategicDecisions (playerId, model, orders);
@@ -1519,7 +1569,8 @@ std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 		|| stats_.bought > 0 || stats_.refitLoads > 0 || stats_.refits > 0
 		|| stats_.defenseBuilds > 0 || stats_.guardMoves > 0 || stats_.aaHolds > 0 || stats_.minesLaid > 0
 		|| navy_.mode() != cNavy::eMode::None || navy_.counts().fleetMetal > 0
-		|| air_.program() != cAirForce::eProgram::None || air_.counts().planeMetal > 0 || commando_.counts().commandos > 0)
+		|| air_.program() != cAirForce::eProgram::None || air_.counts().planeMetal > 0 || commando_.counts().commandos > 0
+		|| eco_.spheresWanted() > 0 || eco_.counts().ownBuilt > 0 || eco_.counts().enemy > 0)
 	{
 		int visible = 0;
 		for (const auto& kv : world_.enemies())
@@ -1564,7 +1615,10 @@ std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 			+ std::to_string (air_.counts().strikes) + " hits " + std::to_string (air_.counts().hits) + " raids " + std::to_string (air_.counts().raids)
 			+ " commandos " + std::to_string (commando_.counts().commandos) + "/" + std::to_string (commando_.commandosWanted()) + " rank "
 			+ std::to_string (commando_.counts().maxRank) + " captures " + std::to_string (commando_.counts().captures) + " cdisables "
-			+ std::to_string (commando_.counts().disables) + " aliens " + std::to_string (commando_.counts().aliensKnown));
+			+ std::to_string (commando_.counts().disables) + " aliens " + std::to_string (commando_.counts().aliensKnown)
+			// Р7: эко-сферы и очки
+			+ " eco " + std::to_string (eco_.counts().own) + "/" + std::to_string (eco_.spheresWanted()) + " score "
+			+ std::to_string (eco_.counts().ownScore) + ":" + std::to_string (eco_.counts().enemyScore) + " " + eco_.victoryName());
 	}
 	// шаг 11 (для шага 16): явное «стоять» с причиной и мир правил — в журнал хода
 	noteWorld (playerId, model, orders);
@@ -1595,6 +1649,7 @@ std::vector<nlohmann::json> cRuleBrain::takeJournalEvents()
 	for (auto& e : navy_.takeEvents()) events.push_back (std::move (e)); // шаг 13, часть 2: флот
 	for (auto& e : commando_.takeEvents()) events.push_back (std::move (e)); // шаг 13, часть 3: коммандос
 	for (auto& e : air_.takeEvents()) events.push_back (std::move (e)); // шаг 13, часть 3: авиация
+	for (auto& e : eco_.takeEvents()) events.push_back (std::move (e)); // Р7: эко-сферы
 	for (auto& e : extraEvents_) events.push_back (std::move (e));
 	extraEvents_.clear();
 	return events;
@@ -1955,13 +2010,29 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 	{
 		const cVehicle* v = model.getVehicleFromID (it->first);
 		if (v == nullptr || v->getOwner() != player || v->isUnitBuildingABuilding() || isStuck (*v))
+		{
+			// Р7: к площадке эко-сферы нет пути — её не брать kEcoBadSiteTurns ходов (тесная база: площадка в кольце зданий)
+			if (v != nullptr && isStuck (*v) && sID (it->second.typeFirst, it->second.typeSecond) == cEcoPlan::kIdEcoSphere)
+				badEcoSites_.emplace_back (it->second.pos, turn);
 			it = plans_.erase (it);
+		}
 		// шаг 13, часть 2: план верфи или дока, который флоту больше не нужен (программа сменилась), — снять
 		else if ((sID (it->second.typeFirst, it->second.typeSecond) == kIdShipyard && !navy_.wantShipyard()) || (sID (it->second.typeFirst, it->second.typeSecond) == kIdDock && !navy_.wantDock()))
 			it = plans_.erase (it);
+		// Р7: план эко-сферы, который за kEcoPlanStale ходов не начался (площадку занимают, стройщик не подойдёт), — снять, а
+		// площадку не брать kEcoBadSiteTurns ходов (Gen_Archipelago 43: план одной площадки у трёх стройщиков 70 ходов)
+		else if (sID (it->second.typeFirst, it->second.typeSecond) == cEcoPlan::kIdEcoSphere && turn - it->second.since > kEcoPlanStale)
+		{
+			badEcoSites_.emplace_back (it->second.pos, turn);
+			extraEvents_.push_back ({{"event", "eco"}, {"level", "operational"}, {"what", "site dropped"}, {"unitId", it->first},
+				{"pos", {{"x", it->second.pos.x()}, {"y", it->second.pos.y()}}}, {"why", "the building did not start in time: site taken or unreachable"}});
+			it = plans_.erase (it);
+		}
 		else
 			++it;
 	}
+	badEcoSites_.erase (std::remove_if (badEcoSites_.begin(), badEcoSites_.end(), [&] (const auto& s) { return turn - s.second > kEcoBadSiteTurns; }),
+		badEcoSites_.end());
 
 	auto planType = [] (const sBuildPlan& p) { return sID (p.typeFirst, p.typeSecond); };
 	// построено + строится + в планах
@@ -2103,6 +2174,7 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 		p.typeFirst = what.firstPart;
 		p.typeSecond = what.secondPart;
 		p.pos = pos;
+		p.since = turn;
 		p.speed = fast ? 1 : 0;
 		p.cost = fast ? cost1 : cost0;
 		return plans_.insert_or_assign (v.getId(), p).first->second;
@@ -2186,6 +2258,7 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 		auto it = plans_.find (v.getId());
 		if (it != plans_.end() && !planValid (it->second))
 		{
+			if (planType (it->second) == cEcoPlan::kIdEcoSphere) badEcoSites_.emplace_back (it->second.pos, turn); // Р7
 			plans_.erase (it); // площадку заняли
 			it = plans_.end();
 		}
@@ -2229,6 +2302,44 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			std::vector<sID> wants; // по приоритету; нет места — берём следующее
 			if (nFactory < 1) wants.push_back (kIdFactory);
 			if (energyShort && (stationHelps || stationByCut)) wants.push_back (kIdEnergy);
+			// Р7 (п. 94, 106): эко-сферы — очки решают на пределе ходов (ai_eco: когда и сколько); сфере нужен человек —
+			// жилой блок (3 человека) раньше, если людей на неё не останется (считая строящееся и планы)
+			// энергии на новых потребителей нет — сфере её отдадут исследования, переработка золота или учебный центр (запуск сфер)
+			bool ecoFreeable = false;
+			if (!consumersOk && main != nullptr && eco_.pressing()) // только срочной сфере (предел близко, враг строит, «по очкам»)
+			{
+				int factoriesWorking = 0;
+				for (const cBuilding* ob : main->getBuildings())
+				{
+					const auto& osd = ob->getStaticUnitData();
+					if (ob->isUnitWorking() && osd.needsEnergy > 0 && (osd.buildingData.canResearch || osd.buildingData.convertsGold > 0 || osd.canBuild == "Human"))
+						ecoFreeable = true;
+					if (ob->isUnitWorking() && !osd.canBuild.empty() && osd.canBuild != "Human") ++factoriesWorking;
+				}
+				if (factoriesWorking >= 2 && eco_.pressing()) ecoFreeable = true; // лишнюю фабрику остановят ради сферы (запуск сфер)
+			}
+			const bool ecoOk = eco_.spheresWanted() > totalOf (cEcoPlan::kIdEcoSphere) && (consumersOk || ecoFreeable) && nFactory >= 1;
+			bool ecoHabitat = false;
+			if (ecoOk)
+			{
+				int cap = 0, use = 0;
+				auto addHumans = [&] (const sID& id) {
+					const auto& hsd = unitsData->getStaticUnitData (id);
+					cap += hsd.produceHumans; // жилой блок — 3
+					use += hsd.needsHumans;
+				};
+				if (main != nullptr)
+					for (const cBuilding* b : main->getBuildings()) addHumans (b->getStaticUnitData().ID);
+				for (const auto& ov : player->getVehicles())
+					if (ov->isUnitBuildingABuilding()) addHumans (ov->getBuildingType());
+				for (const auto& kv : plans_) addHumans (planType (kv.second));
+				ecoHabitat = cap - use < unitsData->getStaticUnitData (cEcoPlan::kIdEcoSphere).needsHumans;
+			}
+			if (ecoOk && eco_.urgent())
+			{
+				if (ecoHabitat) wants.push_back (kIdHabitat);
+				wants.push_back (cEcoPlan::kIdEcoSphere);
+			}
 			// шаг 13 (П7): учебный центр — пехота видит коммандос; ему нужен человек (жилой блок даёт 3)
 			const bool trainingWanted = (defense_.wantTrainingHall() || commando_.wantTrainingHall()) && consumersOk && totalOf (kIdTraining) < 1
 				&& (defense_.commandoAlarm() || rich || commando_.wantTrainingHall()); // без тревоги — из лишнего металла (склад ≥ 80%); шаг 13, ч. 3 — коммандос (чужие, диверсия)
@@ -2266,6 +2377,12 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 				wants.push_back (kIdTraining);
 			}
 			if (consumersOk && nFactory >= 1 && nFactory < factoryTarget) wants.push_back (kIdFactory);
+			// Р7: эко-сферы без спешки (застой) — после фабрик
+			if (ecoOk && !eco_.urgent())
+			{
+				if (ecoHabitat) wants.push_back (kIdHabitat);
+				wants.push_back (cEcoPlan::kIdEcoSphere);
+			}
 			// шаг 13, часть 3 (П15–П17, П10): авиазавод и ангар — после фабрик (экономика сначала: программа авиации
 			// включается по доходу и ходу, урок флота части 2)
 			if (air_.wantAirFactory() && consumersOk && nFactory >= 1 && totalOf (kIdAirFactory) < 1) wants.push_back (kIdAirFactory);
@@ -2311,8 +2428,29 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 							}
 					pos = findWaterSite (model, *player, gridWater, reserved, unitsData->getStaticUnitData (w), defense_, navy_.homeSea(), anchor, world_, bl);
 				}
+				else if (w == cEcoPlan::kIdEcoSphere)
+				{
+					// Р7: площадки, где сфера не началась, — заняты на kEcoBadSiteTurns ходов
+					tFootprints r2 = reserved;
+					for (const auto& bs : badEcoSites_) r2.emplace_back (bs.first, true);
+					// срочно — в ядре базы (быстрее); из лишнего (застой) — на площадке с соединителями: ядро — фабрикам
+					if (eco_.urgent())
+					{
+						pos = findBaseSpot (model, *player, main, unitsData->getStaticUnitData (w), r2, world_, bl);
+						if (pos.x() < 0) pos = findLinkedSpot (model, *player, grid, unitsData->getStaticUnitData (w), r2, world_, bl, defense_.map().landRegion);
+					}
+					else
+					{
+						pos = findLinkedSpot (model, *player, grid, unitsData->getStaticUnitData (w), r2, world_, bl, defense_.map().landRegion);
+						if (pos.x() < 0) pos = findBaseSpot (model, *player, main, unitsData->getStaticUnitData (w), r2, world_, bl);
+					}
+				}
 				else
 					pos = w == kIdMine ? site.pos : findBaseSpot (model, *player, main, unitsData->getStaticUnitData (w), reserved, world_, bl);
+				// Р7: эко-сфере (и жилому блоку для неё) и электростанции у тесной базы места нет — площадка с цепочкой
+				// соединителей, как у шахты (Gen_Coast 44: станции негде встать — с хода 100 ни сфер, ни новых потребителей)
+				if (pos.x() < 0 && (w == kIdEnergy || (w == kIdHabitat && ecoHabitat)))
+					pos = findLinkedSpot (model, *player, grid, unitsData->getStaticUnitData (w), reserved, world_, bl, defense_.map().landRegion);
 				if (pos.x() >= 0)
 				{
 					what = w;
@@ -2326,8 +2464,13 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			}
 			// турбо: первая фабрика; шаг 13 — учебный центр и жилой блок по тревоге «диверсант»
 			const bool turboPlan = (what == kIdFactory && countBuildings (*player, kIdFactory) == 0)
-				|| (defense_.commandoAlarm() && (what == kIdTraining || (what == kIdHabitat && totalOf (kIdTraining) <= 1)));
+				|| (defense_.commandoAlarm() && (what == kIdTraining || (what == kIdHabitat && totalOf (kIdTraining) <= 1)))
+				|| (eco_.urgent() && (what == cEcoPlan::kIdEcoSphere || (what == kIdHabitat && ecoHabitat))); // Р7: очки — раньше
 			executePlan (v, makePlan (v, what, pos, turboPlan));
+			if (what == cEcoPlan::kIdEcoSphere || (what == kIdHabitat && ecoHabitat))
+				extraEvents_.push_back ({{"event", "eco"}, {"level", "operational"}, {"what", "plan"}, {"unitId", v.getId()},
+					{"type", unitsData->getStaticUnitData (what).getDefaultName()}, {"pos", {{"x", pos.x()}, {"y", pos.y()}}},
+					{"urgent", eco_.urgent()}, {"why", what == kIdHabitat ? std::string ("a habitat first: the eco-sphere needs a colonist") : eco_.why()}});
 			if (what == kIdShipyard) navy_.noteShipyardSite (pos); // П13: стройку верфи — охранять
 			continue;
 		}
@@ -2879,6 +3022,67 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			goldFree += b.getStaticData().convertsGold;
 			energyNeed -= b.getStaticUnitData().needsEnergy;
 		}
+		// Р7: эко-сферы — первыми (очко за ход; энергия и человек — раньше исследований). Не хватает энергии или людей (тесная
+		// база без нефти — Three Isles, Donuts: сфера стояла построенной без очков) — остановить исследования, учебный центр,
+		// переработку золота: очко за ход дороже, а их остановка обратима
+		std::vector<unsigned int> stoppedForEco;
+		for (const auto& bp : player->getBuildings())
+		{
+			const cBuilding& b = *bp;
+			if (b.subBase != main || b.isDisabled() || b.isUnitWorking() || !b.buildingCanBeStarted()) continue;
+			const auto& sd = b.getStaticUnitData();
+			if (!sd.buildingData.canScore) continue;
+			while (eco_.pressing() && (sd.needsHumans > humanFree || !energyFeasible (energyNeed + sd.needsEnergy, econ.stations, econ.generators, econ.oil)))
+			{
+				// кого остановить: сначала исследования, потом переработку золота, учебный центр, а нефти на энергию нет вовсе (Three
+				// Isles: остров без нефти) — фабрику (малую раньше большой), если работающих фабрик больше одной
+				int factoriesWorking = 0;
+				for (const cBuilding* ob : main->getBuildings())
+					if (ob->isUnitWorking() && !ob->getStaticUnitData().canBuild.empty() && ob->getStaticUnitData().canBuild != "Human") ++factoriesWorking;
+				for (unsigned int sid : stoppedForEco)
+					if (const cBuilding* sb = model.getBuildingFromID (sid); sb != nullptr && !sb->getStaticUnitData().canBuild.empty()
+						&& sb->getStaticUnitData().canBuild != "Human") --factoriesWorking;
+				const cBuilding* victim = nullptr;
+				int victimRank = 0;
+				for (const cBuilding* ob : main->getBuildings())
+				{
+					const auto& osd = ob->getStaticUnitData();
+					if (!ob->isUnitWorking() || ob->isDisabled() || osd.buildingData.canScore) continue;
+					const bool factory = !osd.canBuild.empty() && osd.canBuild != "Human";
+					const int rank = osd.buildingData.canResearch ? 6 : (osd.buildingData.convertsGold > 0 ? 5 : (osd.canBuild == "Human" ? 4
+						: (factory && factoriesWorking >= 2 && eco_.pressing() ? (osd.canBuild == "SmallGroundVehicle" ? 3 : (osd.canBuild == "BigGroundVehicle" ? 1 : 2)) : 0)));
+					if (rank <= victimRank) continue;
+					if (std::find (stoppedForEco.begin(), stoppedForEco.end(), ob->getId()) != stoppedForEco.end()) continue;
+					// не хватает только людей — останавливать тех, кому они нужны
+					if (sd.needsHumans > humanFree && osd.needsHumans <= 0 && energyFeasible (energyNeed + sd.needsEnergy, econ.stations, econ.generators, econ.oil)) continue;
+					victim = ob;
+					victimRank = rank;
+				}
+				if (victim == nullptr) break;
+				cOrder so;
+				so.type = eOrderType::StopWork;
+				so.playerId = playerId;
+				so.unitId = victim->getId();
+				so.level = "op";
+				so.reason = "stop " + victim->getStaticUnitData().getDefaultName() + ": energy and colonists to the eco-sphere (a point per turn)";
+				out.push_back (std::move (so));
+				stoppedForEco.push_back (victim->getId());
+				energyNeed -= victim->getStaticUnitData().needsEnergy;
+				humanFree += victim->getStaticUnitData().needsHumans;
+				if (victim->getStaticData().convertsGold > 0) goldFree += victim->getStaticData().convertsGold;
+			}
+			if (sd.needsHumans > humanFree) continue;
+			if (!energyFeasible (energyNeed + sd.needsEnergy, econ.stations, econ.generators, econ.oil)) continue;
+			cOrder o;
+			o.type = eOrderType::StartWork;
+			o.playerId = playerId;
+			o.unitId = b.getId();
+			o.level = "op";
+			o.reason = "start eco-sphere";
+			out.push_back (std::move (o));
+			energyNeed += sd.needsEnergy;
+			humanFree -= sd.needsHumans;
+		}
 		for (const auto& bp : player->getBuildings())
 		{
 			const cBuilding& b = *bp;
@@ -3280,7 +3484,8 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 		for (const auto& b : player->getBuildings())
 		{
 			const auto& bsd = b->getStaticUnitData();
-			if (bsd.buildingData.canMineMaxRes > 0 || !bsd.canBuild.empty() || bsd.produceEnergy > 0 || bsd.buildingData.canResearch)
+			if (bsd.buildingData.canMineMaxRes > 0 || !bsd.canBuild.empty() || bsd.produceEnergy > 0 || bsd.buildingData.canResearch
+				|| bsd.buildingData.canScore) // Р7: эко-сфера — её очки пропадут вместе с ней
 				for (const auto& c : footprintCells (b->getPosition(), b->getIsBig()))
 					keys.push_back (c);
 		}

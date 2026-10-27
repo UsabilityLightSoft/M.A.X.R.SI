@@ -5,6 +5,7 @@
 #include "ai_metrics_collector.h"
 
 #include "game/data/base/base.h"
+#include "game/data/gamesettings.h"
 #include "game/data/model.h"
 #include "game/data/player/player.h"
 #include "game/data/units/building.h"
@@ -13,6 +14,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <limits>
 
 namespace ai
 {
@@ -63,13 +65,26 @@ sGameResult decideGameResult (const cModel& model, eGameEnd end, int endTurn)
 		{
 			result.winner = alive.front();
 			result.winReason = "elimination";
+			// Р7: режим «по очкам» — движок признал побеждённым того, кого соперник обогнал до N очков, хотя войска у него
+			// есть (cModel::checkDefeats; уничтоженный — без юнитов, способных стрелять или строить)
+			const auto settings = model.getGameSettings();
+			if (settings && settings->victoryConditionType == eGameSettingsVictoryCondition::Points)
+				for (const auto& player : players)
+					if (player->isDefeated && player->mayHaveOffensiveUnit())
+						result.winReason = "points";
 		}
 		else
 			result.winReason = "draw"; // уничтожены все сразу
-		return result;
+		// прежний вердикт: уничтожение — то же; победа по очкам — по материалу (как на пределе ходов)
+		if (result.winReason != "points")
+		{
+			result.winnerMaterial = result.winner;
+			result.winReasonMaterial = result.winReason;
+			return result;
+		}
 	}
 
-	// лимит ходов: по материалу
+	// лимит ходов (Р7): прежний вердикт — по материалу
 	int best = -1;
 	int bestValue = -1;
 	int secondValue = -1;
@@ -87,11 +102,39 @@ sGameResult decideGameResult (const cModel& model, eGameEnd end, int endTurn)
 	}
 	if (best >= 0 && bestValue > 0 && bestValue >= kMaterialWinRatio * std::max (secondValue, 0))
 	{
-		result.winner = best;
-		result.winReason = "material";
+		result.winnerMaterial = best;
+		result.winReasonMaterial = "material";
 	}
 	else
-		result.winReason = "draw";
+		result.winReasonMaterial = "draw";
+	if (result.winReason == "points") return result; // режим «по очкам»: уже решено движком
+
+	// вердикт игры: очки эко-сфер — у кого больше, тот победил; поровну (и 0:0) — прежний вердикт
+	int bestScorer = -1;
+	int bestScore = std::numeric_limits<int>::min();
+	int secondScore = std::numeric_limits<int>::min();
+	for (const auto& player : players)
+	{
+		const int score = player->getScore();
+		if (score > bestScore)
+		{
+			secondScore = bestScore;
+			bestScore = score;
+			bestScorer = player->getId();
+		}
+		else if (score > secondScore)
+			secondScore = score;
+	}
+	if (bestScorer >= 0 && players.size() > 1 && bestScore > secondScore)
+	{
+		result.winner = bestScorer;
+		result.winReason = "points";
+	}
+	else
+	{
+		result.winner = result.winnerMaterial;
+		result.winReason = result.winReasonMaterial;
+	}
 	return result;
 }
 

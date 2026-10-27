@@ -26,9 +26,11 @@ class cPlayer;
 namespace ai
 {
 
-// При лимите ходов (или сторожевом обрыве) без уничтожения победитель — тот,
-// у кого суммарная стоимость живых юнитов и зданий не меньше kMaterialWinRatio ×
-// стоимости соперника («material»); иначе ничья («draw»).
+// При лимите ходов (или сторожевом обрыве) без уничтожения — Р7 (п. 94, 106; решение Владыки 27.10.2026: ничью
+// превращать в победу по очкам): сначала очки эко-сфер (cPlayer::getScore) — у кого больше, тот победил («points»);
+// при равенстве очков — прежний вердикт: победитель тот, у кого суммарная стоимость живых юнитов и зданий не меньше
+// kMaterialWinRatio × стоимости соперника («material»); иначе ничья («draw»). Без эко-сфер (очки 0:0) вердикт
+// прежний — старые эталоны не меняются. Прежний вердикт (по материалу, без очков) пишется рядом — winnerMaterial.
 constexpr double kMaterialWinRatio = 1.5;
 
 enum class eGameEnd
@@ -41,9 +43,12 @@ enum class eGameEnd
 struct sGameResult
 {
 	int winner = -1; // id победителя; -1 — нет
-	std::string winReason; // elimination | material | draw
+	std::string winReason; // elimination | points | material | draw
 	std::string endReason; // elimination | turnLimit | watchdog
 	int endTurn = 0; // ход, на котором партия остановлена (сыграны 1…endTurn−1)
+	// Р7: прежний вердикт — без очков (уничтожение, иначе материал, иначе ничья); для D «по материалу»
+	int winnerMaterial = -1;
+	std::string winReasonMaterial; // elimination | material | draw
 };
 
 // суммарная стоимость (buildCost) живых юнитов и зданий игрока
@@ -51,7 +56,9 @@ int materialValue (const cPlayer&);
 
 // Исход партии. Уничтожение — по вердикту движка: cModel::checkDefeats на начале
 // круга помечает побеждённым игрока без юнитов, способных стрелять или строить
-// (cPlayer::mayHaveOffensiveUnit). Иначе — по материалу (kMaterialWinRatio).
+// (cPlayer::mayHaveOffensiveUnit). Р7: в режиме «по очкам» (MAXR_VICTORY=points:N) движок помечает
+// побеждённым и того, кого соперник обогнал до N очков, — такой исход «points». Иначе — очки, при их
+// равенстве — материал (kMaterialWinRatio), иначе ничья.
 sGameResult decideGameResult (const cModel&, eGameEnd, int endTurn);
 
 class cMetricsCollector

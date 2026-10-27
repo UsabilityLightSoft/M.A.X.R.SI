@@ -51,6 +51,8 @@
 //           берёт ответы из записи, модель не зовётся (те же argv и MAXR_LLM_*).
 // MAXR_FAST_TICK=0 — проигрывать ходы в реальном времени (по умолчанию быстрый такт).
 // MAXR_DETERMINISTIC_TICK=0 — время идёт само, как в сетевой игре (шаг 11; партия не повторяется).
+// MAXR_VICTORY=turns|points:N|death — условие победы партии (Р7; по умолчанию turns: на пределе ходов вердикт —
+//           очки эко-сфер, при равенстве — материал, иначе ничья; points:N — победа при N очках).
 // Партия кончается на ходе argv[1] или раньше — когда движок признал игрока
 // побеждённым. Выход: digest/, journal.jsonl, metrics.json (исход и метрики D),
 // metrics_turns.jsonl (ряд по ходам).
@@ -784,6 +786,29 @@ try
 	gameSettings->victoryConditionType = eGameSettingsVictoryCondition::Turns;
 	gameSettings->victoryTurns = maxTurns + 1;
 	gameSettings->turnEndDeadlineActive = false;
+	// Р7 (п. 94, 106): условие победы — MAXR_VICTORY: «turns» (по умолчанию: по ходам, предел — maxTurns + 1, партию
+	// останавливает драйвер на maxTurns, вердикт — очки эко-сфер, при равенстве материал), «points:N» (победа при N очках —
+	// её объявляет движок; предел ходов драйвера — тот же), «death» (до уничтожения). ИИИ читает условие из настроек партии.
+	if (const char* envVictory = std::getenv ("MAXR_VICTORY"); envVictory != nullptr && envVictory[0] != '\0')
+	{
+		const std::string v = envVictory;
+		if (v.rfind ("points:", 0) == 0 && std::atoi (v.c_str() + 7) > 0)
+		{
+			gameSettings->victoryConditionType = eGameSettingsVictoryCondition::Points;
+			gameSettings->victoryPoints = static_cast<unsigned int> (std::atoi (v.c_str() + 7));
+		}
+		else if (v == "death")
+			gameSettings->victoryConditionType = eGameSettingsVictoryCondition::Death;
+		else if (v != "turns")
+		{
+			std::cout << "[ai_headless] ERROR: MAXR_VICTORY='" << v << "': expected turns, points:N or death" << std::endl;
+			return -1;
+		}
+	}
+	std::cout << "[ai_headless] victory: "
+		<< (gameSettings->victoryConditionType == eGameSettingsVictoryCondition::Points ? "points " + std::to_string (gameSettings->victoryPoints)
+			: (gameSettings->victoryConditionType == eGameSettingsVictoryCondition::Death ? std::string ("death") : "turns " + std::to_string (gameSettings->victoryTurns)))
+		<< ", driver stops at turn " << maxTurns << std::endl;
 
 	// --- карта ---
 	auto staticMap = std::make_shared<cStaticMap>();
