@@ -419,12 +419,13 @@ void cActionInitNewGame::execute (cModel& model) const
 		{
 			// landing unit is one of the initial landing units, that the player gets for free
 			// so don't pay for the unit and the default cargo
-			credits -= (static_cast<int> (landing.cargo) - freeCargo) / 5;
+			// (one credit per started 5 units of cargo, as in the landing window)
+			credits -= computeLandingCargoCost (static_cast<int> (landing.cargo), freeCargo);
 			initialLandingUnits.erase (it);
 		}
 		else
 		{
-			credits -= static_cast<int> (landing.cargo) / 5;
+			credits -= computeLandingCargoCost (static_cast<int> (landing.cargo), 0);
 			credits -= unitsdata.getDynamicUnitData (landing.unitID, player.getClan()).getBuildCost();
 		}
 	}
