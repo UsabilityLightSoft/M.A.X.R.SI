@@ -32,6 +32,7 @@
 #include "ai_eco.h"
 #include "ai_navy.h"
 #include "ai_roles.h"
+#include "ai_survey.h"
 #include "ai_tech.h"
 #include "ai_world_model.h"
 
@@ -118,6 +119,8 @@ private:
 	cAirForce air_;
 	// Р7 (п. 94, 106): эко-сферы и победа по очкам — условие победы из настроек партии, когда и сколько сфер (ai_eco)
 	cEcoPlan eco_;
+	// Р7 (п. 104, схема Владыки): умный геолог (ai_survey)
+	cSurvey survey_;
 	// шаг 13: минёр уже включил закладку в этом ходу — в следующем заходе выключить
 	std::vector<unsigned int> minesToggled_;
 	// Р7 (п. 114): потолок сухопутной армии «пути по суше нет» уже записан в журнал

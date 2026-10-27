@@ -1563,6 +1563,8 @@ std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 		commando_.setFerryAvailable (air_.counts().transports > 0);
 		// Р7 (п. 94, 106): эко-сферы — условие победы из настроек партии, очки сторон, застой
 		eco_.update (model, *player, econ.metalMaxProd, turn);
+		// Р7 (п. 104): умный геолог — центр базы, зона врага, жилы
+		survey_.update (model, *player, world_, defense_.baseCenter(), turn);
 	}
 	minesToggled_.clear();
 	strategicDecisions (playerId, model, orders);
@@ -1655,6 +1657,7 @@ std::vector<nlohmann::json> cRuleBrain::takeJournalEvents()
 	for (auto& e : commando_.takeEvents()) events.push_back (std::move (e)); // шаг 13, часть 3: коммандос
 	for (auto& e : air_.takeEvents()) events.push_back (std::move (e)); // шаг 13, часть 3: авиация
 	for (auto& e : eco_.takeEvents()) events.push_back (std::move (e)); // Р7: эко-сферы
+	for (auto& e : survey_.takeEvents()) events.push_back (std::move (e)); // Р7: геолог
 	for (auto& e : extraEvents_) events.push_back (std::move (e));
 	extraEvents_.clear();
 	return events;
@@ -4561,6 +4564,27 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 				continue;
 			}
 			const cPosition landing = player->getLandingPos();
+			// Р7 (схема Владыки, п. 104): умный геолог — кольца вокруг базы полосой 3, жила целиком, не к базе врага; под угрозой —
+			// за ход в безопасную клетку (вода лучше), не успевает — разведка нового рядом (ai_survey)
+			if (survey_.enabled())
+			{
+				std::string why;
+				auto path = survey_.pathFor (model, *player, view, world_, *vehicle, why);
+				if (!path.empty())
+				{
+					cOrder o;
+					o.type = eOrderType::Move;
+					o.playerId = playerId;
+					o.unitId = vehicle->getId();
+					o.path = std::move (path);
+					o.position = o.path.back();
+					o.level = "micro";
+					o.reason = why;
+					out.push_back (std::move (o));
+					if (why.rfind ("surveyor: away", 0) == 0) ++stats_.evacuations;
+					continue;
+				}
+			}
 			// шаг 7: под угрозой врага (карта угроз по памяти) — в ближайшую безопасную клетку,
 			// при равной дальности — ближе к базе
 			const eThreatLayer bl = kBuilderLayer;
@@ -4588,6 +4612,7 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 			}
 			auto path = pathToUnexplored (*vehicle, view, scoutCache, world_, bl, &landing, kSurveyorHome);
 			if (path.empty()) path = pathToUnexplored (*vehicle, view, scoutCache, world_, bl);
+			if (survey_.enabled() && !path.empty() && survey_.nearEnemy (path.back())) path.clear(); // Р7: не к базе врага
 			if (!path.empty())
 			{
 				cOrder o;
