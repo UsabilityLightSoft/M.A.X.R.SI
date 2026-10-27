@@ -191,9 +191,10 @@ public:
 
 	/**
 	* Try to move an undetected enemy stealth unit out of the way, if necessary to free position.
+	* Returns true, if the stealth unit steps aside: the position is free, when its move step has started.
 	*/
-	void sideStepStealthUnit (const cPosition&, const cVehicle&, const cPosition& bigOffset = cPosition (-1, -1));
-	void sideStepStealthUnit (const cPosition&, const cStaticUnitData& vehicleData, cPlayer* vehicleOwner, const cPosition& bigOffset = cPosition (-1, -1));
+	bool sideStepStealthUnit (const cPosition&, const cVehicle&, const cPosition& bigOffset = cPosition (-1, -1));
+	bool sideStepStealthUnit (const cPosition&, const cStaticUnitData& vehicleData, cPlayer* vehicleOwner, const cPosition& bigOffset = cPosition (-1, -1));
 
 	mutable cSignal<void()> gameTimeChanged;
 	mutable cSignal<void (const cVehicle&)> triggeredAddTracks;

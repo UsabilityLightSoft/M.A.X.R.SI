@@ -846,32 +846,33 @@ void cModel::setUnitsData (std::shared_ptr<cUnitsData> unitsData_)
 }
 
 //------------------------------------------------------------------------------
-void cModel::sideStepStealthUnit (const cPosition& position, const cVehicle& vehicle, const cPosition& bigOffset)
+bool cModel::sideStepStealthUnit (const cPosition& position, const cVehicle& vehicle, const cPosition& bigOffset)
 {
-	sideStepStealthUnit (position, vehicle.getStaticUnitData(), vehicle.getOwner(), bigOffset);
+	return sideStepStealthUnit (position, vehicle.getStaticUnitData(), vehicle.getOwner(), bigOffset);
 }
 
 //------------------------------------------------------------------------------
-void cModel::sideStepStealthUnit (const cPosition& position, const cStaticUnitData& vehicleData, cPlayer* vehicleOwner, const cPosition& bigOffset)
+bool cModel::sideStepStealthUnit (const cPosition& position, const cStaticUnitData& vehicleData, cPlayer* vehicleOwner, const cPosition& bigOffset)
 {
 	if (map->possiblePlaceVehicle (vehicleData, position, nullptr))
 	{
-		return;
+		return false;
 	}
 
-	if (vehicleData.factorAir > 0) return;
+	if (vehicleData.factorAir > 0) return false;
 
 	// first look for an undetected stealth unit
 	cVehicle* stealthVehicle = map->getField (position).getVehicle();
-	if (!stealthVehicle) return;
-	if (stealthVehicle->getOwner() == vehicleOwner) return;
-	if (stealthVehicle->getStaticUnitData().isStealthOn == eTerrainFlag::None) return;
-	if (stealthVehicle->isDetectedByPlayer (vehicleOwner)) return;
+	if (!stealthVehicle) return false;
+	if (stealthVehicle->getOwner() == vehicleOwner) return false;
+	if (stealthVehicle->getStaticUnitData().isStealthOn == eTerrainFlag::None) return false;
+	if (stealthVehicle->isDetectedByPlayer (vehicleOwner)) return false;
 
-	if (stealthVehicle->isUnitMoving())
+	// a moving unit is bumped into; a unit disabled by an infiltrator can't step aside
+	if (stealthVehicle->isUnitMoving() || stealthVehicle->isDisabled())
 	{
 		stealthVehicle->setDetectedByPlayer (vehicleOwner);
-		return;
+		return false;
 	}
 
 	// found a stealth unit. Try to find a place where the unit can move
@@ -944,12 +945,14 @@ void cModel::sideStepStealthUnit (const cPosition& position, const cStaticUnitDa
 		if (auto moveJob = addMoveJob (*stealthVehicle, path))
 		{
 			moveJob->resume();
+			return true;
 		}
-		return;
+		return false;
 	}
 
 	// sidestepping failed. Uncover the vehicle.
 	stealthVehicle->setDetectedByPlayer (vehicleOwner);
+	return false;
 }
 
 //------------------------------------------------------------------------------
