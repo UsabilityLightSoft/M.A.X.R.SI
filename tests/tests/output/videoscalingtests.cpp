@@ -19,6 +19,7 @@
 
 #include "output/video/video.h"
 
+#include <cmath>
 #include <doctest.h>
 
 namespace
@@ -120,4 +121,75 @@ TEST_CASE ("windowToPicturePosition")
 
 	// no picture yet: unchanged
 	CHECK (windowToPicturePosition (cPosition (5, 7), menu, SDL_Rect{0, 0, 0, 0}, window, window) == cPosition (5, 7));
+}
+
+//------------------------------------------------------------------------------
+TEST_CASE ("computeUiScale")
+{
+	SUBCASE ("automatic: 2.4 times the display scale, rounded to 0.5")
+	{
+		// 4K at 125%: x3 in full screen and in the maximized window (2071 = 2160 - title bar - task bar)
+		CHECK (computeUiScale (0, cPosition (3840, 2160), 1.25) == 3.);
+		CHECK (computeUiScale (0, cPosition (3840, 2071), 1.25) == 3.);
+		// 4K at 100%: 2.4 -> 2.5
+		CHECK (computeUiScale (0, cPosition (3840, 2160), 1.) == 2.5);
+		// 8K at 200%: 4.8 -> 5
+		CHECK (computeUiScale (0, cPosition (7680, 4320), 2.) == 5.);
+		// an unknown display scale counts as 100%
+		CHECK (computeUiScale (0, cPosition (3840, 2160), 0.) == 2.5);
+		CHECK (computeUiScale (0, cPosition (3840, 2160), std::nan ("")) == 2.5);
+	}
+	SUBCASE ("automatic: reduced while the picture would be smaller than 1280x720 (a tenth less is accepted)")
+	{
+		// 4K at 150%: 3.5 would give 1097x617
+		CHECK (computeUiScale (0, cPosition (3840, 2160), 1.5) == 3.);
+		// full HD at 100%: x1.5, also maximized (1280x672)
+		CHECK (computeUiScale (0, cPosition (1920, 1080), 1.) == 1.5);
+		CHECK (computeUiScale (0, cPosition (1920, 1009), 1.) == 1.5);
+		// a window of 2480x1465 on a 4K display at 125%: x2 (1240x732)
+		CHECK (computeUiScale (0, cPosition (2480, 1465), 1.25) == 2.);
+		// 2560x1440 at 100%: x2
+		CHECK (computeUiScale (0, cPosition (2560, 1440), 1.) == 2.);
+		// small displays and windows: not below 1
+		CHECK (computeUiScale (0, cPosition (1366, 768), 1.) == 1.);
+		CHECK (computeUiScale (0, cPosition (640, 480), 2.) == 1.);
+	}
+	SUBCASE ("chosen scale: reduced while the picture would be smaller than 640x480")
+	{
+		CHECK (computeUiScale (300, cPosition (3840, 2160), 1.25) == 3.);
+		CHECK (computeUiScale (250, cPosition (3840, 2160), 1.25) == 2.5);
+		CHECK (computeUiScale (400, cPosition (3840, 2071), 1.25) == 4.);
+		CHECK (computeUiScale (400, cPosition (2480, 1465), 1.25) == 3.);
+		CHECK (computeUiScale (250, cPosition (1920, 1009), 1.) == 2.);
+		CHECK (computeUiScale (100, cPosition (3840, 2160), 1.25) == 1.);
+		CHECK (computeUiScale (200, cPosition (640, 480), 1.) == 1.);
+	}
+}
+
+//------------------------------------------------------------------------------
+TEST_CASE ("computePictureSize")
+{
+	CHECK (computePictureSize (cPosition (3840, 2160), 3.) == cPosition (1280, 720));
+	CHECK (computePictureSize (cPosition (3840, 2071), 3.) == cPosition (1280, 690));
+	CHECK (computePictureSize (cPosition (3840, 2160), 2.5) == cPosition (1536, 864));
+	CHECK (computePictureSize (cPosition (2480, 1465), 2.5) == cPosition (992, 586));
+	CHECK (computePictureSize (cPosition (1920, 1080), 1.5) == cPosition (1280, 720));
+	CHECK (computePictureSize (cPosition (1920, 1080), 1.) == cPosition (1920, 1080));
+	// at least the size of the menus
+	CHECK (computePictureSize (cPosition (1000, 700), 2.) == cPosition (640, 480));
+	CHECK (computePictureSize (cPosition (600, 400), 1.) == cPosition (640, 480));
+	// never enlarged
+	CHECK (computePictureSize (cPosition (1920, 1080), 0.5) == cPosition (1920, 1080));
+}
+
+//------------------------------------------------------------------------------
+TEST_CASE ("isUiScaleFitting")
+{
+	CHECK (isUiScaleFitting (0, cPosition (640, 480)));
+	CHECK (isUiScaleFitting (100, cPosition (640, 480)));
+	CHECK (isUiScaleFitting (400, cPosition (3840, 2071)));
+	CHECK_FALSE (isUiScaleFitting (400, cPosition (2480, 1465)));
+	CHECK (isUiScaleFitting (300, cPosition (2480, 1465)));
+	CHECK_FALSE (isUiScaleFitting (250, cPosition (1920, 1009)));
+	CHECK (isUiScaleFitting (200, cPosition (1920, 1009)));
 }

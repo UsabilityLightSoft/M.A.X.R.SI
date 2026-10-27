@@ -54,6 +54,22 @@ namespace
 	 * Otherwise the picture is scaled smoothly to fit the window.
 	 */
 	constexpr double integerScaleCoverage = 0.9;
+
+	/** The automatic scale of the user interface is this factor times the scale of the display (DPI / 96). */
+	constexpr double autoUiScalePerDisplayScale = 2.4;
+	/** The automatic scale leaves a picture of at least this size (up to the tolerance less) ... */
+	constexpr int autoUiScaleMinimalWidth = 1280;
+	constexpr int autoUiScaleMinimalHeight = 720;
+	/** ... a maximized window loses some height to the title bar and the task bar (4K at 125%: 2071 instead of 2160). */
+	constexpr double autoUiScaleTolerance = 0.9;
+	/** The scales of the user interface are multiples of this step. */
+	constexpr double uiScaleStep = 0.5;
+
+	//--------------------------------------------------------------------------
+	bool isPictureAtLeast (const cPosition& pictureSize, double minimalWidth, double minimalHeight)
+	{
+		return pictureSize.x() >= minimalWidth && pictureSize.y() >= minimalHeight;
+	}
 } // namespace
 
 //------------------------------------------------------------------------------
@@ -1112,6 +1128,50 @@ cPosition windowToPicturePosition (const cPosition& windowPosition, const SDL_Re
 	const double x = source.x + (pixelX - destination.x) * source.w / destination.w;
 	const double y = source.y + (pixelY - destination.y) * source.h / destination.h;
 	return cPosition (static_cast<int> (std::floor (x)), static_cast<int> (std::floor (y)));
+}
+
+//------------------------------------------------------------------------------
+double computeUiScale (int uiScalePercent, const cPosition& outputSize, double displayScale)
+{
+	const auto pictureSize = [&] (double scale) {
+		return cPosition (static_cast<int> (std::floor (outputSize.x() / scale)), static_cast<int> (std::floor (outputSize.y() / scale)));
+	};
+	double scale = 1.;
+	if (uiScalePercent <= 0)
+	{
+		if (!(displayScale > 0.)) displayScale = 1.; // unknown (or not a number)
+		scale = std::max (1., std::round (displayScale * autoUiScalePerDisplayScale / uiScaleStep) * uiScaleStep);
+		while (scale > 1. && !isPictureAtLeast (pictureSize (scale), autoUiScaleMinimalWidth * autoUiScaleTolerance, autoUiScaleMinimalHeight * autoUiScaleTolerance))
+		{
+			scale -= uiScaleStep;
+		}
+	}
+	else
+	{
+		scale = uiScalePercent / 100.;
+	}
+	while (scale > 1. && !isPictureAtLeast (pictureSize (scale), MINWIDTH, MINHEIGHT))
+	{
+		scale -= uiScaleStep;
+	}
+	return std::max (1., scale);
+}
+
+//------------------------------------------------------------------------------
+cPosition computePictureSize (const cPosition& outputSize, double uiScale)
+{
+	const double scale = std::max (1., uiScale);
+	const int width = static_cast<int> (std::floor (outputSize.x() / scale));
+	const int height = static_cast<int> (std::floor (outputSize.y() / scale));
+	return cPosition (std::max (MINWIDTH, width), std::max (MINHEIGHT, height));
+}
+
+//------------------------------------------------------------------------------
+bool isUiScaleFitting (int uiScalePercent, const cPosition& outputSize)
+{
+	if (uiScalePercent <= 0) return true; // the automatic scale always fits
+	const double scale = uiScalePercent / 100.;
+	return computeUiScale (uiScalePercent, outputSize, 1.) == scale || scale <= 1.;
 }
 
 //------------------------------------------------------------------------------

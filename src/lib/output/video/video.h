@@ -28,6 +28,7 @@
 #include "utility/signal/signal.h"
 #include "utility/signal/signalconnectionmanager.h"
 
+#include <array>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -337,6 +338,40 @@ SDL_Rect computeViewArea (const SDL_Rect& windowsArea, const cPosition& bufferSi
  * @param outputSize size of the window in pixels
  */
 cPosition windowToPicturePosition (const cPosition& windowPosition, const SDL_Rect& source, const SDL_Rect& destination, const cPosition& windowSize, const cPosition& outputSize);
+
+/**
+ * The scale factors of the user interface offered in the settings, in percent.
+ * 0 (not in the list) is the automatic scale.
+ */
+inline constexpr std::array<int, 6> uiScalePercents{100, 150, 200, 250, 300, 400};
+
+/**
+ * The scale of the user interface: how many pixels of the window show one pixel of the game picture.
+ *
+ * Automatic (uiScalePercent 0): 2.4 times the scale of the display set in the system (DPI / 96),
+ * rounded to 0.5 (a 4K display at 125% gets 3, a full HD display at 100% 2.5);
+ * reduced in steps of 0.5, while the picture would be smaller than 1280x720
+ * (up to a tenth less is accepted: the title bar and the task bar take some height of a maximized window).
+ * Every scale is reduced in steps of 0.5, while the picture would be smaller than 640x480 (the size of the menus).
+ * The scale is never smaller than 1.
+ *
+ * @param uiScalePercent the chosen scale in percent, 0 = automatic
+ * @param outputSize size of the window in pixels
+ * @param displayScale scale of the display (DPI / 96), 1 if unknown
+ */
+double computeUiScale (int uiScalePercent, const cPosition& outputSize, double displayScale);
+
+/**
+ * The size of the game picture (the screen buffer) for a window:
+ * the window size divided by the scale of the user interface, but not smaller than 640x480.
+ */
+cPosition computePictureSize (const cPosition& outputSize, double uiScale);
+
+/**
+ * Whether a scale (in percent, 0 = automatic) keeps the game picture of the window at least 640x480,
+ * so that it is used without being reduced.
+ */
+bool isUiScaleFitting (int uiScalePercent, const cPosition& outputSize);
 
 /**
 * Works like SDL_BlittSurface.
