@@ -28,8 +28,11 @@
 #include "utility/signal/signalconnectionmanager.h"
 
 #include <memory>
+#include <optional>
+#include <string>
 
 class cApplication;
+class cWindowGameSettings;
 class cWindowNetworkLobbyHost;
 
 class cMenuControllerMultiplayerHost : public cRunnable, public std::enable_shared_from_this<cMenuControllerMultiplayerHost>
@@ -53,6 +56,7 @@ private:
 
 	std::shared_ptr<cWindowNetworkLobbyHost> windowNetworkLobby;
 	std::shared_ptr<cInitGamePreparation> initGamePreparation;
+	std::weak_ptr<cWindowGameSettings> windowGameSettings;
 
 private:
 	void reset();
@@ -71,6 +75,14 @@ private:
 	void startNewGame (std::shared_ptr<cClient>);
 
 	void saveOptions();
+
+	/** The name of the first player in the lobby, that is the AI of M.A.X.R.SI (see isSiAiPlayerName). */
+	std::optional<std::string> findAiPlayerName() const;
+	/**
+	 * The AI plays turn based only: while it is in the lobby, the game type is set to "Turn based"
+	 * (the lobby tells why) and the open settings window offers no other type.
+	 */
+	void handleAiTurnBasedOnly();
 };
 
 #endif // ui_graphical_menu_control_menucontrollermultiplayerhostH

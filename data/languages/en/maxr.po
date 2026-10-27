@@ -409,6 +409,12 @@ msgstr "M.A.X.R. %s based on Interplay's Mechanized Assault and eXploration"
 msgid "Main~Version"
 msgstr "version v%s"
 
+msgid "Multiplayer~AI_Game_Type_Changed"
+msgstr "Game type changed to \"Turn based\": the AI %s plays turn based only."
+
+msgid "Multiplayer~AI_Turn_Based_Only"
+msgstr "The AI plays turn based only"
+
 msgid "Multiplayer~Abort_Waiting"
 msgstr "Server, press F2 to abort waiting."
 

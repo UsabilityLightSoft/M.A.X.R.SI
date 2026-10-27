@@ -415,6 +415,12 @@ msgstr "M.A.X.R. %s основывается на M.A.X. от Interplay"
 msgid "Main~Version"
 msgstr "версия %s"
 
+msgid "Multiplayer~AI_Game_Type_Changed"
+msgstr "Тип игры сменён на \"По очереди\": ИИИ %s умеет ходить только по очереди."
+
+msgid "Multiplayer~AI_Turn_Based_Only"
+msgstr "ИИИ умеет ходить только по очереди"
+
 msgid "Multiplayer~Abort_Waiting"
 msgstr "Сервер, нажмите F2 чтобы прекратить ожидание."
 

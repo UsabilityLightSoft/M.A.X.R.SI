@@ -408,6 +408,12 @@ msgstr ""
 msgid "Main~Version"
 msgstr ""
 
+msgid "Multiplayer~AI_Game_Type_Changed"
+msgstr ""
+
+msgid "Multiplayer~AI_Turn_Based_Only"
+msgstr ""
+
 msgid "Multiplayer~Abort_Waiting"
 msgstr ""
 

@@ -70,6 +70,8 @@ public:
 	void disconnect();
 
 	const cPlayerBasicData& getLocalPlayer() const { return localPlayer; }
+	const std::vector<cPlayerBasicData>& getPlayers() const { return players; }
+	const cSaveGameInfo& getSaveGameInfo() const { return saveGameInfo; }
 	const std::filesystem::path& getDownloadingMapFilename() const { return triedLoadMapFilename; }
 	const sLobbyPreparationData& getLobbyPreparationData() const { return lobbyPreparationData; }
 
