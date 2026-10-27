@@ -82,6 +82,9 @@ private:
 		std::chrono::steady_clock::time_point passSentAt; // только страховка от потерянного запроса
 		bool passResent = false;
 		std::vector<unsigned int> disabledLog; // шаг 13: свои юниты, выключенные врагом с прошлого решения
+		// Р6 (правка 31): свои машины, угон которых замечен с прошлого решения, — как в сообщении «Враг захватил …»
+		// в момент, когда замечен (дозор может сбить машину раньше решения): id, тип, клетка, новый хозяин
+		nlohmann::json stolenLog = nlohmann::json::array();
 	};
 
 	// сводка заходов игрока за партию — в metrics.json

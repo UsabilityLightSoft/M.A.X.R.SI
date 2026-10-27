@@ -162,6 +162,12 @@ void cAiEngine::addPlayer (int playerId, cClient* client, std::shared_ptr<cAiBra
 		if (target.getOwner() != nullptr && target.getOwner()->getId() == players_[index].playerId)
 			players_[index].disabledLog.push_back (target.getId());
 	});
+	// Р6 (правка 31): угон своей машины замечен в начале нашего хода (сигнал модели этого игрока)
+	signalConnections_.connect (client->getModel().stolenVehicleNoticed, [this, index] (const cVehicle& vehicle, const cPlayer& previousOwner) {
+		if (previousOwner.getId() != players_[index].playerId) return;
+		players_[index].stolenLog.push_back ({{"id", vehicle.getId()}, {"type", vehicle.getStaticUnitData().getDefaultName()},
+			{"x", vehicle.getPosition().x()}, {"y", vehicle.getPosition().y()}, {"owner", vehicle.getOwner() ? vehicle.getOwner()->getId() : -1}});
+	});
 	const cPlayer* player = client->getModel().getPlayer (playerId);
 	if (player == nullptr) return;
 	const auto onRefused = [this, index]() {
@@ -279,6 +285,9 @@ void cAiEngine::act (sCtx& ctx)
 	// в запрос советника она не идёт: там дайджест без неё)
 	auto digest = buildGameStateDigest (model, ctx.playerId);
 	digest["visibility"] = buildVisibility (model, ctx.playerId);
+	// Р6 (правка 31): угнанные у нас машины, замеченные в начале этого хода, — как сообщение «Враг захватил …»
+	// (машина, тип, клетка, новый хозяин); поле — только когда угоны есть
+	if (!ctx.stolenLog.empty()) digest["stolen"] = ctx.stolenLog;
 	const std::filesystem::path digestPath = outDir_ / "digest" / ("turn" + std::to_string (turn)
 		+ "_p" + std::to_string (ctx.playerId) + ".json");
 	std::ofstream digestFile (digestPath);
@@ -305,6 +314,15 @@ void cAiEngine::act (sCtx& ctx)
 		journal_.log ({{"event", "disabled"}, {"player", ctx.playerId}, {"turn", turn}, {"units", ctx.disabledLog}});
 		ctx.brain->noteDisabled (ctx.disabledLog);
 		ctx.disabledLog.clear();
+	}
+	if (!ctx.stolenLog.empty())
+	{
+		journal_.log ({{"event", "stolen"}, {"player", ctx.playerId}, {"turn", turn}, {"units", ctx.stolenLog}});
+		std::vector<unsigned int> ids;
+		for (const auto& u : ctx.stolenLog)
+			ids.push_back (u["id"].get<unsigned int>());
+		ctx.brain->noteStolen (ids);
+		ctx.stolenLog = nlohmann::json::array();
 	}
 	const auto brainStart = std::chrono::steady_clock::now();
 	const auto orders = ctx.brain->decideTurn (ctx.playerId, model);

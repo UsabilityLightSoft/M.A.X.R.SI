@@ -54,6 +54,8 @@ public:
 	bool zeroMeansNoUnit() const override { return false; }
 	// шаг 13 (П7, П18): свои юниты, выключенные коммандос врага, — тревога обороны
 	void noteDisabled (const std::vector<unsigned int>& ids) override { defense_.noteDisabled (ids); }
+	// Р6 (правка 31): свои машины, угнанные врагом, — сразу враги в памяти (decideTurn, до update)
+	void noteStolen (const std::vector<unsigned int>& ids) override { stolen_.insert (stolen_.end(), ids.begin(), ids.end()); }
 
 	std::vector<cOrder> decideTurn (int playerId, const cModel& model) override;
 	// решения операций армии за ход (шаг 8) — движок пишет их в журнал (level "operational");
@@ -90,6 +92,7 @@ private:
 	std::map<unsigned int, sBuildPlan> plans_;
 	// машины, которым оперативка уже дала приказ (отогнаны с площадки), — микро их не трогает
 	std::vector<unsigned int> opMoved_;
+	std::vector<unsigned int> stolen_; // Р6: угнанные у нас машины, замеченные в начале хода (noteStolen)
 	// ходов подряд, когда стройщику не нашлось пути к площадке (id машины → счётчик)
 	std::map<unsigned int, int> stuck_;
 	// шаг 10: машины, отправленные в депо на обновление (id → ход выбора)

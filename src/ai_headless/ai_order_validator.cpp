@@ -184,6 +184,24 @@ sValidationResult validateOrder (const cModel& model, const cOrder& o)
 			if (target == nullptr) return fail (r, "Transfer: цель не найдена");
 			if (target->getOwner() == nullptr || target->getOwner()->getId() != o.playerId)
 				return fail (r, "Transfer: цель не своя");
+			// Р6 (правка 22, PLAN.md §7 п. 18): только соседу, как проверяет сервер (cActionTransfer):
+			// здание — через подбазу (её здание рядом с машиной, два здания — одна подбаза), машина — вплотную
+			if (target == unit) return fail (r, "Transfer: сам себе");
+			{
+				const auto* fromBuilding = dynamic_cast<const cBuilding*> (unit);
+				const auto* toBuilding = dynamic_cast<const cBuilding*> (target);
+				if ((fromBuilding && !fromBuilding->subBase) || (toBuilding && !toBuilding->subBase))
+					return fail (r, "Transfer: здание без подбазы");
+				bool near = false;
+				if (fromBuilding && toBuilding)
+					near = fromBuilding->subBase == toBuilding->subBase;
+				else if (fromBuilding)
+					near = std::any_of (fromBuilding->subBase->getBuildings().begin(), fromBuilding->subBase->getBuildings().end(),
+						[&] (const auto& b) { return b->isNextTo (target->getPosition()); });
+				else
+					near = target->isNextTo (unit->getPosition());
+				if (!near) return fail (r, "Transfer: цель не рядом (нужно: соседняя клетка или здание той же подбазы рядом)");
+			}
 			return r;
 		}
 		case eOrderType::StartWork:

@@ -52,6 +52,7 @@ void observe (sEnemyMemory& m, const cUnit& u, bool isBuilding, int turn)
 	m.canAttack = static_cast<int> (sd.canAttack);
 	m.shotsMax = u.data.getShotsMax();
 	m.scan = u.data.getScan();
+	m.disabled = u.isDisabled();
 	m.driveFire = !isBuilding && sd.vehicleData.canDriveAndFire;
 	// сколько проедет и ещё выстрелит: движение режет выстрелы (cVehicle::DecSpeed:
 	// выстрелов не больше остаток хода × выстрелы / ход), клетка по суше — 4 очка хода
@@ -151,6 +152,12 @@ void cWorldModel::update (const cModel& model, const cPlayer& self, int turn)
 }
 
 //------------------------------------------------------------------------------
+void cWorldModel::noteStolen (const cVehicle& vehicle, int turn)
+{
+	observe (memory_[vehicle.getId()], vehicle, false, turn);
+}
+
+//------------------------------------------------------------------------------
 void cWorldModel::buildThreat (const cMap& map, int armorGround, int armorAir)
 {
 	w_ = map.getSize().x();
@@ -187,8 +194,9 @@ void cWorldModel::buildThreat (const cMap& map, int armorGround, int armorAir)
 		}
 		if (m.hitsGround()) paint (ground_, m, m.damageVs (armorGround));
 		if (m.hitsAir()) paint (air_, m, m.damageVs (armorAir));
-		// зона огня с места: видимые сейчас (или прошлым ходом) и здания
-		if (m.hitsGround() && (m.building || turn_ - m.seenTurn <= 1)) paint (fire_, m, m.damageVs (armorGround), true);
+		// зона огня с места: видимые сейчас (или прошлым ходом) и здания; Р6 (правка 17): выключенный, видимый
+		// выключенным сейчас, в наш ход не стреляет (ни в дозоре, ни ответным огнём)
+		if (m.hitsGround() && (m.building || turn_ - m.seenTurn <= 1) && !(m.visible && m.disabled)) paint (fire_, m, m.damageVs (armorGround), true);
 		// шаг 9: «удар с подъезда» — те же враги, дальность + сколько проедут с выстрелом
 		if (m.hitsGround() && (m.building || turn_ - m.seenTurn <= 1)) paint (strike_, m, m.damageVs (armorGround), false, m.strike());
 	}

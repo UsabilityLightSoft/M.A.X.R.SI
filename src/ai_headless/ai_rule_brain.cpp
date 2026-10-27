@@ -1482,6 +1482,11 @@ std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 	if (const cPlayer* player = model.getPlayer (playerId); player != nullptr && !player->isDefeated)
 	{
 		const int turn = model.getTurnCounter() ? model.getTurnCounter()->getTurn() : 0;
+		// Р6 (правка 31): угнанная машина — враг с известной клеткой (сообщение «Враг захватил …»)
+		for (const unsigned int id : stolen_)
+			if (const cVehicle* v = model.getVehicleFromID (id); v != nullptr && v->getOwner() != player)
+				world_.noteStolen (*v, turn);
+		stolen_.clear();
 		world_.update (model, *player, turn);
 		const auto* tank = player->getLastUnitData (kIdTank);
 		const auto* fighter = player->getLastUnitData (kIdFighter);
@@ -3381,7 +3386,10 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 	}
 	// шаг 13 (П7): тревога «диверсант» — до 2 свободных бойцов обходят клетки вокруг выключенного здания.
 	// Въезд в клетку скрытого коммандос сдвигает его на соседнюю, а сдвинуться некуда или нечем (ход
-	// истрачен) — он обнаружен (cModel::sideStepStealthUnit); обнаруженного убивают в этом же ходу (заходы 2+)
+	// истрачен) — он обнаружен (cModel::sideStepStealthUnit); обнаруженного убивают в этом же ходу (заходы 2+).
+	// Р6 (правки 28, 29): въезд не-сыщика коммандос не раскрывает — тот отходит и остаётся невидим, а шаг
+	// другого юнита больше не ищет общими картами обнаружения; обходят только сыщики (пехота, коммандос),
+	// у выключенного здания каждый ход шагает пехота охраны (посты обороны, search)
 	std::map<unsigned int, cPosition> sweep;
 	if (const auto site = defense_.alarmSite (model, *player); site.first.x() >= 0)
 	{
@@ -3393,6 +3401,7 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 			if (focus[a] >= 0 || !isArmyRole (roles_.roleOf (*v)) || ops_.committed (v->getId()) || defend.count (v->getId())) continue;
 			if (opMovedId (v->getId()) || shouldRetreat (*v, enemies)) continue;
 			if (navy_.claimed (v->getId()) || offHome (*v)) continue; // шаг 13, ч. 2
+			if (!(v->getStaticUnitData().canDetectStealthOn & eTerrainFlag::Ground)) continue; // Р6: только сыщик
 			const long long d2 = (v->getPosition() - site.first).l2NormSquared();
 			if (d2 > 25LL * 25) continue;
 			cands.emplace_back (d2, v->getId(), v);

@@ -359,6 +359,11 @@ void cExternalBrain::noteDisabled (const std::vector<unsigned int>& ids)
 	if (rule_) rule_->noteDisabled (ids);
 }
 
+void cExternalBrain::noteStolen (const std::vector<unsigned int>& ids)
+{
+	if (rule_) rule_->noteStolen (ids);
+}
+
 std::vector<nlohmann::json> cExternalBrain::takeJournalEvents()
 {
 	return std::exchange (events_, {});

@@ -63,6 +63,7 @@ public:
 	// программы не пишут 0 как «нет»; выключенные коммандос врага свои юниты — правилам режима assist
 	bool zeroMeansNoUnit() const override { return false; }
 	void noteDisabled (const std::vector<unsigned int>& ids) override;
+	void noteStolen (const std::vector<unsigned int>& ids) override;
 
 private:
 	std::vector<cOrder> decide (int playerId, const cModel& model, int pass, std::vector<cOrder> proposal, bool ruleWants);
