@@ -9,6 +9,7 @@
 #include "ai_paths.h"
 #include "ai_types.h"
 #include "ai_upgrades.h"
+#include "ai_version.h"
 
 #include "game/data/gamesettings.h"
 #include "game/data/map/map.h"
@@ -153,6 +154,11 @@ void cAiEngine::addPlayer (int playerId, cClient* client, std::shared_ptr<cAiBra
 	const std::size_t index = players_.size();
 	players_.push_back ({playerId, client, std::move (brain)});
 	if (index == 0) metrics_.attach (client->getModel()); // все модели синхронны — хватит одной
+	// Р10: имя версии ИИИ (ai_version.h) — первым событием игрока в журнале
+	nlohmann::json version = aiVersion (players_.back().brain->name()).toJson();
+	version["event"] = "aiVersion";
+	version["player"] = playerId;
+	journal_.log (version);
 
 	// cActionEndTurn не сдаёт ход, если base.checkTurnEnd() что-то выключил
 	// (нехватка энергии/топлива/металла/золота/людей) — как в GUI, где игрок
@@ -786,6 +792,9 @@ void cAiEngine::writeMetrics (const sGameResult& result)
 		nlohmann::json p;
 		p["id"] = player->getId();
 		p["name"] = player->getName();
+		// Р10: имя версии ИИИ (ai_version.h) — у игроков, за которых играет этот движок
+		for (const auto& ctx : players_)
+			if (ctx.playerId == player->getId()) p["aiVersion"] = aiVersion (ctx.brain->name()).name;
 		p["clan"] = player->getClan();
 		p["defeated"] = player->isDefeated;
 		p["credits"] = player->getCredits();

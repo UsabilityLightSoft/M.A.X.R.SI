@@ -20,6 +20,7 @@
 // maxr_ai_client — клиент ИИИ (шаг 15 PLAN.md): входит в сетевую игру MAXR как обычный
 // игрок (TCP/IP), сам проходит лобби, клан и высадку и играет мозгом ИИИ (rule, base2, llm)
 // в режиме «Turn based». Хост — окно игры («TCP/IP Host») или выделенный сервер.
+// Имя в лобби — имя версии ИИИ (ai_version.h: rule — SI-R4.0-T), в чате — приветствие и где паспорт.
 // Ход — в несколько заходов (шаг 11), если хост их понимает (проба в первом ходу), иначе один.
 // Пишет в каталог партии: journal.jsonl, digest/, metrics.json, metrics_turns.jsonl (как
 // ai_headless), journal_human.jsonl — действия других игроков теми же приказами, снимки
@@ -38,6 +39,7 @@
 #include "ai_engine.h"
 #include "ai_llm_advisor.h"
 #include "ai_rule_brain.h"
+#include "ai_version.h"
 #include "crashreporter/debug.h"
 #include "defines.h"
 #include "game/connectionmanager.h"
@@ -98,7 +100,7 @@ struct sOptions
 	std::string host = "127.0.0.1";
 	int port = DEFAULTPORT;
 	std::string brain = "rule";        // rule | base2 | base | llm
-	std::string name;                  // пусто — «AI <мозг>»
+	std::string name;                  // пусто — имя версии ИИИ (ai_version.h): SI-R4.0-T, SI-R2, …
 	int clan = 0;                      // -1 — случайный
 	std::string passes = "auto";       // auto — проба в первом ходу; 1..50 — как MAXR_PASSES
 	std::string outDir;                // пусто — <папка exe>/ai_games/<дата-время>_<имя>
@@ -120,7 +122,7 @@ void printUsage()
 		"  --host <ip>        адрес хоста (по умолчанию 127.0.0.1)\n"
 		"  --port <n>         порт (58600)\n"
 		"  --brain <b>        rule (умолчание) | base2 | base | llm\n"
-		"  --name <имя>       имя в лобби (AI <мозг>)\n"
+		"  --name <имя>       имя в лобби (по умолчанию — имя версии ИИИ: rule — SI-R4.0-T, паспорт si/AI_PASSPORT.md)\n"
 		"  --clan <0..7|random>  клан (0 — The Chosen)\n"
 		"  --passes <auto|1..50> заходов за ход: auto — если хост понимает (проба), иначе 1\n"
 		"  --out <каталог>    куда писать журналы партии\n"
@@ -195,7 +197,7 @@ bool parseArgs (int argc, char** argv, sOptions& o, std::string& err)
 		err = "--port: 1..65535";
 		return false;
 	}
-	if (o.name.empty()) o.name = "AI " + o.brain;
+	if (o.name.empty()) o.name = ai::aiVersion (o.brain).name;
 	return true;
 }
 
@@ -225,6 +227,14 @@ void say (const std::string& text)
 {
 	std::cout << "[" << timeStamp ("%H:%M:%S") << "] " << text << std::endl;
 	Log.info ("ai_client: " + text);
+}
+
+// паспорт ИИИ — в чат коротко, без «https://» (окно игры ссылки не открывает)
+std::string passportText()
+{
+	const std::string url = ai::kAiPassportUrl;
+	const std::string scheme = "https://";
+	return url.rfind (scheme, 0) == 0 ? url.substr (scheme.size()) : url;
 }
 
 bool sameColor (const cRgbColor& a, const cRgbColor& b)
@@ -457,15 +467,25 @@ void cAiClient::connectSignals()
 }
 
 //------------------------------------------------------------------------------
+// Имя отправителя окно игры ставит само («SI-R4.0-T: …») — в тексте его нет. Себе сервер чат не пересылает:
+// сказанное — в журнал клиента (say).
 void cAiClient::chat (const std::string& text)
 {
+	bool sent = false;
 	if (state == eState::Game && client)
 	{
 		if (const cPlayer* me = client->getModel().getPlayer (playerId))
+		{
 			client->report (std::make_unique<cSavedReportChat> (*me, std::string (text)));
+			sent = true;
+		}
 	}
 	else if (lobby && lobby->isConnectedToServer() && lobby->getLocalPlayer().getNr() >= 0)
+	{
 		lobby->sendChatMessage (std::string (text));
+		sent = true;
+	}
+	if (sent) say ("в чат: " + text);
 }
 
 //------------------------------------------------------------------------------
@@ -478,8 +498,18 @@ void cAiClient::updateIdentity()
 		return std::any_of (lobbyPlayers.begin(), lobbyPlayers.end(), [&] (const cPlayerBasicData& p) { return p.getNr() != me && pred (p); });
 	};
 
-	std::string name = opt.name;
-	for (int k = 2; others ([&] (const cPlayerBasicData& p) { return p.getName() == name; }) && k < 20; ++k)
+	// два ИИИ одной версии в одной игре: «SI-R4.0-T» и «SI-R4.0-T 2» — номер по порядку подключения (номеру игрока в
+	// лобби), чтобы оба клиента считали одинаково и не менялись именами по кругу
+	const auto sameBase = [&] (const std::string& n) {
+		if (n == opt.name) return true;
+		if (n.size() <= opt.name.size() + 1 || n.compare (0, opt.name.size() + 1, opt.name + " ") != 0) return false;
+		return n.find_first_not_of ("0123456789", opt.name.size() + 1) == std::string::npos;
+	};
+	int rank = 0;
+	for (const auto& p : lobbyPlayers)
+		if (p.getNr() < me && sameBase (p.getName())) ++rank;
+	std::string name = rank == 0 ? opt.name : opt.name + " " + std::to_string (rank + 1);
+	for (int k = rank + 2; others ([&] (const cPlayerBasicData& p) { return p.getName() == name && p.getNr() < me; }) && k < 20; ++k)
 		name = opt.name + " " + std::to_string (k);
 
 	cRgbColor color = lobby->getLocalPlayer().getColor();
@@ -527,7 +557,8 @@ void cAiClient::updateIdentity()
 	if (!greeted && me >= 0)
 	{
 		greeted = true;
-		chat (name + " (brain " + opt.brain + ") joined. I play Game Type 'Turn based' only.");
+		chat ("Привет! Я ИИИ " + name + ", играю только «По очереди». / Hi! I am the AI " + name + ", I play Turn based only.");
+		chat ("Паспорт / passport: " + passportText());
 	}
 }
 
@@ -607,7 +638,7 @@ void cAiClient::startPreparation()
 	if (!p)
 	{
 		say ("ОШИБКА: на карте нет годной точки высадки");
-		chat (opt.name + ": no valid landing place on this map.");
+		chat ("На этой карте мне негде высадиться. / No valid landing place on this map.");
 		return;
 	}
 	say ("высадка: (" + std::to_string (p->x()) + "," + std::to_string (p->y()) + ")");
@@ -981,7 +1012,7 @@ void cAiClient::gameStep()
 	if (myTurnReady() && !saidHello)
 	{
 		saidHello = true;
-		chat (lobby->getLocalPlayer().getName() + ": good luck! (brain " + opt.brain + ")");
+		chat ("Удачи! / Good luck! " + lobby->getLocalPlayer().getName() + " - паспорт / passport: " + passportText());
 	}
 	engine->run();
 }
@@ -1004,6 +1035,7 @@ void cAiClient::finishGame (const std::string& reason)
 	j["name"] = lobby->getLocalPlayer().getName();
 	j["player"] = playerId;
 	j["brain"] = opt.brain;
+	j["aiVersion"] = ai::aiVersion (opt.brain).toJson();
 	j["host"] = opt.host + ":" + std::to_string (opt.port);
 	j["version"] = std::string (PACKAGE_VERSION " " PACKAGE_REV);
 	j["map"] = model.getMap() ? utf8::to_string (model.getMap()->getFilename()) : std::string();
@@ -1041,7 +1073,7 @@ void cAiClient::finishGame (const std::string& reason)
 
 	say ("партия окончена (" + reason + ") на ходу " + std::to_string (turn) + "; итоги — " + outDir);
 	if (reason == "won" || reason == "lost" || reason == "defeated")
-		chat (lobby->getLocalPlayer().getName() + ": gg");
+		chat ("gg");
 }
 
 //------------------------------------------------------------------------------
@@ -1057,7 +1089,8 @@ int cAiClient::run()
 	connectSignals();
 	waitStart = Clock::now();
 
-	say ("клиент ИИИ: мозг " + opt.brain + ", ищу хост " + opt.host + ":" + std::to_string (opt.port) + " (" PACKAGE_VERSION " " PACKAGE_REV ")");
+	say ("клиент ИИИ " + ai::aiVersion (opt.brain).name + ": мозг " + opt.brain + ", имя в лобби «" + opt.name + "», ищу хост " + opt.host + ":"
+		+ std::to_string (opt.port) + " (" PACKAGE_VERSION " " PACKAGE_REV ")");
 	while (true)
 	{
 		if (stop.load())

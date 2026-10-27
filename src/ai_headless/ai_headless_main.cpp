@@ -73,6 +73,7 @@
 #include "ai_rule_brain.h"
 #include "ai_red_brain.h"
 #include "ai_scenario_brain.h"
+#include "ai_version.h"
 #include "crashreporter/debug.h"
 #include "game/connectionmanager.h"
 #include "game/data/gamesettings.h"
@@ -663,7 +664,7 @@ try
 		}
 		std::cout << "[ai_headless] brains (" << source << "):";
 		for (int i = 0; i < kPlayers; ++i)
-			std::cout << " p" << i << "=" << brains[i];
+			std::cout << " p" << i << "=" << brains[i] << " (" << ai::aiVersion (brains[i]).name << ")";
 		std::cout << std::endl;
 	}
 	const bool anyLlm = std::find (brains.begin(), brains.end(), "llm") != brains.end();
