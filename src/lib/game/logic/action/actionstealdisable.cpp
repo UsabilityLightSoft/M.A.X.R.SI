@@ -57,8 +57,22 @@ void cActionStealDisable::execute (cModel& model) const
 	bool success = model.randomGenerator.get (100) < chance;
 	if (success)
 	{
+		auto* building = dynamic_cast<cBuilding*> (target);
+		if (building && !steal)
+		{
+			// the building is restarted, when it recovers (see cPlayer::makeTurnStart)
+			building->wasWorking = building->isUnitWorking();
+			building->stopWork (true);
+		}
 		// stop running movejobs, build orders, etc.
-		cActionStop (*target).execute (model);
+		// cActionStop checks, that the unit belongs to the sender of the action:
+		// execute it on behalf of the owner of the target
+		if (target->getOwner())
+		{
+			cActionStop stop (*target);
+			stop.playerNr = target->getOwner()->getId();
+			stop.execute (model);
+		}
 
 		if (steal)
 		{
