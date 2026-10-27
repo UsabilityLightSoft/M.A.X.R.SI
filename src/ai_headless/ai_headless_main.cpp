@@ -902,6 +902,12 @@ try
 	server->setResolveStalledTurnEnd (true);
 	for (auto& client : clients)
 		client->setResolveStalledTurnEnd (true);
+	// test players buy at the landing what the landing window does not sell (infantry, commandos,
+	// aircraft, ships): the server allows it only for them (see cModel::setScriptedLanding)
+	const bool scriptedLanding = std::any_of (brains.begin(), brains.end(), [] (const std::string& b) { return b == "scenario" || b == "red1"; });
+	server->setScriptedLanding (scriptedLanding);
+	for (auto& client : clients)
+		client->setScriptedLanding (scriptedLanding);
 
 	// --- быстрый такт (headless): сданный ход проигрывается так быстро, как
 	// успевают клиенты, а не по 10 мс реального времени на тик. Результат тот же:
