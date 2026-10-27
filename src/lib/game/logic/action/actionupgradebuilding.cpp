@@ -83,7 +83,8 @@ void cActionUpgradeBuilding::execute (cModel& model) const
 	{
 		upgradedData.markLastVersionUsed();
 		// update scan & sentry
-		if (b->getOwner() && b->data.getScan() < upgradedData.getScan())
+		// (a disabled building is not in the scan maps: it is added with the new scan, when it recovers)
+		if (b->getOwner() && !b->isDisabled() && b->data.getScan() < upgradedData.getScan())
 		{
 			b->getOwner()->updateScan (*b, upgradedData.getScan());
 		}
