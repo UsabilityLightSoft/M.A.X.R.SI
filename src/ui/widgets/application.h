@@ -96,6 +96,12 @@ private:
 	 */
 	cBox<cPosition> getVisibleWindowsArea() const;
 
+	/**
+	 * The screen buffer has been recreated (another size): draws the visible windows below the active one again,
+	 * so that the active window gets its background (e.g. the shadow over the game) again.
+	 */
+	void redrawWindowsBelow (const cWindow& activeWindow);
+
 	cWindow* getActiveWindow();
 
 	cWidget* getMouseEventFirstTarget (const cPosition&);
@@ -140,6 +146,8 @@ private:
 	std::list<std::shared_ptr<cRunnable>> runnables;
 
 	bool shouldDrawFramesPerSecond = false;
+	/** The screen buffer has been recreated: all visible windows have to be drawn again. */
+	bool screenBufferRecreated = false;
 };
 
 //------------------------------------------------------------------------------

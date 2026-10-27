@@ -23,7 +23,6 @@
 #include "output/video/video.h"
 #include "resources/pcx.h"
 #include "settings.h"
-#include "ui/graphical/menu/dialogs/dialogok.h"
 #include "ui/graphical/menu/widgets/checkbox.h"
 #include "ui/graphical/menu/widgets/colorselector.h"
 #include "ui/graphical/menu/widgets/combobox.h"
@@ -35,7 +34,6 @@
 #include "ui/widgets/lineedit.h"
 #include "utility/language.h"
 #include "utility/string/iequals.h"
-#include "utility/string/toNumber.h"
 
 //------------------------------------------------------------------------------
 cDialogPreferences::cDialogPreferences() :
@@ -115,9 +113,6 @@ cDialogPreferences::cDialogPreferences() :
 		}
 	});
 
-	resolutionLabel = emplaceChild<cLabel> (cBox<cPosition> (getPosition() + cPosition (140, 298), getPosition() + cPosition (140 + 95, 298 + 10)), lngPack.i18n ("Settings~Resolution") + lngPack.i18n ("Punctuation~Colon"), eUnicodeFontType::LatinNormal, eAlignmentType::Right);
-	resolutionsComboBox = emplaceChild<cComboBox> (cBox<cPosition> (getPosition() + cPosition (240, 294), getPosition() + cPosition (240 + 100, 294 + 17)));
-
 	loadValues();
 }
 
@@ -137,7 +132,6 @@ void cDialogPreferences::retranslate()
 	colorLabel->setText (lngPack.i18n ("Title~Color"));
 	scrollSpeedLabel->setText (lngPack.i18n ("Settings~ScrollSpeed"));
 	languageLabel->setText (lngPack.i18n ("Settings~Language") + lngPack.i18n ("Punctuation~Colon"));
-	resolutionLabel->setText (lngPack.i18n ("Settings~Resolution") + lngPack.i18n ("Punctuation~Colon"));
 
 	doneButton->setText (lngPack.i18n ("Others~Done"));
 	cancelButton->setText (lngPack.i18n ("Others~Cancel"));
@@ -203,15 +197,6 @@ void cDialogPreferences::loadValues()
 		languagesComboBox->setSelectedIndex (selectedLanguageIndex);
 	}
 
-	resolutionsComboBox->clearItems();
-	const auto& resolutions = Video.getDetectedResolutions();
-	for (const auto& [w, h] : resolutions)
-	{
-		resolutionsComboBox->addItem (std::to_string (w) + "x" + std::to_string (h));
-	}
-	const auto currentResolutionIndex = Video.validateResolution (Video.getResolutionX(), Video.getResolutionY());
-	if (currentResolutionIndex != -1) resolutionsComboBox->setSelectedIndex (currentResolutionIndex);
-
 	storePreviewValues();
 }
 
@@ -234,7 +219,6 @@ void cDialogPreferences::saveValues()
 	settings.setAutosave (autosaveCheckBox->isChecked());
 	settings.setShowIntro (introCheckBox->isChecked());
 
-	bool needRestart = false;
 	if (settings.getVideoSettings().windowMode != windowCheckBox->isChecked())
 	{
 		// window or fullscreen without changing the video mode: no restart needed
@@ -244,43 +228,6 @@ void cDialogPreferences::saveValues()
 
 	settings.setScrollSpeed (scrollSpeedSlider->getValue());
 
-	// save resolution
-	const auto oldScreenX = Video.getResolutionX();
-	const auto oldScreenY = Video.getResolutionY();
-
-	const auto& resolutionText = resolutionsComboBox->getSelectedText();
-
-	const auto newResolutionX = toInt (resolutionText.substr (0, resolutionText.find ("x"))).value_or (0);
-	const auto newResolutionY = toInt (resolutionText.substr (resolutionText.find ("x") + 1)).value_or (0);
-
-	if (newResolutionX > 0 && newResolutionY > 0)
-	{
-		if (newResolutionX != oldScreenX || newResolutionY != oldScreenY)
-		{
-			Video.setResolution (newResolutionX, newResolutionY, true);
-			settings.getVideoSettings().resolution = cPosition (newResolutionX, newResolutionY);
-
-			if (Video.getResolutionX() != oldScreenX || Video.getResolutionY() != oldScreenY)
-			{
-				needRestart = true;
-			}
-		}
-	}
-	else
-	{
-		// TODO: handle invalid resolution?!
-
-		// lngPack.i18n ("Comp~ResolutionWarning")
-		// added info to old langpack if needed, else it can be removed from lang-files - nonsinn
-	}
-	if (needRestart)
-	{
-		auto application = getActiveApplication();
-		if (application)
-		{
-			application->show (std::make_shared<cDialogOk> (lngPack.i18n ("Comp~RestartRequired")));
-		}
-	}
 	applySettings (Video, settings.getVideoSettings());
 	settings.saveInFile();
 }

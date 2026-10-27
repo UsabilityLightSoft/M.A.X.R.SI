@@ -30,6 +30,8 @@
 #include "ui/widgets/widget.h"
 #include "ui/widgets/window.h"
 
+#include <utility>
+
 //------------------------------------------------------------------------------
 cApplication::cApplication() :
 	frameCounter (std::make_shared<cFrameCounter>())
@@ -43,6 +45,7 @@ cApplication::cApplication() :
 				center (*modalWindow);
 			}
 		}
+		screenBufferRecreated = true;
 	});
 
 	addShortcut (cKeySequence (cKeyCombination (toEnumFlag (eKeyModifierType::Ctrl) | eKeyModifierType::Alt, SDLK_f)), [this]() {
@@ -86,6 +89,9 @@ void cApplication::execute()
 	{
 		eventManager.run();
 
+		// the game picture follows the window size and the scale of the user interface
+		Video.updatePictureSize();
+
 		std::erase_if (runnables, [] (const auto& runnable) { return runnable->wantsToTerminate(); });
 		for (const auto& runnable : runnables)
 		{
@@ -121,6 +127,10 @@ void cApplication::execute()
 				//                - use non-busy waiting if there is nothing to be done
 				if (!cSettings::getInstance().shouldUseFastMode()) SDL_Delay (1);
 
+				if (std::exchange (screenBufferRecreated, false))
+				{
+					redrawWindowsBelow (*activeWindow);
+				}
 				activeWindow->draw (*cVideo::buffer, activeWindow->getArea());
 				lastActiveWindow = activeWindow;
 
@@ -174,6 +184,26 @@ cBox<cPosition> cApplication::getVisibleWindowsArea() const
 		if (window->getBackgroundType() == eWindowBackgrounds::Black) break;
 	}
 	return area;
+}
+
+//------------------------------------------------------------------------------
+void cApplication::redrawWindowsBelow (const cWindow& activeWindow)
+{
+	// the lowest visible window is the last one with a black background
+	auto first = modalWindows.begin();
+	for (auto it = modalWindows.begin(); it != modalWindows.end(); ++it)
+	{
+		if (*it != nullptr && (*it)->getBackgroundType() == eWindowBackgrounds::Black) first = it;
+	}
+	for (auto it = first; it != modalWindows.end(); ++it)
+	{
+		auto& window = *it;
+		if (window == nullptr) continue;
+
+		window->redrawBackground();
+		if (window.get() == &activeWindow) break;
+		window->draw (*cVideo::buffer, window->getArea());
+	}
 }
 
 //------------------------------------------------------------------------------

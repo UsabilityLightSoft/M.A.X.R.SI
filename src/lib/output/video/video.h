@@ -60,9 +60,40 @@ public:
 	/**
 	 * Prepares the window, buffer and renderer to display the game screen.
 	 * The window gets a frame, can be resized and maximized;
-	 * the screen buffer is scaled to the window size.
+	 * the screen buffer gets the size of the window divided by the scale of the user interface
+	 * and is scaled to the window.
 	 */
 	void prepareGameScreen();
+
+	/**
+	 * Sets the scale of the user interface in percent
+	 * (100: a pixel of the game picture is a pixel of the window), 0: automatic (see @ref computeUiScale).
+	 * The game picture (screen buffer) gets the size of the window divided by the scale
+	 * with the next @ref updatePictureSize.
+	 */
+	void setUiScale (int percent);
+	int getUiScale() const { return uiScale; }
+
+	/**
+	 * The scale of the user interface in use: pixels of the window per pixel of the game picture.
+	 */
+	double getUiScaleFactor() const { return uiScaleFactor; }
+
+	/**
+	 * Size of the window (client area) in pixels.
+	 */
+	cPosition getOutputSize() const;
+
+	/**
+	 * Recreates the game picture (screen buffer), if its size has to change:
+	 * the window has been resized, maximized, switched to full screen or moved to another display,
+	 * or the scale of the user interface has been changed.
+	 * Not more often than every 150 ms, so that resizing the window with the mouse does not stutter;
+	 * the last change is applied, when the resizing has ended.
+	 * Emits @ref resolutionChanged when the size has changed.
+	 * Is called once per frame by the application.
+	 */
+	void updatePictureSize();
 
 	/**
 	* Sets whether app should appear windowed or in fullscreen mode.
@@ -123,22 +154,12 @@ public:
 	bool getWindowMode() const { return windowMode; }
 
 	/**
-	* Set resolution/dimension of app window.
-	* @param iWidth desired window width
-	* @param iHeight desired window height
-	* @param bApply  set to true if app should apply new resolution too
-	*/
-	void setResolution (int iWidth, int iHeight, bool bApply = false);
-
-	/**
-	* @deprecated for compat only - will be removed!
-	* @return stored window width
+	* @return width of the game picture (screen buffer)
 	*/
 	int getResolutionX() const { return resolutionX; }
 
 	/**
-	* @deprecated for compat only - will be removed!
-	* @return stored window height
+	* @return height of the game picture (screen buffer)
 	*/
 	int getResolutionY() const { return resolutionY; }
 
@@ -165,21 +186,6 @@ public:
 	 * @return The display index.
 	 */
 	int getDisplayIndex() const { return displayIndex; }
-
-	/**
-	 * Returns the available resolutions for the currently active display.
-	 *
-	 * @return A list with pairs of the supported X and Y resolution components.
-	 */
-	const std::vector<std::pair<int, int>>& getDetectedResolutions() const;
-
-	/**
-	* Check whether the provided mode is known to our video mode list
-	* @param width Screenwidth to look for
-	* @param height Screenheight to look for
-	* @return iMode or -1 on unknown mode
-	*/
-	int validateResolution (int width, int height) const;
 
 	/**
 	* @return Minimal needed screen resolution width
@@ -215,20 +221,16 @@ public:
 	static SDL_Surface* buffer; // Der Bildschirm-Buffer
 
 private:
-	/**
-	* Checks whether our minimal needed videomode has been autodetected
-	* @return true if mininal video mode looks valid
-	*/
-	bool haveMinMode() const;
-
 	void keyPressed (cKeyboard& keyboard, SDL_Keycode key);
 
-	void applyResolution();
 	void applyWindowMode();
 
-	void initializeBuffer (int width, int height);
+	/** Recreates the screen buffer in the size for the current window and scale; returns whether the size has changed. */
+	bool applyPictureSize (bool force);
+	/** Scale of the display set in the system (DPI / 96) or 1, if unknown. */
+	double getDisplayScale() const;
 
-	void detectResolutions();
+	void initializeBuffer (int width, int height);
 
 	/** Size of the window (client area) when it is neither maximized nor fullscreen and no size has been stored. */
 	cPosition getDefaultWindowSize() const;
@@ -258,6 +260,14 @@ private:
 
 	/** Size of the client area of the window when it is not maximized (and not fullscreen). */
 	std::optional<cPosition> windowedSize;
+	/** Scale of the user interface in percent, 0: automatic. */
+	int uiScale = 0;
+	/** The scale of the user interface in use (see computeUiScale). */
+	double uiScaleFactor = 1.;
+	/** The size of the screen buffer has to be checked (window resized, scale changed, ...). */
+	bool pictureSizeOutdated = false;
+	/** When the size of the screen buffer has been checked the last time (SDL ticks). */
+	Uint32 lastPictureSizeUpdate = 0;
 	bool windowMaximized = true;
 	/** The window shows the game (and no longer the splash screen). */
 	bool gameScreenPrepared = false;
@@ -291,8 +301,6 @@ private:
 	int cursorScale = 1;
 
 	cSignalConnectionManager signalConnectionManager;
-
-	std::vector<std::vector<std::pair<int, int>>> detectedResolutions;
 };
 
 extern cVideo Video;

@@ -53,7 +53,6 @@ private:
 	cLabel* colorLabel = nullptr;
 	cLabel* scrollSpeedLabel = nullptr;
 	cLabel* languageLabel = nullptr;
-	cLabel* resolutionLabel = nullptr;
 
 	cPushButton* doneButton = nullptr;
 	cPushButton* cancelButton = nullptr;
@@ -85,7 +84,6 @@ private:
 	cCheckBox* windowCheckBox = nullptr;
 
 	cComboBox* languagesComboBox = nullptr;
-	cComboBox* resolutionsComboBox = nullptr;
 
 	std::string storedLanguage;
 

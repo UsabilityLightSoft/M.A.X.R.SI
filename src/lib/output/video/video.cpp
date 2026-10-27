@@ -64,6 +64,11 @@ namespace
 	constexpr double autoUiScaleTolerance = 0.9;
 	/** The scales of the user interface are multiples of this step. */
 	constexpr double uiScaleStep = 0.5;
+	/** The screen buffer is recreated for a new window size not more often than this (milliseconds). */
+	constexpr Uint32 pictureSizeUpdateInterval = 150;
+	/** The default size of a window that is not maximized is a multiple of this size. */
+	constexpr int defaultWindowUnitWidth = 1280;
+	constexpr int defaultWindowUnitHeight = 720;
 
 	//--------------------------------------------------------------------------
 	bool isPictureAtLeast (const cPosition& pictureSize, double minimalWidth, double minimalHeight)
@@ -147,8 +152,6 @@ void cVideo::init (std::shared_ptr<SDLComponent> sdlComponent, const std::string
 		maximalTextureSize = cPosition (rendererInfo.max_texture_width, rendererInfo.max_texture_height);
 	}
 	sharpScalingAvailable = SDL_RenderTargetSupported (sdlRenderer);
-
-	detectResolutions();
 }
 
 //------------------------------------------------------------------------------
@@ -199,9 +202,82 @@ void cVideo::prepareGameScreen()
 	applyWindowMode();
 	storeWindowGeometry (cSettings::getInstance().getVideoSettings());
 
-	initializeBuffer (getResolutionX(), getResolutionY());
+	// the game picture: window size / scale of the user interface
+	applyPictureSize (true);
+	pictureSizeOutdated = false;
+	lastPictureSizeUpdate = SDL_GetTicks();
 
 	draw();
+}
+
+//------------------------------------------------------------------------------
+void cVideo::setUiScale (int percent)
+{
+	uiScale = std::max (0, percent);
+	// a changed setting is applied with the next frame, without waiting
+	pictureSizeOutdated = true;
+	lastPictureSizeUpdate = SDL_GetTicks() - pictureSizeUpdateInterval;
+}
+
+//------------------------------------------------------------------------------
+cPosition cVideo::getOutputSize() const
+{
+	int width = 0;
+	int height = 0;
+	if (sdlRenderer) SDL_GetRendererOutputSize (sdlRenderer, &width, &height);
+	return cPosition (width, height);
+}
+
+//------------------------------------------------------------------------------
+double cVideo::getDisplayScale() const
+{
+	const int index = sdlWindow ? SDL_GetWindowDisplayIndex (sdlWindow) : getDisplayIndex();
+	float dpi = 0.f;
+	if (SDL_GetDisplayDPI (std::max (0, index), nullptr, &dpi, nullptr) != 0 || !(dpi > 0.f))
+	{
+		return 1.; // unknown, e.g. no real display
+	}
+	return dpi / 96.;
+}
+
+//------------------------------------------------------------------------------
+void cVideo::updatePictureSize()
+{
+	if (!pictureSizeOutdated || !gameScreenPrepared) return;
+
+	const Uint32 now = SDL_GetTicks();
+	if (now - lastPictureSizeUpdate < pictureSizeUpdateInterval) return;
+
+	pictureSizeOutdated = false;
+	lastPictureSizeUpdate = now;
+	applyPictureSize (false);
+}
+
+//------------------------------------------------------------------------------
+bool cVideo::applyPictureSize (bool force)
+{
+	const auto outputSize = getOutputSize();
+	if (!force && (outputSize.x() <= 0 || outputSize.y() <= 0))
+	{
+		// e.g. minimized: keep the picture until the window is restored
+		return false;
+	}
+	const auto displayScale = getDisplayScale();
+	uiScaleFactor = computeUiScale (uiScale, outputSize, displayScale);
+	const auto size = computePictureSize (outputSize, uiScaleFactor);
+
+	if (!force && buffer != nullptr && buffer->w == size.x() && buffer->h == size.y())
+	{
+		return false;
+	}
+	Log.info ("cVideo: Picture " + std::to_string (size.x()) + "x" + std::to_string (size.y()) + " for window " + std::to_string (outputSize.x()) + "x" + std::to_string (outputSize.y()) + ", user interface scale " + std::to_string (uiScaleFactor) + " (setting " + std::to_string (uiScale) + "%, display " + std::to_string (displayScale) + ")");
+
+	resolutionX = size.x();
+	resolutionY = size.y();
+	initializeBuffer (size.x(), size.y());
+
+	resolutionChanged();
+	return true;
 }
 
 //------------------------------------------------------------------------------
@@ -223,47 +299,6 @@ void cVideo::initializeBuffer (int width, int height)
 	SDL_SetTextureBlendMode (sdlTexture, SDL_BLENDMODE_NONE);
 
 	viewArea.reset();
-}
-
-//------------------------------------------------------------------------------
-void cVideo::setResolution (int iWidth, int iHeight, bool bApply)
-{
-	resolutionX = iWidth;
-	resolutionY = iHeight;
-
-	// validate only if we should apply
-	// because the resolution may be set during reading of settings
-	// and at this point does no SDL context exist yet
-	if (bApply)
-	{
-		// BEGIN SANITY CHECK SCREEN RES
-
-		if (validateResolution (iWidth, iHeight) >= 0)
-		{
-			Log.info ("cVideo:  => Found requested video mode " + std::to_string (iWidth) + "x" + std::to_string (iHeight) + " :)");
-		}
-		else
-		{
-			Log.warn ("cVideo:  => Couldn't find requested video mode " + std::to_string (iWidth) + "x" + std::to_string (iHeight) + " :(");
-			if (haveMinMode())
-			{
-				Log.warn ("cVideo:  => Edit your config and try default video mode " + std::to_string (getMinW()) + "x" + std::to_string (getMinH()) + " if I crash now!");
-			}
-			else
-			{
-				Log.warn ("cVideo:  => Couldn't even find my minimal video mode " + std::to_string (getMinW()) + "x" + std::to_string (getMinH()) + " - panic! ;(");
-			}
-		}
-		// END SANITY CHECK SCREEN RES
-
-		applyResolution();
-
-		resolutionChanged();
-	}
-	else
-	{
-		Log.info ("cVideo: Resolution set to " + std::to_string (iWidth) + "x" + std::to_string (iHeight) + " but was not applied yet");
-	}
 }
 
 //------------------------------------------------------------------------------
@@ -340,16 +375,6 @@ void cVideo::draw()
 }
 
 //------------------------------------------------------------------------------
-void cVideo::applyResolution()
-{
-	// The resolution is the size of the screen buffer.
-	// The window keeps its size: the buffer is scaled to it.
-	initializeBuffer (getResolutionX(), getResolutionY());
-
-	draw();
-}
-
-//------------------------------------------------------------------------------
 void cVideo::applyWindowMode()
 {
 	// Fullscreen covers the desktop without changing the video mode of the display:
@@ -388,6 +413,8 @@ void cVideo::handleWindowEvent (const SDL_WindowEvent& event)
 		{
 			// the splash screen is not the game window
 			if (!gameScreenPrepared) break;
+			// the game picture follows the window size (also in fullscreen)
+			pictureSizeOutdated = true;
 			const auto flags = SDL_GetWindowFlags (sdlWindow);
 			if ((flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MINIMIZED)) != 0) break;
 
@@ -403,6 +430,12 @@ void cVideo::handleWindowEvent (const SDL_WindowEvent& event)
 			storeWindowGeometry (cSettings::getInstance().getVideoSettings());
 			break;
 		}
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+		case SDL_WINDOWEVENT_DISPLAY_CHANGED:
+			// another display may have another scale
+			pictureSizeOutdated = true;
+			break;
+#endif
 		default:
 			break;
 	}
@@ -431,11 +464,11 @@ cPosition cVideo::getMaximalWindowSize() const
 //------------------------------------------------------------------------------
 cPosition cVideo::getDefaultWindowSize() const
 {
-	// the biggest integer multiple of the resolution, that leaves some space on the display
+	// the biggest integer multiple of 1280x720, that leaves some space on the display
 	const auto maximalSize = getMaximalWindowSize();
 	const cPosition limit (maximalSize.x() * 9 / 10, maximalSize.y() * 9 / 10);
-	const int width = std::max (1, getResolutionX());
-	const int height = std::max (1, getResolutionY());
+	const int width = defaultWindowUnitWidth;
+	const int height = defaultWindowUnitHeight;
 	const int factor = std::min (limit.x() / width, limit.y() / height);
 	if (factor >= 1)
 	{
@@ -533,74 +566,6 @@ SDL_Texture* cVideo::getScaledTexture (int width, int height)
 void cVideo::clearBuffer()
 {
 	SDL_FillRect (buffer, nullptr, toSdlColor (cRgbColor::black(), *buffer));
-}
-
-//------------------------------------------------------------------------------
-void cVideo::detectResolutions()
-{
-	const auto numVideoDislplays = SDL_GetNumVideoDisplays();
-	detectedResolutions.resize (numVideoDislplays);
-	for (int displayIndex = 0; displayIndex < numVideoDislplays; ++displayIndex)
-	{
-		const auto numDisplayModes = SDL_GetNumDisplayModes (displayIndex);
-
-		auto& resolutions = detectedResolutions[displayIndex];
-
-		resolutions.clear();
-
-		for (int displayModeIndex = 0; displayModeIndex < numDisplayModes; ++displayModeIndex)
-		{
-			SDL_DisplayMode mode;
-			SDL_GetDisplayMode (displayIndex, displayModeIndex, &mode);
-
-			// skip modes *below* the minimum mode
-			if (mode.w < MINWIDTH || mode.h < MINHEIGHT) continue;
-
-			resolutions.push_back (std::make_pair (mode.w, mode.h));
-		}
-		std::sort (resolutions.begin(), resolutions.end()); // lexicographic order
-		resolutions.erase (std::unique (resolutions.begin(), resolutions.end()), resolutions.end()); // make sure there are no double entries
-
-		for (size_t i = 0; i < resolutions.size(); ++i)
-		{
-			const auto& [w, h] = resolutions[i];
-			Log.info ("cVideo: Display" + std::to_string (displayIndex) + " is offering detected video mode " + std::to_string (i) + " (" + std::to_string (w) + "x" + std::to_string (h) + ")");
-		}
-	}
-}
-
-//------------------------------------------------------------------------------
-const std::vector<std::pair<int, int>>& cVideo::getDetectedResolutions() const
-{
-	const int displayIndex = sdlWindow ? SDL_GetWindowDisplayIndex (sdlWindow) : 0;
-
-	return detectedResolutions[displayIndex];
-}
-
-//------------------------------------------------------------------------------
-bool cVideo::haveMinMode() const
-{
-	if (std::ranges::any_of (getDetectedResolutions(), [] (const auto& resolution) { return resolution == std::pair<int, int>{MINWIDTH, MINHEIGHT}; }))
-	{
-		return true;
-	}
-	Log.error ("cVideo: Minimal needed video mode (" + std::to_string (MINWIDTH) + "x" + std::to_string (MINHEIGHT) + ") not detected. Probably bad!");
-	return false;
-}
-
-//------------------------------------------------------------------------------
-int cVideo::validateResolution (int width, int height) const
-{
-	const auto& resolutions = getDetectedResolutions();
-	for (size_t i = 0; i < resolutions.size(); i++)
-	{
-		if (resolutions[i] == std::pair<int, int>{width, height})
-		{
-			return static_cast<int> (i);
-		}
-	}
-	Log.warn ("cVideo: Configured video mode (" + std::to_string (width) + "x" + std::to_string (height) + ") not detected. Resume on own risk!");
-	return -1;
 }
 
 //------------------------------------------------------------------------------
@@ -1177,8 +1142,9 @@ bool isUiScaleFitting (int uiScalePercent, const cPosition& outputSize)
 //------------------------------------------------------------------------------
 void applySettings (cVideo& video, const sVideoSettings& videoSettings)
 {
-	auto resolution = videoSettings.resolution.value_or (cPosition (video.getMinW(), video.getMinH()));
-	video.setResolution (resolution.x(), resolution.y(), false);
+	// the size of the game picture follows the window and the scale of the user interface
+	// (videoSettings.resolution is not used any more)
+	video.setUiScale (videoSettings.uiScale);
 	video.setColDepth (videoSettings.colourDepth);
 	video.setWindowMode (videoSettings.windowMode);
 	video.setDisplayIndex (videoSettings.displayIndex);
