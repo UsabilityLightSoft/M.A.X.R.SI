@@ -84,6 +84,18 @@ public:
 	void lock();
 	void unlock();
 
+	/**
+	 * A dimmed check box looks unavailable (to make it really unavailable, disable it too).
+	 */
+	void setDimmed (bool);
+	bool isDimmed() const { return dimmed; }
+
+	/**
+	 * The unchecked standard check box shows a pale check mark;
+	 * with this option it shows an empty box instead (same size).
+	 */
+	void setMarkHiddenWhenUnchecked (bool);
+
 	cSignal<void()> toggled;
 
 	void draw (SDL_Surface& destination, const cBox<cPosition>& clipRect) override;
@@ -111,6 +123,8 @@ private:
 	bool checked = false;
 	bool isLocked = false;
 	bool shorten = false;
+	bool dimmed = false;
+	bool markHiddenWhenUnchecked = false;
 };
 
 #endif // ui_graphical_menu_widgets_checkboxH

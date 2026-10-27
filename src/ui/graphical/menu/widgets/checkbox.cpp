@@ -26,6 +26,30 @@
 #include "resources/uidata.h"
 #include "utility/color.h"
 
+namespace
+{
+	//--------------------------------------------------------------------------
+	// The unchecked standard check box (18x17) shows a pale, embossed check mark in its inner area.
+	// Its light and dark pixels get the color of the empty box: the box stays, the mark is gone.
+	void eraseCheckMark (SDL_Surface& surface)
+	{
+		if (surface.w < 16 || surface.h < 16) return;
+
+		const Uint32 background = getPixel (surface, cPosition (12, 12));
+		for (int y = 2; y <= 13; ++y)
+		{
+			for (int x = 2; x <= 13; ++x)
+			{
+				Uint8 r = 0;
+				Uint8 g = 0;
+				Uint8 b = 0;
+				SDL_GetRGB (getPixel (surface, cPosition (x, y)), surface.format, &r, &g, &b);
+				if (r >= 0xC0 || r < 0x60) putPixel (surface, cPosition (x, y), background);
+			}
+		}
+	}
+} // namespace
+
 //------------------------------------------------------------------------------
 cCheckBox::cCheckBox (const cPosition& position, eCheckBoxType type_, bool centered, cSoundChunk* clickSound_) :
 	cCheckBox (position, "", eUnicodeFontType::LatinNormal, eCheckBoxTextAnchor::Right, type_, centered, clickSound_)
@@ -131,7 +155,23 @@ void cCheckBox::draw (SDL_Surface& destination, const cBox<cPosition>& clipRect)
 			break;
 	}
 
+	if (dimmed) drawDimmed (destination, getArea());
+
 	cClickableWidget::draw (destination, clipRect);
+}
+
+//------------------------------------------------------------------------------
+void cCheckBox::setDimmed (bool dimmed_)
+{
+	dimmed = dimmed_;
+}
+
+//------------------------------------------------------------------------------
+void cCheckBox::setMarkHiddenWhenUnchecked (bool hidden)
+{
+	if (markHiddenWhenUnchecked == hidden) return;
+	markHiddenWhenUnchecked = hidden;
+	renewSurface();
 }
 
 //------------------------------------------------------------------------------
@@ -308,6 +348,11 @@ void cCheckBox::renewSurface()
 		SDL_FillRect (surface.get(), nullptr, 0xFF00FF);
 
 		SDL_BlitSurface (partialSurface.surface, &partialSurface.rect, surface.get(), nullptr);
+
+		if (type == eCheckBoxType::Standard && markHiddenWhenUnchecked && !(checked || isPressed))
+		{
+			eraseCheckMark (*surface);
+		}
 	}
 
 	if (shorten && textLimitWidth) text = font->shortenStringToSize (text, *textLimitWidth, fontType);

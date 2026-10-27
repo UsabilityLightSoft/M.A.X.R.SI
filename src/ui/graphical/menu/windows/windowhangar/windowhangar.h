@@ -66,6 +66,9 @@ protected:
 
 	virtual void setActiveUnit (const sID& unitId);
 
+	/** "Done" has been clicked (or Enter pressed): emits @ref done. */
+	virtual void okClicked();
+
 	const sID* getActiveUnit() const;
 
 	std::shared_ptr<const cUnitsData> unitsData;
@@ -102,7 +105,6 @@ private:
 
 	void selectionUnitClicked (cUnitListViewItemBuy& unitItem);
 
-	void okClicked();
 	void backClicked();
 
 	void handleSelectionChanged();

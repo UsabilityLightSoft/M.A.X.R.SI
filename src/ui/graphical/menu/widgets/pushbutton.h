@@ -89,6 +89,13 @@ public:
 	void lock();
 	void unlock();
 
+	/**
+	 * A dimmed button looks unavailable, but is still clicked:
+	 * the owner can show what is missing.
+	 */
+	void setDimmed (bool);
+	bool isDimmed() const { return dimmed; }
+
 	cSignal<void()> clicked;
 
 protected:
@@ -106,6 +113,7 @@ private:
 
 	bool isLocked = false;
 	bool shorten = false;
+	bool dimmed = false;
 
 	void renewSurface();
 
