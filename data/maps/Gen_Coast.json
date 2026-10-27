@@ -1,0 +1,129 @@
+{
+ "name": "Gen_Coast",
+ "file": "Gen_Coast.wrl",
+ "type": "coast",
+ "size": 241,
+ "seed": 12101,
+ "attempt": 1,
+ "symmetric_rot180": true,
+ "generator_version": "1",
+ "tileset_source": "Delta.wrl (M.A.X.R., data/maps) — все 96 плиток, палитра и типы",
+ "landing": [
+  [
+   115,
+   88
+  ],
+  [
+   125,
+   152
+  ]
+ ],
+ "landing_env": "115,88;125,152",
+ "landing_note": "базы в разных областях суши (нет пути по суше) — exe шага 13 берёт высадку из этого файла рядом с .wrl (maps/<карта>.json) и MAXR_LANDING; exe шага 10 такой высадки не примет",
+ "objects": {
+  "jungle": 312,
+  "jungle_pond": 120,
+  "bush": 106,
+  "wreck": 2,
+  "ruin_dome": 4,
+  "ruin_b": 4,
+  "rocks": 10,
+  "crater": 8,
+  "hill": 6,
+  "dirt": 64,
+  "bodies": 64,
+  "patch": 50,
+  "bones": 74,
+  "shrub": 52
+ },
+ "checks": {
+  "seams_le_4px": true,
+  "no_diagonal_tiles": true,
+  "landing_clear_ge3": true,
+  "landing_sea_3_6": true,
+  "landing_room_ge700": true,
+  "sea_path_between_bases": true,
+  "landing_region_ge300": true,
+  "landing_near_sea_le30": true,
+  "no_land_path": true,
+  "continents_big": true,
+  "sea_path_short": true,
+  "one_sea": true
+ },
+ "stats": {
+  "size": 241,
+  "water_pct": 33.7,
+  "coast_pct": 3.1,
+  "land_pct": 60.0,
+  "blocked_pct": 3.22,
+  "tank_regions_ge20": 6,
+  "tank_largest": 17263,
+  "water_regions_ge4": 1,
+  "sea_largest_pct_of_water": 100.0,
+  "seam_max_px": 4,
+  "seam_pairs_gt4": 0,
+  "same_tank_region": false,
+  "tank_path_steps": null,
+  "straight_distance": 64.8,
+  "sea_path_steps": 57,
+  "sea_route_steps": 65,
+  "outpost_islands_ge25": 4,
+  "landings": [
+   {
+    "x": 115,
+    "y": 88,
+    "tank_region": 1,
+    "tank_region_cells": 17263,
+    "clear": 3,
+    "room_r18": 928,
+    "to_water_or_coast": 3,
+    "to_blocked": 31,
+    "to_main_sea": 4,
+    "to_main_sea_euclid": 5.0,
+    "core_cells": 73,
+    "core_in_gunboat_range_pct": 67.1,
+    "core_in_missile_ship_range_pct": 98.6,
+    "land_share_r10_pct": 75.7,
+    "land_share_r18_pct": 67.8
+   },
+   {
+    "x": 125,
+    "y": 152,
+    "tank_region": 6,
+    "tank_region_cells": 17263,
+    "clear": 3,
+    "room_r18": 928,
+    "to_water_or_coast": 3,
+    "to_blocked": 31,
+    "to_main_sea": 4,
+    "to_main_sea_euclid": 5.0,
+    "core_cells": 73,
+    "core_in_gunboat_range_pct": 67.1,
+    "core_in_missile_ship_range_pct": 98.6,
+    "land_share_r10_pct": 75.7,
+    "land_share_r18_pct": 67.8
+   }
+  ]
+ },
+ "params": {
+  "level": 0.0,
+  "water": null,
+  "axis": "h",
+  "sea_half_cells": 22,
+  "edge_cells": 8,
+  "meander": 0.03,
+  "islands": 3,
+  "isl_min_cells": 5,
+  "isl_max_cells": 8,
+  "min_lake": 8,
+  "min_island": 10,
+  "forest": 0.05,
+  "ruins_per_10k": 2.0,
+  "naval": true,
+  "coast_base": [
+   3,
+   6
+  ]
+ },
+ "sha256": "908903566653f6ccc9b1d5ff5bb362e71dde3440e40f00767ecb29e7cecb4e00"
+}
