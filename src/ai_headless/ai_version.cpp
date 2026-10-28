@@ -32,6 +32,7 @@ constexpr sExperimentKnob kExperimentKnobs[] = {
 	{"MAXR_CMD_TRAIN_RANK", false},
 	{"MAXR_CMD_TURN", false},
 	{"MAXR_CLAN", true}, // Р17 (п. 86)
+	{"MAXR_COLUMN", true}, // Р17: колонна в узостях
 	{"MAXR_COMMANDO", true},
 	{"MAXR_EARLY_DEFENDER", true}, // Р17 (п. 55)
 	{"MAXR_ECO", true},
