@@ -125,6 +125,7 @@ private:
 	std::vector<unsigned int> minesToggled_;
 	// Р7 (п. 114): потолок сухопутной армии «пути по суше нет» уже записан в журнал
 	bool landCapNoted_ = false;
+	bool landFactoryCapNoted_ = false; // Р17 (п. 142): потолок больших фабрик «пути по суше нет» записан в журнал
 	// Р7 (п. 94): площадки эко-сфер, где стройка не началась за kEcoPlanStale ходов (занята, не подойти), — (клетка, ход)
 	std::vector<std::pair<cPosition, int>> badEcoSites_;
 	// шаг 11: нужен ли ещё заход в этом ходу (после decideTurn / decidePass)

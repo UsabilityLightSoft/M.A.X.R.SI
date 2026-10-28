@@ -425,6 +425,8 @@ constexpr int kSmallFactoryIncome = 10;
 constexpr int kMaxSmallFactories = 1;
 // Р7 (п. 114): пути по суше к врагу нет — сухопутной армии сверх этого (с очередью) — только из лишнего металла
 constexpr int kLandArmyCap = 16;
+// Р17 (п. 142): и больших фабрик не больше (две — центрам исследований нужны две фабрики, kResearchMinFactories)
+constexpr int kLandLockFactories = 2;
 // Р7 (п. 94): план эко-сферы не начался за столько ходов — снять, площадку не брать kEcoBadSiteTurns ходов
 constexpr int kEcoPlanStale = 12;
 constexpr int kEcoBadSiteTurns = 40;
@@ -2081,8 +2083,33 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 	};
 
 	const bool rich = econ.metalMaxStored > 0 && econ.metalStored * 5 >= econ.metalMaxStored * 4; // склад ≥ 80%
+	// Р7 (п. 114): враг на нашей суше (вооружённые машины, виденные недавно) — для «пути по суше нет»
+	bool enemyOnOurLand = false;
+	if (navy_.landLocked())
+		for (const auto& kv : world_.enemies())
+			if (!kv.second.building && kv.second.armed() && world_.age (kv.second) <= 10
+				&& world_.tankRegionOf (kv.second.pos) == defense_.map().landRegion)
+			{
+				enemyOnOurLand = true;
+				break;
+			}
 	// фабрик — по добыче металла; склад полон — ещё одна (металл есть, мощностей нет)
-	const int factoryTarget = std::clamp ((econ.metalMaxProd + 5) / 8 + (rich ? 1 : 0), 1, kMaxFactories);
+	int factoryTarget = std::clamp ((econ.metalMaxProd + 5) / 8 + (rich ? 1 : 0), 1, kMaxFactories);
+	const char* landLockFactoriesEnv = std::getenv ("MAXR_LANDLOCK_FACTORIES");
+	const bool envOffLandLockFactories = landLockFactoriesEnv != nullptr && landLockFactoriesEnv[0] == '0';
+	// Р17 (п. 142): пути по суше к врагу нет — больших фабрик не больше kLandLockFactories: армия своей суши под потолком, третья
+	// фабрика стояла (Gen_Coast 44: потолок с 69-го хода, фабрика — 79-й), а металл — флоту, авиации и сферам
+	if (navy_.landLocked() && !enemyOnOurLand && factoryTarget > kLandLockFactories
+		&& !envOffLandLockFactories) // опыт: MAXR_LANDLOCK_FACTORIES=0 — без потолка
+	{
+		factoryTarget = kLandLockFactories;
+		if (!landFactoryCapNoted_)
+		{
+			landFactoryCapNoted_ = true;
+			extraEvents_.push_back ({{"event", "navy"}, {"level", "operational"}, {"what", "land factory cap"}, {"cap", kLandLockFactories},
+				{"why", "no land path to the enemy: two big factories feed the capped land army, the rest goes to the fleet and air"}});
+		}
+	}
 
 	struct sRefill
 	{
@@ -2459,6 +2486,18 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 				// соединителей, как у шахты (Gen_Coast 44: станции негде встать — с хода 100 ни сфер, ни новых потребителей)
 				if (pos.x() < 0 && (w == kIdEnergy || (w == kIdHabitat && ecoHabitat)))
 					pos = findLinkedSpot (model, *player, grid, unitsData->getStaticUnitData (w), reserved, world_, bl, defense_.map().landRegion);
+				// Р17 (п. 142): авиазаводу, ангару и учебному центру у тесной базы места нет — площадка с цепочкой соединителей, как у шахты
+				// (Gen_Coast 42 против base2: программа «удар» с 90-го хода, а авиазавода за 300 ходов нет — стройщики стояли без дела со
+				// 132-го по 260-й ход). Центрам исследований, переработке и депо — нет: r17i ставил их так на больших картах (Gen_Lakes — 56
+				// центров), металл уходил от армии
+				if (pos.x() < 0 && (w == kIdAirFactory || w == kIdHangar || w == kIdTraining))
+				{
+					pos = findLinkedSpot (model, *player, grid, unitsData->getStaticUnitData (w), reserved, world_, bl, defense_.map().landRegion);
+					if (pos.x() >= 0)
+						extraEvents_.push_back ({{"event", "build"}, {"level", "operational"}, {"what", "linked site"}, {"unitId", v.getId()},
+							{"type", unitsData->getStaticUnitData (w).getDefaultName()}, {"pos", {{"x", pos.x()}, {"y", pos.y()}}},
+							{"why", "no room next to the base: a site linked by a chain of connectors"}});
+				}
 				if (pos.x() >= 0)
 				{
 					what = w;
@@ -2749,17 +2788,8 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 	const bool speedUp = richNow && allWorking && !buildersStarved;
 	const int nKonstrukt = countVehicles (*player, kIdKonstrukt);
 	const int konstruktTarget = econ.metalMaxProd >= 20 ? 3 : 2;
-	// Р7 (п. 114): армия своей суши и враг на ней (вооружённые машины, виденные недавно) — для «пути по суше нет»
+	// Р7 (п. 114): армия своей суши (враг на ней — enemyOnOurLand выше) — для «пути по суше нет»
 	const int armyNow = comp_.count (eRole::Tank) + comp_.count (eRole::Assault) + comp_.count (eRole::Artillery) + comp_.count (eRole::Missile);
-	bool enemyOnOurLand = false;
-	if (navy_.landLocked())
-		for (const auto& kv : world_.enemies())
-			if (!kv.second.building && kv.second.armed() && world_.age (kv.second) <= 10
-				&& world_.tankRegionOf (kv.second.pos) == defense_.map().landRegion)
-			{
-				enemyOnOurLand = true;
-				break;
-			}
 	int konstruktQueued = 0;
 	for (const auto& b : player->getBuildings())
 		if (groundFactory (*b))

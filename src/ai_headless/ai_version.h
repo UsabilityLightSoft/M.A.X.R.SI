@@ -26,10 +26,10 @@
 namespace ai
 {
 
-// Поколение и сборка мозга rule. rule = base4 побайтно (Р7, 27.10.2026) — SI-R4.0-T.
+// Поколение и сборка мозга rule. SI-R4.1-T — base4 и пункт 1 части 4б (Р17, 28.10.2026).
 // Изменил поведение rule — kRuleBuild + 1; заморозил новым чемпионом (base5) — kRuleGeneration = 5, kRuleBuild = 0.
 constexpr int kRuleGeneration = 4;
-constexpr int kRuleBuild = 0;
+constexpr int kRuleBuild = 1;
 
 // паспорт ИИИ в открытом форке
 constexpr const char* kAiPassportUrl = "https://github.com/UsabilityLightSoft/M.A.X.R.SI/blob/main/si/AI_PASSPORT.md";

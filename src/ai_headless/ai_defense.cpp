@@ -65,6 +65,8 @@ constexpr int kCoastSea = 100;          // П25: водоём от стольк�
 constexpr int kCoastGunSpread = 6;      // ракетные пушки — не ближе друг к другу (Чебышёв)
 constexpr int kCoastGunsMax = 6;
 constexpr int kEnemyShipFresh = 30;     // корабль врага в памяти не старше стольких ходов — угроза берегу
+constexpr int kGuessIslandPct = 40;     // Р17 (п. 142): догадка «пути по суше нет» — на острове (своя суша меньше этой доли всей)…
+constexpr int kGuessFar = 40;           // …или точка напротив нашей базы не ближе (Чебышёв): Donuts — 29–37, Gen_Coast — 73
 
 int cheb (const cPosition& a, const cPosition& b)
 {
@@ -142,7 +144,8 @@ nlohmann::json sMapPicture::toJson() const
 {
 	return {{"emphasis", emphasis}, {"sure", sure}, {"why", why}, {"waterPct", waterPct}, {"landRegionCells", landRegionCells},
 		{"landTotal", landTotal}, {"landSharePct", landSharePct}, {"bigRegions", bigRegions}, {"islands", islands},
-		{"seaDistance", seaDistance}, {"seaCells", seaCells}, {"enemyLand", enemyLand}};
+		{"seaDistance", seaDistance}, {"seaCells", seaCells}, {"enemyLand", enemyLand},
+		{"noLandPath", noLandPath}, {"landPathProven", landPathProven}, {"oppDistance", oppDistance}, {"guessCredible", guessCredible}};
 }
 
 //------------------------------------------------------------------------------
@@ -234,10 +237,13 @@ void cBaseDefense::updateMap (const cModel& model, const cPlayer& player, const 
 	}
 	m.enemyLand = ours > 0 ? 1 : (elsewhere > 0 ? 0 : -1);
 	const bool seaNear = m.seaDistance >= 0 && m.seaDistance <= kSeaNear;
+	// Р17 (п. 142): здания врага хоть раз на нашей суше — путь по суше есть навсегда (память о них пустеет, когда их снесли)
+	if (m.enemyLand == 1) landPathProven_ = true;
+	m.landPathProven = landPathProven_;
 	// Р7 (п. 114): пути по суше к врагу нет (догадка по симметрии — пока его зданий не видели)
-	if (m.enemyLand == 0)
+	if (m.enemyLand == 0 && !landPathProven_)
 		m.noLandPath = true;
-	else if (m.enemyLand < 0 && m.landRegion >= 0)
+	else if (m.enemyLand < 0 && m.landRegion >= 0 && !landPathProven_)
 	{
 		const cPosition opp (W_ - 1 - home.x(), H_ - 1 - home.y());
 		int oppRegion = -1;
@@ -245,7 +251,12 @@ void cBaseDefense::updateMap (const cModel& model, const cPlayer& player, const 
 			for (int dy = -r; dy <= r && oppRegion < 0; ++dy)
 				for (int dx = -r; dx <= r && oppRegion < 0; ++dx)
 					if (std::max (std::abs (dx), std::abs (dy)) == r) oppRegion = world.tankRegionOf (opp + cPosition (dx, dy));
-		m.noLandPath = oppRegion >= 0 && oppRegion != m.landRegion;
+		// Р17 (п. 142): догадке верим на острове (наша суша — меньше kGuessIslandPct всей) или когда точка напротив далеко (на
+		// тесной карте враг рядом — разведка найдёт его раньше, чем понадобится ранняя верфь; Donuts: режим ложно включался у 25
+		// сторон из 50)
+		m.oppDistance = std::max (std::abs (opp.x() - home.x()), std::abs (opp.y() - home.y()));
+		m.guessCredible = m.landSharePct < kGuessIslandPct || m.oppDistance >= kGuessFar;
+		m.noLandPath = oppRegion >= 0 && oppRegion != m.landRegion && m.guessCredible;
 	}
 	if (m.enemyLand == 1)
 	{
