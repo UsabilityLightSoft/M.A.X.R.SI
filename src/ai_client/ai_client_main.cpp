@@ -1329,9 +1329,18 @@ try
 	do
 	{
 		std::string outDir = opt.outDir;
-		if (outDir.empty() || !firstGame)
-			outDir = utf8::to_string (exeDir / "ai_games" / (timeStamp ("%Y-%m-%d_%H-%M-%S") + "_" + safeName (opt.name)));
 		std::error_code ec;
+		if (outDir.empty() || !firstGame)
+		{
+			// два клиента, запущенные в одну секунду с одним именем (ярлык «двух ИИИ»: оба — имя версии), — разные папки:
+			// create_directory создаёт папку, только если её ещё нет (второй берёт «_2»)
+			const auto base = exeDir / "ai_games" / (timeStamp ("%Y-%m-%d_%H-%M-%S") + "_" + safeName (opt.name));
+			std::filesystem::create_directories (base.parent_path(), ec);
+			auto dir = base;
+			for (int k = 2; !std::filesystem::create_directory (dir, ec) && k < 100; ++k)
+				dir = base.parent_path() / (base.filename().string() + "_" + std::to_string (k));
+			outDir = utf8::to_string (dir);
+		}
 		std::filesystem::create_directories (outDir, ec);
 		if (firstGame)
 		{
