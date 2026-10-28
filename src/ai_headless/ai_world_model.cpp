@@ -162,6 +162,12 @@ void cWorldModel::buildThreat (const cMap& map, int armorGround, int armorAir)
 {
 	w_ = map.getSize().x();
 	h_ = map.getSize().y();
+	// Р24 (п. 165): слой Builder — ходов врага, которые стройщик должен пережить (0 — выкл.: Builder = Reach)
+	if (const char* bt = std::getenv ("MAXR_BUILD_LIGHT"); bt != nullptr && *bt != 0)
+		builderTurns_ = std::max (0, std::atoi (bt));
+	else
+		builderTurns_ = 2;
+	reachDamage_.clear();
 	ground_.assign (static_cast<size_t> (w_) * h_, 0);
 	air_.assign (static_cast<size_t> (w_) * h_, 0);
 	fire_.assign (static_cast<size_t> (w_) * h_, 0);
@@ -208,7 +214,64 @@ int cWorldModel::threatFor (const cVehicle& v, const cPosition& p, eThreatLayer 
 	if (layer == eThreatLayer::None) return 0;
 	if (v.getStaticUnitData().factorAir > 0) return airThreat (p);
 	if (layer == eThreatLayer::Strike) return groundStrike (p);
+	if (layer == eThreatLayer::Builder)
+	{
+		const int t = groundThreat (p);
+		return t > 0 && lightThreat (v.data.getArmor(), v.data.getHitpoints(), p) ? 0 : t;
+	}
 	return layer == eThreatLayer::Fire ? groundFire (p) : groundThreat (p);
+}
+
+//------------------------------------------------------------------------------
+int cWorldModel::reachDamage (int armor, const cPosition& p) const
+{
+	if (p.x() < 0 || p.y() < 0 || p.x() >= w_ || p.y() >= h_) return 0;
+	auto it = reachDamage_.find (armor);
+	if (it == reachDamage_.end())
+	{
+		// как слой Reach (buildThreat): каждый вооружённый наземный враг памяти бьёт круг «дальность + ход», урон — по этой броне
+		std::vector<int> grid (static_cast<size_t> (w_) * h_, 0);
+		for (const auto& kv : memory_)
+		{
+			const sEnemyMemory& m = kv.second;
+			if (m.plane || !m.hitsGround()) continue;
+			const int value = m.damageVs (armor);
+			if (value <= 0) continue;
+			const int rr = m.big ? m.reach() + 1 : m.reach();
+			for (int dy = -rr; dy <= rr; ++dy)
+				for (int dx = -rr; dx <= rr; ++dx)
+				{
+					if (dx * dx + dy * dy > rr * rr) continue;
+					const int x = m.pos.x() + dx;
+					const int y = m.pos.y() + dy;
+					if (x < 0 || y < 0 || x >= w_ || y >= h_) continue;
+					grid[static_cast<size_t> (y) * w_ + x] += value;
+				}
+		}
+		it = reachDamage_.emplace (armor, std::move (grid)).first;
+	}
+	return it->second[static_cast<size_t> (p.y()) * w_ + p.x()];
+}
+
+//------------------------------------------------------------------------------
+bool cWorldModel::lightThreat (int armor, int hp, const cPosition& p) const
+{
+	if (builderTurns_ <= 0 || hp <= 0) return false;
+	return static_cast<long long> (reachDamage (armor, p)) * builderTurns_ < hp;
+}
+
+//------------------------------------------------------------------------------
+void cWorldModel::setBuilderRef (const cVehicle& v)
+{
+	refArmor_ = v.data.getArmor();
+	refHp_ = v.data.getHitpoints();
+}
+
+//------------------------------------------------------------------------------
+int cWorldModel::builderThreat (const cPosition& p) const
+{
+	const int t = groundThreat (p);
+	return t > 0 && refHp_ > 0 && lightThreat (refArmor_, refHp_, p) ? 0 : t;
 }
 
 //------------------------------------------------------------------------------

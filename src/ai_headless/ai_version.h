@@ -27,7 +27,7 @@ namespace ai
 {
 
 // Поколение и сборка мозга rule. rule = base5 побайтно (Р17, 28.10.2026) — SI-R5.0-T; Р22 (28.10.2026) — пересмотр приказов
-// каждый ход, SI-R5.1-T; Р24 (28.10.2026) — геолог у центра карты, SI-R5.2-T.
+// каждый ход, SI-R5.1-T; Р24 (28.10.2026) — геолог у центра карты, стройщик под лёгкой угрозой, SI-R5.2-T.
 // Изменил поведение rule — kRuleBuild + 1; заморозил новым чемпионом (base6) — kRuleGeneration = 6, kRuleBuild = 0.
 constexpr int kRuleGeneration = 5;
 constexpr int kRuleBuild = 2;
