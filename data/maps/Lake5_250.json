@@ -6,7 +6,7 @@
  "seed": 25005,
  "attempt": 0,
  "symmetric_rot180": false,
- "generator_version": "1",
+ "generator_version": "2",
  "tileset_source": "Delta.wrl (M.A.X.R., data/maps) — все 96 плиток, палитра и типы",
  "landing": [
   [
@@ -21,23 +21,25 @@
  "landing_env": "39,106;233,154",
  "landing_note": "базы в одной области суши танка — годится MAXR_LANDING",
  "objects": {
-  "jungle_pond": 145,
-  "jungle": 373,
-  "bush": 128,
-  "ruin_b": 2,
-  "wreck": 1,
-  "ruin_dome": 2,
-  "ruin_d": 3,
-  "ruin_c": 3,
-  "ruin_a": 1,
-  "hill": 9,
-  "rocks": 10,
-  "crater": 10,
-  "shrub": 86,
-  "bones": 68,
-  "bodies": 76,
-  "dirt": 60,
-  "patch": 76
+  "wreck": 44,
+  "bush": 220,
+  "hill": 13,
+  "crater": 12,
+  "rocks": 4,
+  "bodies": 82,
+  "patch": 94,
+  "dirt": 111,
+  "bones": 79,
+  "_k1": {
+   "density": 0.006,
+   "islands_with_quota": 1,
+   "quota_short": 0,
+   "base_balance": {
+    "added": 2,
+    "removed": 2,
+    "relocated": 4
+   }
+  }
  },
  "checks": {
   "seams_le_4px": true,
@@ -51,16 +53,19 @@
   "landing_field_centred": true,
   "room_balance_ge085": true,
   "land_path": true,
-  "two_land_routes": true
+  "two_land_routes": true,
+  "k1_blocked_le_density": true,
+  "k1_bases_r12_eq": true,
+  "k1_bases_r20_eq": true
  },
  "stats": {
   "size": 250,
   "water_pct": 28.1,
   "coast_pct": 1.6,
-  "land_pct": 66.7,
-  "blocked_pct": 3.59,
+  "land_pct": 69.9,
+  "blocked_pct": 0.42,
   "tank_regions_ge20": 1,
-  "tank_largest": 41683,
+  "tank_largest": 43664,
   "water_regions_ge4": 1,
   "sea_largest_pct_of_water": 100.0,
   "seam_max_px": 4,
@@ -81,7 +86,7 @@
   "topology_land_split": 0,
   "topology_water_merged": 0,
   "topology_water_split": 0,
-  "room_ratio": 0.981,
+  "room_ratio": 0.995,
   "outpost_min_cells": 125,
   "outpost_islands": 0,
   "outpost_cells": [],
@@ -96,34 +101,55 @@
    136,
    130
   ],
+  "obstacles": {
+   "blocked_pct": 0.6,
+   "isl300_min": 0.6,
+   "isl300_max": 0.6,
+   "isl100_min": 0.6,
+   "isl100_max": 0.6,
+   "grid_cv": 0.5,
+   "grid_p90_pct": 0.87,
+   "grid_max_pct": 1.3,
+   "free2x2_lost_pct": 2.46,
+   "bases": [
+    {
+     "r12_blocked": 3,
+     "r20_blocked": 8
+    },
+    {
+     "r12_blocked": 3,
+     "r20_blocked": 8
+    }
+   ]
+  },
   "landings": [
    {
     "x": 39,
     "y": 106,
     "tank_region": 1,
-    "tank_region_cells": 41683,
-    "clear": 10,
-    "room_r18": 1121,
+    "tank_region_cells": 43664,
+    "clear": 9,
+    "room_r18": 1158,
     "to_water_or_coast": 11,
-    "to_blocked": 10,
+    "to_blocked": 9,
     "to_main_sea": 12,
     "to_main_sea_euclid": 15.0,
-    "land_share_r10_pct": 99.1,
-    "land_share_r18_pct": 81.9
+    "land_share_r10_pct": 99.5,
+    "land_share_r18_pct": 84.6
    },
    {
     "x": 233,
     "y": 154,
     "tank_region": 1,
-    "tank_region_cells": 41683,
-    "clear": 10,
-    "room_r18": 1143,
+    "tank_region_cells": 43664,
+    "clear": 9,
+    "room_r18": 1164,
     "to_water_or_coast": 11,
-    "to_blocked": 10,
+    "to_blocked": 9,
     "to_main_sea": 12,
     "to_main_sea_euclid": 14.8,
-    "land_share_r10_pct": 99.3,
-    "land_share_r18_pct": 88.3
+    "land_share_r10_pct": 99.5,
+    "land_share_r18_pct": 89.9
    }
   ]
  },
@@ -196,7 +222,8 @@
     0.5,
     0.12
    ]
-  ]
+  ],
+  "objects": "sparse"
  },
- "sha256": "744e6f102c6dc7e6707922fb6c5a26958f68a20a19a6c3f07b93a53c8d991ff2"
+ "sha256": "5ba6255159f9bab2329b95e67b234d3de72cbdec9e96de0201a752953df45e04"
 }
