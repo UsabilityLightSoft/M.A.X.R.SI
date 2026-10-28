@@ -10,29 +10,36 @@ as upstream ([License.md](License.md)).
 
 ## What is new
 
-- **AI player** `SI-R4.0-T` ([passport](si/AI_PASSPORT.md)): plays a whole game through fog of war — economy with
-  eco-spheres (a draw at the turn limit becomes a win on points), a smart surveyor, research, army operations, base
-  defence, navy with resupply at sea and sea mines, aircraft (AWAC, bombers, fighters, air transport) and infiltrators.
+- **AI player** `SI-R5.0-T` ([passport](si/AI_PASSPORT.md)): plays a whole game through fog of war — chooses its clan
+  by the map, economy with eco-spheres (a draw at the turn limit becomes a win on points), a smart surveyor, research,
+  army operations with hit-and-run tactics, base defence against early rushes and raids, navy with resupply at sea and
+  sea mines, aircraft (AWAC, bombers, fighters, air transport) and infiltrators.
   It joins a normal network game as one more player (`maxr_ai_client`), so you can play against it alone or with
   friends. "Turn based" mode only for now; in the lobby it says in the chat why it is not ready and what to press.
-- **Speaking names of AI versions:** `SI-<type><generation>.<build>-<training>[+<advisor>]` — `SI-R4.0-T` is rules (R),
-  generation 4 (the 4th champion), build 0, tuned by tournaments (T); the frozen champions are `SI-R1` … `SI-R4`, with
-  an LLM advisor — `SI-R4.0-T+Lgemma4-12b`; the former AI-3.1 and AI-3.2 are `SI-R3.1-T` and `SI-R3.2-T`. The name is
+- **Speaking names of AI versions:** `SI-<type><generation>.<build>-<training>[+<advisor>]` — `SI-R5.0-T` is rules (R),
+  generation 5 (the 5th champion), build 0, tuned by tournaments (T); the frozen champions are `SI-R1` … `SI-R5`, with
+  an LLM advisor — `SI-R5.0-T+Lgemma4-12b`; the former AI-3.1 and AI-3.2 are `SI-R3.1-T` and `SI-R3.2-T`. The name is
   the player name in the lobby and the greeting in the game chat (with the link to the passport), and it is written to
   the journal and the metrics of every game. The full key — in the [passport](si/AI_PASSPORT.md).
 - **Engine fixes**, also offered upstream: free metal from factories, use of freed memory when a factory repeats its
   queue, endless turning of a shooter, crash after a cluster
   attack, factory started with nothing to build, workers counted twice, alien units outside the map, hidden units not
   detected after unloading, mines laid next to a detector, detectors waking up blind, no reaction fire on unloading,
-  disabled units still scanning; faster path search and scan map checksums. Second batch (fixes 17–32): disabled units
-  do not fire and do not work (a disabled constructor pauses its building), scan and sentry maps, server checks of the
+  disabled units still scanning; faster path search and scan map checksums. Second batch (fixes 17–32, to be offered
+  upstream): disabled units do not fire and do not work (a disabled constructor pauses its building), scan and sentry maps, server checks of the
   landing (one credit per started 5 units of cargo), of big buildings, of transfers and of four more actions, non-latin
   paths and user names, the path search, a timer race at the end of a game; a detector searches by itself, a vehicle
   and an action wait for the step of an invisible unit; disabled aliens recover; two rules of the fork: a draw at the
   same best score (as in M.A.X.) and a stolen vehicle noticed at the next turn of its owner. New: a resync restores the
   client model in full — the cargo of transports and depots, the units of a live client, the unit versions after
   research (fix 33); a saved game without GUI info no longer stops the dedicated server (fix 36); the self destruction
-  of a land or sea mine no longer crashes the game (fix 37).
+  of a land or sea mine no longer crashes the game (fix 37). Fixes 34–35 and 38–46 (not offered upstream yet): the game
+  in a normal window scaled to the whole window, an interface scale "Auto" or 100–400% (4K — 300%), Russian strings of
+  the menus and the game; the unit window shows a started building at once; resinstaller installs the hit sounds; the
+  factory window keeps "Done" unavailable while the queue is empty; a warning when a network save is loaded as a single
+  game; the key "f" only centres, "Colour" is "o"; with the AI in the lobby only "Turn based" can be chosen; a network
+  client out of sync for 3 s takes the model from the server and logs the parts of its checksum, and it creates the
+  players after the unit data (no "OUT OF SYNC" before the last landing).
 - **Seven large generated maps** up to 250×250 (`Gen_*`): continents, archipelago, straits, lakes, mixed and two sea
   maps with the bases at the coast (`Gen_Coast` — no way by land, `Gen_Gulf`).
 - `ai_headless` — AI against AI without a window (deterministic, for tournaments and training data).
@@ -58,20 +65,29 @@ M.A.X.R.SI — форк ремейка M.A.X.R. с **компьютерным п
 [Releases](../../releases), распаковать в папку **без русских букв в пути**, запустить «Играть против ИИИ.cmd». Что
 умеет ИИИ — [паспорт](si/AI_PASSPORT.md).
 
-В ветке `main` — ИИИ `SI-R4.0-T`, поколение 4 (чемпион `base4`): против прежнего чемпиона `SI-R3` D = 0.736 по вердикту
-игры и 0.610 по материалу. К хозяйству, армии, обороне, флоту, авиации и коммандос добавлены эко-сферы и победа по очкам,
-умный геолог, снабжение флота в море и морские мины у верфи, AWAC в укрытии. **Имена версий говорящие:**
-`SI-<тип><поколение>.<сборка>-<обучение>[+<советник>]` — `SI-R4.0-T`: правила (R), поколение 4, сборка 0, настроен
-турнирами (T); замороженные чемпионы — `SI-R1` … `SI-R4`, с советником-LLM — `SI-R4.0-T+Lgemma4-12b`; прежние «ИИИ-3.1» и
+В ветке `main` — ИИИ `SI-R5.0-T`, поколение 5 (чемпион `base5`): против прежнего чемпиона `SI-R4` D = 0.738 по вердикту
+игры и 0.678 по материалу. Сам выбирает клан по карте (обычно Musashi — танки; враг за водой и моря у базы нет — The
+Chosen, авиация); тактика заходов: раненая машина, которой не пережить ход врага, стреляет и отходит, дальнобойного врага
+не ждёт у края его огня, урон «из ниоткуда» — ищет подлодку или диверсанта, по выключенным соседям бьёт наугад; ранний
+раш отбивает танк-защитник; армаду за водой бьют бомбардировщики с подлётом вне досягаемости ПВО; осторожный геолог и
+зенитки у дальних шахт; у свежей верфи — сначала морские мины. С поколения 4 — эко-сферы и победа по очкам, умный геолог,
+снабжение флота в море, AWAC в укрытии. **Имена версий говорящие:**
+`SI-<тип><поколение>.<сборка>-<обучение>[+<советник>]` — `SI-R5.0-T`: правила (R), поколение 5, сборка 0, настроен
+турнирами (T); замороженные чемпионы — `SI-R1` … `SI-R5`, с советником-LLM — `SI-R5.0-T+Lgemma4-12b`; прежние «ИИИ-3.1» и
 «ИИИ-3.2» — `SI-R3.1-T` и `SI-R3.2-T`. Имя видно в лобби (имя игрока), в приветствии в чате партии (со ссылкой на
 паспорт), в журнале и метриках каждой партии; расшифровка — в паспорте. Движок — правки 01–16, вторая пачка 17–32 и
-новые 33, 36, 37: выключенный не стреляет и не работает (конструктор ставит стройку на паузу), карты обзора и дозора,
+новые 33–46: выключенный не стреляет и не работает (конструктор ставит стройку на паузу), карты обзора и дозора,
 сервер проверяет высадку (кредит за каждые начатые 5 единиц груза), большие здания, передачу и ещё четыре действия, пути
 и имя пользователя с русскими буквами, поиск пути, гонка таймера; сыщик ищет своим зрением; машина и действие ждут шага
 невидимого; выключенные пришельцы просыпаются; правила форка — ничья при равенстве очков и угон, замеченный в начале
 хода хозяина; пересинхронизация восстанавливает модель клиента целиком (33); сохранение без сведений окна не
-останавливает выделенный сервер (36); самоуничтожение мины не роняет игру (37). Карты — семь больших сгенерированных, из
-них две морские с базами у берега. Исправления движка предложены авторам M.A.X.R.
+останавливает выделенный сервер (36); самоуничтожение мины не роняет игру (37); игра в обычном окне и масштаб интерфейса
+«Авто» или 100–400% (34, 40), русские строки меню и партии (35), окно юнита сразу показывает стройку (38), звуки
+попаданий (39), на заводе «Готово» недоступна при пустой очереди (41), предупреждение при одиночной загрузке сетевой
+партии (42), «Лёгкий завод» (43), «f» — только центр, «Цвет» — «o» (44), в лобби с ИИИ — только «По очереди» (45),
+клиент при рассинхроне дольше 3 с сам берёт модель сервера и создаёт игроков после данных юнитов (46). Карты — семь
+больших сгенерированных, из них две морские с базами у берега. Авторам M.A.X.R. предложены правки 01–12, 15 и 16,
+остальные — на очереди.
 
 ---
 
