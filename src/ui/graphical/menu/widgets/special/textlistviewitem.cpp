@@ -19,6 +19,7 @@
 
 #include "ui/graphical/menu/widgets/special/textlistviewitem.h"
 
+#include "SDLutility/drawing.h"
 #include "ui/widgets/label.h"
 
 //------------------------------------------------------------------------------
@@ -33,6 +34,23 @@ cTextListViewItem::cTextListViewItem (const std::string& text) :
 const std::string& cTextListViewItem::getText() const
 {
 	return label->getText();
+}
+
+//------------------------------------------------------------------------------
+void cTextListViewItem::setDimmed (bool dimmed_)
+{
+	dimmed = dimmed_;
+}
+
+//------------------------------------------------------------------------------
+void cTextListViewItem::draw (SDL_Surface& destination, const cBox<cPosition>& clipRect)
+{
+	cAbstractListViewItem::draw (destination, clipRect);
+
+	if (!dimmed || isHidden() || !getArea().intersects (clipRect)) return;
+
+	// the text covered with the background color of the lists, partly transparent
+	drawDimmed (destination, getArea().intersection (clipRect));
 }
 
 //------------------------------------------------------------------------------

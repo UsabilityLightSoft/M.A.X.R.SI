@@ -24,6 +24,7 @@
 #include "utility/signal/signalconnectionmanager.h"
 
 #include <string>
+#include <vector>
 
 class cCheckBox;
 class cColorSelector;
@@ -53,7 +54,8 @@ private:
 	cLabel* colorLabel = nullptr;
 	cLabel* scrollSpeedLabel = nullptr;
 	cLabel* languageLabel = nullptr;
-	cLabel* resolutionLabel = nullptr;
+	cLabel* uiScaleLabel = nullptr;
+	cLabel* uiScaleHintLabel = nullptr;
 
 	cPushButton* doneButton = nullptr;
 	cPushButton* cancelButton = nullptr;
@@ -85,7 +87,10 @@ private:
 	cCheckBox* windowCheckBox = nullptr;
 
 	cComboBox* languagesComboBox = nullptr;
-	cComboBox* resolutionsComboBox = nullptr;
+	cComboBox* uiScaleComboBox = nullptr;
+	/** The scale (percent, 0 = automatic) of each item of uiScaleComboBox. */
+	std::vector<int> uiScaleItemPercents;
+	bool updatingUiScaleItems = false;
 
 	std::string storedLanguage;
 
@@ -96,6 +101,8 @@ private:
 	bool storedMusicMute;
 	bool storedEffectsMute;
 	bool storedVoicesMute;
+
+	int storedUiScale = 0;
 
 	void loadValues();
 	void saveValues();
@@ -113,6 +120,12 @@ private:
 	void musicMuteChanged();
 	void effectsMuteChanged();
 	void voicesMuteChanged();
+
+	/** Fills the list of scales: the automatic one with its value for the current window; the values too big for the window dimmed. */
+	void updateUiScaleItems();
+	void selectUiScaleItem (int percent);
+	/** A scale has been chosen: applied at once (Done keeps it, Cancel restores the previous one). */
+	void uiScaleChanged();
 };
 
 #endif // ui_graphical_menu_dialogs_dialogpreferencesH

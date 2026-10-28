@@ -32,10 +32,13 @@
 
 struct sVideoSettings
 {
-	std::optional<cPosition> resolution;
+	std::optional<cPosition> resolution; // not used any more (the picture size follows the window and the ui scale), kept for older versions
 	int colourDepth = 32;
 	int displayIndex = 0;
 	bool windowMode = true;
+	std::optional<cPosition> windowSize; // client area of the window, when it is not maximized
+	bool windowMaximized = true;
+	int uiScale = 0; // scale of the user interface in percent (100: a pixel of the game is a pixel of the window), 0: automatic
 
 	template <ArchiveInOrOut Archive>
 	void serialize (Archive& archive)
@@ -46,6 +49,9 @@ struct sVideoSettings
 		archive & NVP (colourDepth);
 		archive & NVP (displayIndex);
 		archive & NVP (windowMode);
+		archive & NVP (windowSize);
+		archive & NVP (windowMaximized);
+		archive & NVP (uiScale);
 		// clang-format on
 	}
 };

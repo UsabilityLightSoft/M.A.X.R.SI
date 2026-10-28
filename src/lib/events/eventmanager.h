@@ -20,9 +20,11 @@
 #ifndef events_eventmanagerH
 #define events_eventmanagerH
 
+#include "utility/position.h"
 #include "utility/signal/signal.h"
 
 #include <SDL.h>
+#include <optional>
 
 class cEventMouseMotion;
 class cEventMouseButton;
@@ -71,7 +73,18 @@ private:
 
 	bool handleSdlEvent (const SDL_Event& event);
 
+	/**
+	 * Sends a mouse motion to the screen buffer position, that is displayed at the window position.
+	 * (The window shows the screen buffer scaled.)
+	 */
+	void sendMouseMotion (const SDL_MouseMotionEvent&, const cPosition& windowPosition);
+
 	bool isDone = false;
+
+	/** Last mouse position in the window and in the screen buffer. */
+	std::optional<cPosition> lastMouseWindowPosition;
+	std::optional<cPosition> lastMouseBufferPosition;
+	unsigned int lastPresentationVersion = 0;
 };
 
 #endif // events_eventmanagerH

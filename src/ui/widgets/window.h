@@ -125,6 +125,18 @@ public:
 	virtual bool wantsCentered() const { return true; }
 
 	/**
+	 * What the window does with the background behind it.
+	 * A window with a black background hides all windows below it.
+	 */
+	eWindowBackgrounds getBackgroundType() const { return backgroundType; }
+
+	/**
+	 * The background (black or the shadow over the windows below) is drawn again with the next draw,
+	 * e.g. because the screen buffer has been recreated in another size.
+	 */
+	void redrawBackground() { hasBeenDrawnOnce = false; }
+
+	/**
 	 * Triggered when @ref handleRemoved is called.
 	 */
 	cSignal<void()> terminated;

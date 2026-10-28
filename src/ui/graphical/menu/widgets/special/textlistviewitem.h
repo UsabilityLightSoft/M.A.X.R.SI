@@ -33,10 +33,21 @@ public:
 
 	const std::string& getText() const;
 
+	/**
+	 * A dimmed item is shown darker, e.g. a value that can not be used at the moment.
+	 */
+	void setDimmed (bool);
+	bool isDimmed() const { return dimmed; }
+
+	void draw (SDL_Surface& destination, const cBox<cPosition>& clipRect) override;
+
 	void handleResized (const cPosition& oldSize) override;
 
 protected:
 	cLabel* label = nullptr;
+
+private:
+	bool dimmed = false;
 };
 
 #endif // ui_graphical_menu_widgets_special_textlistviewitemH

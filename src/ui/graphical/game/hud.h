@@ -61,7 +61,21 @@ public:
 	void setTurnTimeClock (std::shared_ptr<const cTurnTimeClock>);
 	void setGameSettings (std::shared_ptr<const cGameSettings>);
 
+	/**
+	 * The frame of the HUD for the current size of the game picture.
+	 * The images of the frame are read from disk only once.
+	 */
 	static UniqueSurface generateSurface();
+
+	/**
+	 * Height of the chat box above the bottom panel: 100 pixels, but at most 15% of the map height
+	 * (with a big scale of the user interface the picture is small).
+	 */
+	static int getChatBoxHeight (int pictureHeight);
+	/**
+	 * Height of the area of the message list below the top panel: 200 pixels, but at most a quarter of the map height.
+	 */
+	static int getMessageListHeight (int pictureHeight);
 
 	void setMinimalZoomFactor (float zoomFactor);
 	void setZoomFactor (float zoomFactor);

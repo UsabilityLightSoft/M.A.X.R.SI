@@ -93,6 +93,9 @@ msgstr ""
 msgid "Comp~AttackingStatusStr"
 msgstr ""
 
+msgid "Comp~Build_Queue_Empty"
+msgstr ""
+
 msgid "Comp~Building_Disabled"
 msgstr ""
 
@@ -203,6 +206,12 @@ msgid "Comp~Landing_Warning"
 msgstr ""
 
 msgid "Comp~Laying"
+msgstr ""
+
+msgid "Comp~Load_HotSeat_Game_In_Single_Player"
+msgstr ""
+
+msgid "Comp~Load_Network_Game_In_Single_Player"
 msgstr ""
 
 msgid "Comp~Metal_Insufficient"
@@ -397,6 +406,12 @@ msgid "Main~Credits_Reloaded"
 msgstr ""
 
 msgid "Main~Version"
+msgstr ""
+
+msgid "Multiplayer~AI_Game_Type_Changed"
+msgstr ""
+
+msgid "Multiplayer~AI_Turn_Based_Only"
 msgstr ""
 
 msgid "Multiplayer~Abort_Waiting"
@@ -761,6 +776,9 @@ msgstr ""
 msgid "Others~Load"
 msgstr ""
 
+msgid "Others~Load_Anyway"
+msgstr ""
+
 msgid "Others~Load_7"
 msgstr ""
 
@@ -969,6 +987,15 @@ msgid "Settings~ShowDamageVehicle"
 msgstr ""
 
 msgid "Settings~Tracks"
+msgstr ""
+
+msgid "Settings~UiScale"
+msgstr ""
+
+msgid "Settings~UiScale_Auto"
+msgstr ""
+
+msgid "Settings~UiScale_WindowTooSmall"
 msgstr ""
 
 msgid "Settings~Unlimited_11"

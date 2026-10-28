@@ -17,56 +17,55 @@ msgstr ""
 "Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
 
 msgid "ChatCmd~Desc~AJobs"
-msgstr ""
+msgstr "Вкл./выкл. отладку заданий атаки"
 
 msgid "ChatCmd~Desc~Base"
-msgstr ""
+msgstr "Вкл./выкл. отладку баз"
 
 msgid "ChatCmd~Desc~CacheDebug"
-msgstr ""
+msgstr "Вкл./выкл. отладку кэша отрисовки"
 
 msgid "ChatCmd~Desc~CacheFlush"
-msgstr ""
+msgstr "Очистить кэш отрисовки"
 
 msgid "ChatCmd~Desc~CacheSize"
-msgstr ""
+msgstr "Задать размер кэша отрисовки"
 
 msgid "ChatCmd~Desc~Crash"
-msgstr ""
+msgstr "Имитировать сбой (проверка отчёта о сбое)"
 
 msgid "ChatCmd~Desc~Fx"
-msgstr ""
+msgstr "Вкл./выкл. отладку эффектов"
 
 msgid "ChatCmd~Desc~Help"
-msgstr ""
+msgstr "Показать эту справку"
 
 msgid "ChatCmd~Desc~Pause"
-msgstr ""
+msgstr "Приостановить игру"
 
 msgid "ChatCmd~Desc~Players"
-msgstr ""
+msgstr "Вкл./выкл. отладку игроков"
 
 msgid "ChatCmd~Desc~Resume"
-msgstr ""
+msgstr "Продолжить приостановленную игру"
 
 msgid "ChatCmd~Desc~Sentry"
-msgstr ""
+msgstr "Вкл./выкл. отладку режима караула"
 
 msgid "ChatCmd~Desc~StealthDebug"
-msgstr ""
+msgstr "Вкл./выкл. отладку скрытности юнитов"
 
 msgid "ChatCmd~Desc~SyncDebug"
-msgstr ""
+msgstr "Вкл./выкл. отладку синхронизации данных игры"
 
 msgid "ChatCmd~Desc~Trace"
-msgstr ""
+msgstr "Вкл./выкл. отладку юнита под курсором"
 
 msgid "ChatCmd~Unknown_Command"
-msgstr ""
+msgstr "Неизвестная команда чата '%s'"
 
-#, fuzzy
 msgid "Comp~Adjustments_Fuel_Decreased"
-msgstr "Добыча топлива увеличена на %s"
+msgstr "Добыча топлива уменьшена на %s"
 
 msgid "Comp~Adjustments_Fuel_Increased"
 msgstr "Добыча топлива увеличена на %s"
@@ -74,16 +73,14 @@ msgstr "Добыча топлива увеличена на %s"
 msgid "Comp~Adjustments_Gold_Decreased"
 msgstr "Добыча золота уменьшена на %s"
 
-#, fuzzy
 msgid "Comp~Adjustments_Gold_Increased"
-msgstr "Добыча золота уменьшена на %s"
+msgstr "Добыча золота увеличена на %s"
 
 msgid "Comp~Adjustments_Metal_Decreased"
 msgstr "Добыча сырья уменьшена на %s"
 
-#, fuzzy
 msgid "Comp~Adjustments_Metal_Increased"
-msgstr "Добыча сырья уменьшена на %s"
+msgstr "Добыча сырья увеличена на %s"
 
 msgid "Comp~Attacked"
 msgstr "%s - под огнём противника!"
@@ -92,7 +89,10 @@ msgid "Comp~AttackingEnemy"
 msgstr "%s атакует врага"
 
 msgid "Comp~AttackingStatusStr"
-msgstr ""
+msgstr "атакует"
+
+msgid "Comp~Build_Queue_Empty"
+msgstr "Очередь пуста - дважды щёлкните машину в списке, чтобы добавить"
 
 msgid "Comp~Building_Disabled"
 msgstr "Производство остановлено."
@@ -119,7 +119,7 @@ msgid "Comp~CommandoRank_Expert"
 msgstr "Эксперт"
 
 msgid "Comp~CommandoRank_GrandMaster"
-msgstr ""
+msgstr "Гроссмейстер"
 
 msgid "Comp~CommandoRank_Greenhorn"
 msgstr "Молокосос"
@@ -148,12 +148,11 @@ msgstr "сломано"
 msgid "Comp~Draw"
 msgstr "Ничья: у лидеров поровну очков"
 
-#, fuzzy
 msgid "Comp~EcoSphere(s)"
 msgid_plural "Comp~EcoSphere(s)"
 msgstr[0] "%d эко-сфера"
 msgstr[1] "%d эко-сферы"
-msgstr[2] "%d эко-сферы"
+msgstr[2] "%d эко-сфер"
 
 msgid "Comp~End_Game"
 msgstr ""
@@ -180,7 +179,7 @@ msgid "Comp~Fuel_Low"
 msgstr "Недостаточно топлива, генератор выключен."
 
 msgid "Comp~GameEndsAt"
-msgstr "Играть заканчивается при"
+msgstr "Игра до"
 
 msgid "Comp~Gold_Insufficient"
 msgstr "Невозможно запустить, недостаточно золота."
@@ -188,7 +187,6 @@ msgstr "Невозможно запустить, недостаточно зол
 msgid "Comp~Gold_Low"
 msgstr "Недостаточно залота, рафинария отключена."
 
-#, fuzzy
 msgid "Comp~Is(Are)Finished"
 msgid_plural "Comp~Is(Are)Finished"
 msgstr[0] " - готово"
@@ -196,13 +194,13 @@ msgstr[1] " - готовы"
 msgstr[2] " - готовы"
 
 msgid "Comp~IsBeingAttacked"
-msgstr ""
+msgstr "под атакой"
 
 msgid "Comp~Labs"
 msgstr "лаборатории"
 
 msgid "Comp~Landing_Select"
-msgstr ""
+msgstr "Выберите место высадки."
 
 msgid "Comp~Landing_Too_Close"
 msgstr "Точка высадки слишком близко к другому игроку. Выберите новую точку высадки."
@@ -212,6 +210,12 @@ msgstr "Точка высадки находится недалеко от др�
 
 msgid "Comp~Laying"
 msgstr "устанавливает мины"
+
+msgid "Comp~Load_HotSeat_Game_In_Single_Player"
+msgstr "Это партия ХотСит (игроки: %s) - в одиночной игре их ход не наступит. Загружайте её через \"Мультиплеер\" -> \"Загрузить ХотСит\"."
+
+msgid "Comp~Load_Network_Game_In_Single_Player"
+msgstr "Это сетевая партия (игроки: %s) - в одиночной игре их ход не наступит. Загружайте её через \"Мультиплеер\" -> \"TCP/IP Сервер\" -> \"Загрузить игру\"."
 
 msgid "Comp~Metal_Insufficient"
 msgstr "Невозможно запустить, недостаточно сырья."
@@ -223,7 +227,7 @@ msgid "Comp~Moving"
 msgstr "перемещается"
 
 msgid "Comp~MovingToAttack"
-msgstr ""
+msgstr "идёт в атаку"
 
 msgid "Comp~NoLimit"
 msgstr "Биться насмерть!"
@@ -234,12 +238,11 @@ msgstr "(единиц типа %s)"
 msgid "Comp~Path_interrupted"
 msgstr "Возведение построек по заданному маршруту не может быть продолжено."
 
-#, fuzzy
 msgid "Comp~Point(s)"
 msgid_plural "Comp~Point(s)"
 msgstr[0] "%d очко"
-msgstr[1] "%d очки"
-msgstr[2] "%d очки"
+msgstr[1] "%d очка"
+msgstr[2] "%d очков"
 
 msgid "Comp~Points"
 msgstr "очки"
@@ -250,13 +253,11 @@ msgstr "производит"
 msgid "Comp~Producing_Fin"
 msgstr "закончил производство"
 
-#, fuzzy
 msgid "Comp~Producing_InsufficientMaterial"
-msgstr "Невозможно запустить, недостаточно золота."
+msgstr "Не хватает сырья для постройки"
 
-#, fuzzy
 msgid "Comp~Producing_PositionBlocked"
-msgstr "закончил производство"
+msgstr "Место постройки занято"
 
 msgid "Comp~ReactionFireOff"
 msgstr "Ответный огонь отключен"
@@ -264,18 +265,17 @@ msgstr "Ответный огонь отключен"
 msgid "Comp~Repeat"
 msgstr "Ещё раз"
 
-#, fuzzy
 msgid "Comp~Research(s)_Finished"
 msgid_plural "Comp~Research(s)_Finished"
-msgstr[0] "Иссл. - готово: "
-msgstr[1] "Иссл. - готовы: "
-msgstr[2] "Иссл. - готовы: "
+msgstr[0] "Исследование завершено: "
+msgstr[1] "Исследования завершены: "
+msgstr[2] "Исследования завершены: "
 
 msgid "Comp~Reserve"
 msgstr "Резерв"
 
 msgid "Comp~RestartRequired"
-msgstr ""
+msgstr "Чтобы изменения вступили в силу, перезапустите игру."
 
 msgid "Comp~Screenshot_Done"
 msgstr "Снимок экрана записан в %s"
@@ -298,12 +298,11 @@ msgstr "Недостаточно рабочих, здание отключено
 msgid "Comp~Themes"
 msgstr "темы"
 
-#, fuzzy
 msgid "Comp~Turn(s)"
 msgid_plural "Comp~Turn(s)"
-msgstr[0] "%d Ход"
-msgstr[1] "%d Ходы"
-msgstr[2] "%d Ходы"
+msgstr[0] "%d ход"
+msgstr[1] "%d хода"
+msgstr[2] "%d ходов"
 
 msgid "Comp~Turn_5"
 msgstr "Ход"
@@ -336,52 +335,49 @@ msgid "Comp~Working"
 msgstr "работает"
 
 msgid "Error_Messages~ERROR_Map_Checksum"
-msgstr ""
+msgstr "Карта \"%s\" не совпадает с картой, на которой начата игра"
 
 msgid "Error_Messages~ERROR_Map_Loading"
 msgstr "Ошибка при загрузке карты"
 
-#, fuzzy
 msgid "Error_Messages~ERROR_Save_Incompatible"
-msgstr "Ошибка при загрузке карты"
+msgstr "Сохранения версий Maxr до %s несовместимы."
 
-#, fuzzy
 msgid "Error_Messages~ERROR_Save_Loading"
-msgstr "Ошибка при загрузке карты"
+msgstr "Ошибка при загрузке сохранённой игры"
 
-#, fuzzy
 msgid "Error_Messages~ERROR_Save_Writing"
-msgstr "Ошибка при загрузке карты"
+msgstr "Ошибка при записи файла сохранения"
 
 msgid "Error_Messages~INFO_Not_Implemented"
 msgstr "Ещё не реализовано"
 
 msgid "Error_Messages~Invalid_Map"
-msgstr ""
+msgstr "Карта \"%s\" не совпадает с картой сервера"
 
 msgid "Error_Messages~Map_Not_Found"
-msgstr ""
+msgstr "Карта не найдена: %s"
 
 msgid "GameOver~BuiltBuildings"
-msgstr ""
+msgstr "Построено зданий"
 
 msgid "GameOver~BuiltMineStations"
-msgstr ""
+msgstr "Построено шахт"
 
 msgid "GameOver~BuiltUnits"
-msgstr ""
+msgstr "Построено юнитов"
 
 msgid "GameOver~Builtfactories"
-msgstr ""
+msgstr "Построено заводов"
 
 msgid "GameOver~LostBuildings"
-msgstr ""
+msgstr "потеряно"
 
 msgid "GameOver~LostUnits"
-msgstr ""
+msgstr "потеряно"
 
 msgid "GamePreparation~Aborting?"
-msgstr ""
+msgstr "Прервать подготовку к игре?"
 
 msgid "Init~Buildings"
 msgstr "Загрузка зданий..."
@@ -419,30 +415,32 @@ msgstr "M.A.X.R. %s основывается на M.A.X. от Interplay"
 msgid "Main~Version"
 msgstr "версия %s"
 
+msgid "Multiplayer~AI_Game_Type_Changed"
+msgstr "Тип игры сменён на \"По очереди\": ИИИ %s умеет ходить только по очереди."
+
+msgid "Multiplayer~AI_Turn_Based_Only"
+msgstr "ИИИ умеет ходить только по очереди"
+
 msgid "Multiplayer~Abort_Waiting"
 msgstr "Сервер, нажмите F2 чтобы прекратить ожидание."
 
 msgid "Multiplayer~Disconnect_Not_In_Save"
 msgstr "Вас нет в списке сохранённой игры, Вы будете отключены."
 
-#, fuzzy
 msgid "Multiplayer~Gameversion_Error"
-msgstr "Отменено"
+msgstr "Нет подключения: версия игры на сервере %s."
 
-#, fuzzy
 msgid "Multiplayer~Gameversion_Own"
-msgstr "Недостаточно игроков!"
+msgstr "Ваша версия: %s."
 
-#, fuzzy
 msgid "Multiplayer~Gameversion_Warning_Client"
-msgstr "Сервер не запущен"
+msgstr "Внимание: версия игры на сервере %s."
 
-#, fuzzy
 msgid "Multiplayer~Gameversion_Warning_Server"
-msgstr "Сервер не запущен"
+msgstr "Внимание: версия игры у игрока %s."
 
 msgid "Multiplayer~Host_command"
-msgstr ""
+msgstr "Сервер ввёл команду '%s'"
 
 msgid "Multiplayer~Lost_Connection"
 msgstr "Потеряна связь с %s."
@@ -478,10 +476,10 @@ msgid "Multiplayer~Map_NoSet"
 msgstr "--не выбана карта--"
 
 msgid "Multiplayer~Missing_Host"
-msgstr ""
+msgstr "Нельзя начать: сервер должен быть участником сохранённой игры"
 
 msgid "Multiplayer~Missing_Player"
-msgstr ""
+msgstr "Нет игрока: %s"
 
 msgid "Multiplayer~Missing_Settings"
 msgstr "Опции, карта или сохранённая игра не выбраны"
@@ -505,13 +503,13 @@ msgid "Multiplayer~No_Map_No_Ready"
 msgstr "Не могу загрузить карту %s. Вы не готовы."
 
 msgid "Multiplayer~No_Response"
-msgstr ""
+msgstr "Ждём ответа от игрока %s"
 
 msgid "Multiplayer~Not_All_Player(s)_Ready"
 msgid_plural "Multiplayer~Not_All_Player(s)_Ready"
-msgstr[0] ""
-msgstr[1] ""
-msgstr[2] ""
+msgstr[0] "Один игрок не готов..."
+msgstr[1] "Не все игроки готовы..."
+msgstr[2] "Не все игроки готовы..."
 
 msgid "Multiplayer~Not_Ready"
 msgstr "%s не готов"
@@ -520,7 +518,7 @@ msgid "Multiplayer~Option_NoSet"
 msgstr "--не выбраны опции--"
 
 msgid "Multiplayer~Pause"
-msgstr ""
+msgstr "Игра приостановлена."
 
 msgid "Multiplayer~Player1"
 msgstr "Игрок 1"
@@ -547,7 +545,7 @@ msgid "Multiplayer~Player8"
 msgstr "Игрок 8"
 
 msgid "Multiplayer~Player_Color_Taken"
-msgstr ""
+msgstr "Этот цвет уже занят, выберите другой"
 
 msgid "Multiplayer~Player_Joined"
 msgstr "%s вступает в игру"
@@ -556,10 +554,10 @@ msgid "Multiplayer~Player_Left"
 msgstr "%s покидает игру"
 
 msgid "Multiplayer~Player_Left_Game_Preparation"
-msgstr ""
+msgstr "Игрок %s вышел из подготовки к игре"
 
 msgid "Multiplayer~Player_Name_Taken"
-msgstr ""
+msgstr "Это имя уже занято, выберите другое"
 
 msgid "Multiplayer~Player_Turn"
 msgstr "%s делает ход"
@@ -573,13 +571,11 @@ msgstr "У игрока неправильное имя"
 msgid "Multiplayer~Reconnect"
 msgstr "Игра уже идёт. Если Вы потеряли связь с сервером, Вы можете подключиться заново. Хотите подключиться?"
 
-#, fuzzy
 msgid "Multiplayer~Reconnect_Already_Connected"
-msgstr "Соединено"
+msgstr "Сервер не пускает: игрок с вашим именем уже подключён."
 
-#, fuzzy
 msgid "Multiplayer~Reconnect_Not_Part_Of_Game"
-msgstr "Вас нет в списке сохранённой игры, Вы будете отключены."
+msgstr "Сервер не пускает: вы не участник этой игры."
 
 msgid "Multiplayer~Save_Only_Host"
 msgstr "Только сервер может сохранять игру."
@@ -588,13 +584,13 @@ msgid "Multiplayer~Server_Not_Running"
 msgstr "Сервер не запущен"
 
 msgid "Multiplayer~Wait_For_Server"
-msgstr ""
+msgstr "Ждём ответа сервера"
 
 msgid "Multiplayer~Wait_Reconnect"
-msgstr "Ожидаем переподключения игрока."
+msgstr "Ожидаем переподключения игрока %s."
 
 msgid "Multiplayer~Wait_TurnEnd"
-msgstr ""
+msgstr "Подождите, ход завершается."
 
 msgid "Multiplayer~Wait_Until"
 msgstr "Дождитесь завершения хода игроком %s"
@@ -639,7 +635,7 @@ msgid "Option~TooMuch"
 msgstr "макс"
 
 msgid "Option~Type_HotSeat"
-msgstr ""
+msgstr "ХотСит"
 
 msgid "Option~Type_Simu"
 msgstr "Одновременно"
@@ -728,9 +724,8 @@ msgstr "Готово"
 msgid "Others~End"
 msgstr "Кон. хода"
 
-#, fuzzy
 msgid "Others~Enter_7"
-msgstr "Готово"
+msgstr "Войти"
 
 msgid "Others~Exit"
 msgstr "Выход"
@@ -788,6 +783,9 @@ msgstr "Только:"
 
 msgid "Others~Load"
 msgstr "Загрузить"
+
+msgid "Others~Load_Anyway"
+msgstr "Всё равно загрузить"
 
 msgid "Others~Load_7"
 msgstr "Загр."
@@ -925,10 +923,10 @@ msgid "Others~Transfer_7"
 msgstr "Трансф."
 
 msgid "Others~Unit_destroyed"
-msgstr ""
+msgstr "Юнит уничтожен!"
 
 msgid "Others~Units"
-msgstr ""
+msgstr "Юниты"
 
 msgid "Others~Upgrade"
 msgstr "Улучшить"
@@ -973,7 +971,7 @@ msgid "Settings~Intro"
 msgstr "Вступление"
 
 msgid "Settings~Language"
-msgstr ""
+msgstr "Язык"
 
 msgid "Settings~Music"
 msgstr "Музыка"
@@ -982,10 +980,10 @@ msgid "Settings~Preferences"
 msgstr "Настройки"
 
 msgid "Settings~Resolution"
-msgstr "Разрешение экрана"
+msgstr "Экран"
 
 msgid "Settings~ScrollSpeed"
-msgstr "Скорость прокрутки"
+msgstr "Прокрутка"
 
 msgid "Settings~Shadows"
 msgstr "Тени"
@@ -994,13 +992,22 @@ msgid "Settings~ShowDamage"
 msgstr "Повреждения зданий"
 
 msgid "Settings~ShowDamageVehicle"
-msgstr "Повреждения транспорта"
+msgstr "Повреждения техники"
 
 msgid "Settings~Tracks"
 msgstr "Следы транспорта"
 
+msgid "Settings~UiScale"
+msgstr "Масштаб"
+
+msgid "Settings~UiScale_Auto"
+msgstr "Авто %s"
+
+msgid "Settings~UiScale_WindowTooSmall"
+msgstr "Окно мало для %s"
+
 msgid "Settings~Unlimited_11"
-msgstr ""
+msgstr "нет"
 
 msgid "Settings~Voices"
 msgstr "Голоса"
@@ -1018,22 +1025,22 @@ msgid "Title~BridgeHead"
 msgstr "Начальная база"
 
 msgid "Title~Build_Factory"
-msgstr ""
+msgstr "Меню завода"
 
 msgid "Title~Build_Vehicle"
-msgstr ""
+msgstr "Меню строительства"
 
 msgid "Title~Cargo"
 msgstr "Груз"
 
 msgid "Title~Choose_Clan"
-msgstr ""
+msgstr "Выбор клана"
 
 msgid "Title~Choose_Planet"
 msgstr "Выбор карты"
 
 msgid "Title~Choose_Units"
-msgstr ""
+msgstr "Выбор юнитов"
 
 msgid "Title~Clans"
 msgstr "Кланы"
@@ -1051,13 +1058,13 @@ msgid "Title~Credits"
 msgstr "Деньги"
 
 msgid "Title~Credits_start"
-msgstr ""
+msgstr "Деньги на старте"
 
 msgid "Title~Custom_11"
-msgstr ""
+msgstr "Своё"
 
 msgid "Title~GameOver"
-msgstr ""
+msgstr "Конец игры"
 
 msgid "Title~Game_Type"
 msgstr "Тип игры"
@@ -1066,7 +1073,7 @@ msgid "Title~Gold"
 msgstr "Золото"
 
 msgid "Title~HotSeat"
-msgstr ""
+msgstr "ХотСит"
 
 msgid "Title~Human"
 msgstr "Человек"
@@ -1123,16 +1130,16 @@ msgid "Title~Team"
 msgstr "Команда"
 
 msgid "Title~Turn_end"
-msgstr ""
+msgstr "Конец хода"
 
 msgid "Title~Turn_limit"
-msgstr ""
+msgstr "Лимит хода"
 
 msgid "Title~Unitinfo"
 msgstr "Статус подразделения"
 
 msgid "Title~Upgrades_Menu"
-msgstr ""
+msgstr "Меню улучшений"
 
 #~ msgid "Comp~Cheat"
 #~ msgstr "%s использован чит"

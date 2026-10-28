@@ -19,15 +19,36 @@
 
 #include "input/mouse/mouse.h"
 
+#include "SDLutility/uniquesurface.h"
 #include "events/eventmanager.h"
 #include "events/mouseevents.h"
 #include "input/mouse/cursor/mousecursorsimple.h"
+#include "output/video/video.h"
 
 #include <utility>
 
 namespace
 {
 	constexpr std::chrono::milliseconds doubleClickTime{500};
+
+	//--------------------------------------------------------------------------
+	/**
+	 * Enlarges the cursor image by an integer factor (pixels as they are),
+	 * so that the cursor has the size of the scaled picture.
+	 */
+	UniqueSurface makeScaledCursorSurface (SDL_Surface& surface, int scale)
+	{
+		UniqueSurface converted (SDL_ConvertSurfaceFormat (&surface, SDL_PIXELFORMAT_ARGB8888, 0));
+		if (converted == nullptr || scale <= 1) return converted;
+
+		UniqueSurface scaled (SDL_CreateRGBSurfaceWithFormat (0, converted->w * scale, converted->h * scale, 32, SDL_PIXELFORMAT_ARGB8888));
+		if (scaled == nullptr) return converted;
+		// the conversion has turned the color key into transparent pixels: copy all pixels as they are
+		SDL_SetColorKey (converted.get(), SDL_FALSE, 0);
+		SDL_SetSurfaceBlendMode (converted.get(), SDL_BLENDMODE_NONE);
+		if (SDL_BlitScaled (converted.get(), nullptr, scaled.get(), nullptr) != 0) return converted;
+		return scaled;
+	}
 } // namespace
 
 //------------------------------------------------------------------------------
@@ -38,6 +59,7 @@ cMouse::cMouse()
 	signalConnectionManager.connect (cEventManager::getInstance().mouseMotionEvent, [this] (const cEventMouseMotion& event) { handleMouseMotionEvent (event); });
 	signalConnectionManager.connect (cEventManager::getInstance().mouseButtonEvent, [this] (const cEventMouseButton& event) { handleMouseButtonEvent (event); });
 	signalConnectionManager.connect (cEventManager::getInstance().mouseWheelEvent, [this] (const cEventMouseWheel& event) { handleMouseWheelEvent (event); });
+	signalConnectionManager.connect (Video.cursorScaleChanged, [this]() { updateSdlCursor(); });
 }
 
 //------------------------------------------------------------------------------
@@ -105,18 +127,29 @@ bool cMouse::setCursor (std::unique_ptr<cMouseCursor> cursor_, bool force)
 
 	if (!force && cursor != nullptr && *cursor_ == *cursor) return false;
 
-	auto cursorSurface = cursor_->getSurface();
-	auto hotPoint = cursor_->getHotPoint();
+	cursor = std::move (cursor_);
 
-	auto newSdlCursor = SdlCursorPtrType (SDL_CreateColorCursor (cursorSurface, hotPoint.x(), hotPoint.y()));
+	updateSdlCursor();
+
+	return true;
+}
+
+//------------------------------------------------------------------------------
+void cMouse::updateSdlCursor()
+{
+	if (cursor == nullptr) return;
+
+	auto cursorSurface = cursor->getSurface();
+	if (cursorSurface == nullptr) return;
+	auto hotPoint = cursor->getHotPoint();
+
+	const int scale = Video.getCursorScale();
+	const auto scaledSurface = makeScaledCursorSurface (*cursorSurface, scale);
+	auto newSdlCursor = scaledSurface ? SdlCursorPtrType (SDL_CreateColorCursor (scaledSurface.get(), hotPoint.x() * scale, hotPoint.y() * scale)) : SdlCursorPtrType (SDL_CreateColorCursor (cursorSurface, hotPoint.x(), hotPoint.y()));
 
 	SDL_SetCursor (newSdlCursor.get());
 
 	sdlCursor = std::move (newSdlCursor);
-
-	cursor = std::move (cursor_);
-
-	return true;
 }
 
 //------------------------------------------------------------------------------

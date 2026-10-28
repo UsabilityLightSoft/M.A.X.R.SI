@@ -49,6 +49,29 @@ cVehicle::cVehicle (unsigned int ID) :
 	DamageFXPoint = {random (7) + 26 - 3, random (7) + 26 - 3};
 	refreshData();
 
+	connectStatusSignals();
+}
+
+//------------------------------------------------------------------------------
+cVehicle::cVehicle (const cStaticUnitData& staticData, const cDynamicUnitData& dynamicData, cPlayer* owner, unsigned int ID) :
+	cUnit (&dynamicData, &staticData, owner, ID),
+	tileMovementOffset (0, 0)
+{
+	DamageFXPoint = {random (7) + 26 - 3, random (7) + 26 - 3};
+	refreshData();
+
+	connectStatusSignals();
+}
+
+//------------------------------------------------------------------------------
+cVehicle::~cVehicle()
+{
+}
+
+//------------------------------------------------------------------------------
+void cVehicle::connectStatusSignals()
+{
+	// everything that is shown in the status text of the unit (see getStatusStr)
 	layingMinesChanged.connect ([this]() { statusChanged(); });
 	clearingMinesChanged.connect ([this]() { statusChanged(); });
 	buildingChanged.connect ([this]() { statusChanged(); });
@@ -60,26 +83,6 @@ cVehicle::cVehicle (unsigned int ID) :
 	buildingTypeChanged.connect ([this]() { statusChanged(); });
 	moveJobChanged.connect ([this]() { statusChanged(); });
 	autoMoveJobChanged.connect ([this]() { statusChanged(); });
-}
-
-//------------------------------------------------------------------------------
-cVehicle::cVehicle (const cStaticUnitData& staticData, const cDynamicUnitData& dynamicData, cPlayer* owner, unsigned int ID) :
-	cUnit (&dynamicData, &staticData, owner, ID),
-	tileMovementOffset (0, 0)
-{
-	DamageFXPoint = {random (7) + 26 - 3, random (7) + 26 - 3};
-	refreshData();
-
-	clearingTurnsChanged.connect ([this]() { statusChanged(); });
-	buildingTurnsChanged.connect ([this]() { statusChanged(); });
-	buildingTypeChanged.connect ([this]() { statusChanged(); });
-	moveJobChanged.connect ([this]() { statusChanged(); });
-	autoMoveJobChanged.connect ([this]() { statusChanged(); });
-}
-
-//------------------------------------------------------------------------------
-cVehicle::~cVehicle()
-{
 }
 
 //------------------------------------------------------------------------------
@@ -908,7 +911,7 @@ const sID& cVehicle::getBuildingType() const
 //------------------------------------------------------------------------------
 void cVehicle::setBuildingType (const sID& id)
 {
-	auto oldId = id;
+	const auto oldId = buildingTyp;
 	buildingTyp = id;
 	if (buildingTyp != oldId) buildingTypeChanged();
 }

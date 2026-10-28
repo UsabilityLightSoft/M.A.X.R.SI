@@ -180,6 +180,29 @@ const std::string& cComboBox::getItem (size_t index) const
 }
 
 //------------------------------------------------------------------------------
+void cComboBox::setItemDimmed (size_t index, bool dimmed)
+{
+	listView->getItem (index).setDimmed (dimmed);
+}
+
+//------------------------------------------------------------------------------
+bool cComboBox::isItemDimmed (size_t index) const
+{
+	return listView->getItem (index).isDimmed();
+}
+
+//------------------------------------------------------------------------------
+std::optional<size_t> cComboBox::getSelectedIndex() const
+{
+	const auto* selected = listView->getSelectedItem();
+	for (size_t i = 0; selected != nullptr && i < listView->getItemsCount(); ++i)
+	{
+		if (&listView->getItem (i) == selected) return i;
+	}
+	return std::nullopt;
+}
+
+//------------------------------------------------------------------------------
 void cComboBox::clearItems()
 {
 	listView->clearItems();

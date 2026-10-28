@@ -25,6 +25,7 @@
 #include "utility/signal/signal.h"
 #include "utility/signal/signalconnectionmanager.h"
 
+#include <optional>
 #include <string>
 
 class cCheckBox;
@@ -46,6 +47,15 @@ public:
 
 	size_t getItemsCount() const;
 	const std::string& getItem (size_t index) const;
+
+	/**
+	 * Shows an item darker (e.g. a value that can not be used at the moment).
+	 * It can still be selected: the owner decides what to do then.
+	 */
+	void setItemDimmed (size_t index, bool dimmed);
+	bool isItemDimmed (size_t index) const;
+	/** The index of the selected item, if any. */
+	std::optional<size_t> getSelectedIndex() const;
 
 	void clearItems();
 

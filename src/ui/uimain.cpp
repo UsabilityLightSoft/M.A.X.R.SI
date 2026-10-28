@@ -161,6 +161,9 @@ try
 	mouse.show();
 	application.execute();
 
+	// remember the size of the window
+	cSettings::getInstance().saveInFile();
+
 	return 0;
 }
 catch (const std::exception& ex)

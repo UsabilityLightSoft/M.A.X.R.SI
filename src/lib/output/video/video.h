@@ -23,11 +23,15 @@
 #include "SDLutility/sdlcomponent.h"
 #include "SDLutility/uniquesurface.h"
 #include "settings.h"
+#include "utility/box.h"
+#include "utility/position.h"
 #include "utility/signal/signal.h"
 #include "utility/signal/signalconnectionmanager.h"
 
+#include <array>
 #include <filesystem>
 #include <memory>
+#include <optional>
 
 class cKeyboard;
 struct sVideoSettings;
@@ -55,17 +59,97 @@ public:
 
 	/**
 	 * Prepares the window, buffer and renderer to display the game screen.
+	 * The window gets a frame, can be resized and maximized;
+	 * the screen buffer gets the size of the window divided by the scale of the user interface
+	 * and is scaled to the window.
 	 */
 	void prepareGameScreen();
 
 	/**
-	* Sets whether app should appear windowed or in fullscreen mode
+	 * Sets the scale of the user interface in percent
+	 * (100: a pixel of the game picture is a pixel of the window), 0: automatic (see @ref computeUiScale).
+	 * The game picture (screen buffer) gets the size of the window divided by the scale
+	 * with the next @ref updatePictureSize.
+	 */
+	void setUiScale (int percent);
+	int getUiScale() const { return uiScale; }
+
+	/**
+	 * The scale of the user interface in use: pixels of the window per pixel of the game picture.
+	 */
+	double getUiScaleFactor() const { return uiScaleFactor; }
+
+	/**
+	 * The scale of the user interface that the automatic setting gives for the current window and display.
+	 */
+	double getAutoUiScaleFactor() const;
+
+	/**
+	 * Size of the window (client area) in pixels.
+	 */
+	cPosition getOutputSize() const;
+
+	/**
+	 * Recreates the game picture (screen buffer), if its size has to change:
+	 * the window has been resized, maximized, switched to full screen or moved to another display,
+	 * or the scale of the user interface has been changed.
+	 * Not more often than every 150 ms, so that resizing the window with the mouse does not stutter;
+	 * the last change is applied, when the resizing has ended.
+	 * Emits @ref resolutionChanged when the size has changed.
+	 * Is called once per frame by the application.
+	 */
+	void updatePictureSize();
+
+	/**
+	* Sets whether app should appear windowed or in fullscreen mode.
+	* Fullscreen covers the desktop without changing the video mode of the display.
 	*
 	* @param bWindowMode pass true if app should work in windowed mode
 	*                    pass false it app should start in fullscreen
 	* @param bApply set to true if app should apply new windowMode too
 	*/
 	void setWindowMode (bool bWindowMode, bool bApply = false);
+
+	/**
+	 * Sets the size of the window (client area in pixels) and whether it is maximized,
+	 * used by @ref prepareGameScreen. Without a size a default size is chosen.
+	 */
+	void setWindowGeometry (std::optional<cPosition> size, bool maximized);
+
+	/**
+	 * Writes the current window size and maximized state to the video settings.
+	 */
+	void storeWindowGeometry (sVideoSettings&) const;
+
+	/**
+	 * Sets the part of the screen buffer that is displayed.
+	 * It is scaled to fill the window as much as possible while keeping the aspect ratio.
+	 * Areas smaller than the menu size (640x480) are extended to the menu size.
+	 * A box outside of the buffer (or the whole buffer) displays the whole buffer.
+	 */
+	void setViewArea (const cBox<cPosition>&);
+
+	/**
+	 * Converts a position in the window (as reported by SDL mouse events)
+	 * to the position in the screen buffer that is displayed there.
+	 * Positions outside of the displayed picture give positions outside of the view area.
+	 */
+	cPosition windowToBuffer (const cPosition&) const;
+
+	/**
+	 * Integer factor for the mouse cursor, matching the current scale of the picture.
+	 */
+	int getCursorScale() const { return cursorScale; }
+
+	/**
+	 * Increased each time the mapping from window positions to buffer positions changes.
+	 */
+	unsigned int getPresentationVersion() const { return presentationVersion; }
+
+	/**
+	 * Handles window events (size changes, maximization, ...)
+	 */
+	void handleWindowEvent (const SDL_WindowEvent&);
 
 	/**
 	* Get whether app should appear windowed or in fullscreen mode
@@ -75,22 +159,12 @@ public:
 	bool getWindowMode() const { return windowMode; }
 
 	/**
-	* Set resolution/dimension of app window.
-	* @param iWidth desired window width
-	* @param iHeight desired window height
-	* @param bApply  set to true if app should apply new resolution too
-	*/
-	void setResolution (int iWidth, int iHeight, bool bApply = false);
-
-	/**
-	* @deprecated for compat only - will be removed!
-	* @return stored window width
+	* @return width of the game picture (screen buffer)
 	*/
 	int getResolutionX() const { return resolutionX; }
 
 	/**
-	* @deprecated for compat only - will be removed!
-	* @return stored window height
+	* @return height of the game picture (screen buffer)
 	*/
 	int getResolutionY() const { return resolutionY; }
 
@@ -117,21 +191,6 @@ public:
 	 * @return The display index.
 	 */
 	int getDisplayIndex() const { return displayIndex; }
-
-	/**
-	 * Returns the available resolutions for the currently active display.
-	 *
-	 * @return A list with pairs of the supported X and Y resolution components.
-	 */
-	const std::vector<std::pair<int, int>>& getDetectedResolutions() const;
-
-	/**
-	* Check whether the provided mode is known to our video mode list
-	* @param width Screenwidth to look for
-	* @param height Screenheight to look for
-	* @return iMode or -1 on unknown mode
-	*/
-	int validateResolution (int width, int height) const;
 
 	/**
 	* @return Minimal needed screen resolution width
@@ -161,30 +220,39 @@ public:
 
 	mutable cSignal<void()> resolutionChanged;
 
+	mutable cSignal<void()> cursorScaleChanged;
+
 	// Screenbuffers ///////////////////////////////////
 	static SDL_Surface* buffer; // Der Bildschirm-Buffer
 
 private:
-	/**
-	* Checks whether our minimal needed videomode has been autodetected
-	* @return true if mininal video mode looks valid
-	*/
-	bool haveMinMode() const;
-
 	void keyPressed (cKeyboard& keyboard, SDL_Keycode key);
 
-	void applyResolution();
 	void applyWindowMode();
+
+	/** Recreates the screen buffer in the size for the current window and scale; returns whether the size has changed. */
+	bool applyPictureSize (bool force);
+	/** Scale of the display set in the system (DPI / 96) or 1, if unknown. */
+	double getDisplayScale() const;
 
 	void initializeBuffer (int width, int height);
 
-	void detectResolutions();
+	/** Size of the window (client area) when it is neither maximized nor fullscreen and no size has been stored. */
+	cPosition getDefaultWindowSize() const;
+	/** Size of the client area of a window that fills the usable area of the display. */
+	cPosition getMaximalWindowSize() const;
+
+	/** Computes how the view area is scaled to the current window size. */
+	void updatePresentation();
+	/** Gets the texture for the intermediate integer upscaling of the view area. */
+	SDL_Texture* getScaledTexture (int width, int height);
 
 private:
 	std::shared_ptr<SDLComponent> sdlComponent; // to ensure order of construction/destruction
 	SDL_Window* sdlWindow = nullptr;
 	SDL_Renderer* sdlRenderer = nullptr;
 	SDL_Texture* sdlTexture = nullptr;
+	SDL_Texture* scaledTexture = nullptr;
 
 	int resolutionX;
 	int resolutionY;
@@ -195,14 +263,128 @@ private:
 
 	bool windowMode = false;
 
-	cSignalConnectionManager signalConnectionManager;
+	/** Size of the client area of the window when it is not maximized (and not fullscreen). */
+	std::optional<cPosition> windowedSize;
+	/** Scale of the user interface in percent, 0: automatic. */
+	int uiScale = 0;
+	/** The scale of the user interface in use (see computeUiScale). */
+	double uiScaleFactor = 1.;
+	/** The size of the screen buffer has to be checked (window resized, scale changed, ...). */
+	bool pictureSizeOutdated = false;
+	/** When the size of the screen buffer has been checked the last time (SDL ticks). */
+	Uint32 lastPictureSizeUpdate = 0;
+	bool windowMaximized = true;
+	/** The window shows the game (and no longer the splash screen). */
+	bool gameScreenPrepared = false;
 
-	std::vector<std::vector<std::pair<int, int>>> detectedResolutions;
+	/** The part of the buffer which is displayed. The whole buffer, if not set. */
+	std::optional<SDL_Rect> viewArea;
+	/** False, if the renderer can not do the intermediate upscaling (no render targets). */
+	bool sharpScalingAvailable = true;
+	/** Maximal texture size of the renderer, 0 if unknown. */
+	cPosition maximalTextureSize;
+
+	/**
+	 * How the view area is displayed in the window:
+	 * The source rectangle of the buffer is drawn to the destination rectangle of the window.
+	 * Integer scale factors draw the pixels as they are (nearest neighbour).
+	 * Other scale factors first enlarge the picture by an integer factor (nearest neighbour)
+	 * and then scale it smoothly to the destination size ("sharp bilinear"),
+	 * so that the pixel graphic stays sharp without uneven pixel sizes.
+	 */
+	struct sPresentation
+	{
+		SDL_Rect source{0, 0, 0, 0};
+		SDL_Rect destination{0, 0, 0, 0};
+		cPosition windowSize; // in the units of mouse events
+		cPosition outputSize; // in pixels
+		int prescale = 1; // integer factor of the intermediate texture, 1 = no intermediate texture
+		bool smooth = false;
+	};
+	sPresentation presentation;
+	unsigned int presentationVersion = 0;
+	int cursorScale = 1;
+
+	cSignalConnectionManager signalConnectionManager;
 };
 
 extern cVideo Video;
 
 void applySettings (cVideo&, const sVideoSettings&);
+
+/**
+ * How a picture (a part of the screen buffer) is shown in a window:
+ * as big as possible, keeping the aspect ratio, centered.
+ * An integer scale factor (pixels as they are) is used,
+ * if it covers at least 90% of the size of the fitting scale factor.
+ * Otherwise the picture is scaled smoothly: first enlarged by an integer factor
+ * without filtering ("prescale"), then smoothly to the window ("sharp bilinear").
+ */
+struct sViewScaling
+{
+	SDL_Rect destination{0, 0, 0, 0}; // in pixels of the window
+	double scale = 1.;
+	int prescale = 1; // 1 = no intermediate upscaling
+	bool smooth = false;
+};
+
+/**
+ * @param pictureSize size of the shown part of the screen buffer
+ * @param outputSize size of the window in pixels
+ * @param prescaleAvailable whether the renderer can do the intermediate upscaling (render targets)
+ * @param maximalTextureSize maximal texture size of the renderer, 0 if unknown
+ */
+sViewScaling computeViewScaling (const cPosition& pictureSize, const cPosition& outputSize, bool prescaleAvailable, const cPosition& maximalTextureSize);
+
+/**
+ * The part of the screen buffer to show for the area of the visible windows:
+ * inside of the buffer and at least of the minimal size (smaller windows are shown in the size of a menu).
+ * An empty rectangle, if the area is outside of the buffer.
+ */
+SDL_Rect computeViewArea (const SDL_Rect& windowsArea, const cPosition& bufferSize, const cPosition& minimalSize);
+
+/**
+ * The position in the screen buffer, that is shown at a position of the window.
+ * @param source shown part of the buffer
+ * @param destination where it is drawn in the window (pixels)
+ * @param windowSize size of the window in the units of the mouse positions
+ * @param outputSize size of the window in pixels
+ */
+cPosition windowToPicturePosition (const cPosition& windowPosition, const SDL_Rect& source, const SDL_Rect& destination, const cPosition& windowSize, const cPosition& outputSize);
+
+/**
+ * The scale factors of the user interface offered in the settings, in percent.
+ * 0 (not in the list) is the automatic scale.
+ */
+inline constexpr std::array<int, 6> uiScalePercents{100, 150, 200, 250, 300, 400};
+
+/**
+ * The scale of the user interface: how many pixels of the window show one pixel of the game picture.
+ *
+ * Automatic (uiScalePercent 0): 2.4 times the scale of the display set in the system (DPI / 96),
+ * rounded to 0.5 (a 4K display at 125% gets 3, a full HD display at 100% 2.5);
+ * reduced in steps of 0.5, while the picture would be smaller than 1280x720
+ * (up to a tenth less is accepted: the title bar and the task bar take some height of a maximized window).
+ * Every scale is reduced in steps of 0.5, while the picture would be smaller than 640x480 (the size of the menus).
+ * The scale is never smaller than 1.
+ *
+ * @param uiScalePercent the chosen scale in percent, 0 = automatic
+ * @param outputSize size of the window in pixels
+ * @param displayScale scale of the display (DPI / 96), 1 if unknown
+ */
+double computeUiScale (int uiScalePercent, const cPosition& outputSize, double displayScale);
+
+/**
+ * The size of the game picture (the screen buffer) for a window:
+ * the window size divided by the scale of the user interface, but not smaller than 640x480.
+ */
+cPosition computePictureSize (const cPosition& outputSize, double uiScale);
+
+/**
+ * Whether a scale (in percent, 0 = automatic) keeps the game picture of the window at least 640x480,
+ * so that it is used without being reduced.
+ */
+bool isUiScaleFitting (int uiScalePercent, const cPosition& outputSize);
 
 /**
 * Works like SDL_BlittSurface.

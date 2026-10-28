@@ -31,6 +31,17 @@ void drawPoint (SDL_Surface&, const cPosition&, const cRgbColor&);
 void drawLine (SDL_Surface&, const cPosition& start, const cPosition& end, const cRgbColor&);
 void drawRectangle (SDL_Surface&, const cBox<cPosition>&, const cRgbColor&, int thickness = 1);
 
+/**
+ * Covers an area with a partly transparent color (its alpha value),
+ * e.g. to show a widget dimmed.
+ */
+void drawShade (SDL_Surface&, const cBox<cPosition>&, const cRgbColor&);
+
+/**
+ * The look of an unavailable (dimmed) widget: its area darkened.
+ */
+void drawDimmed (SDL_Surface&, const cBox<cPosition>&);
+
 void drawSelectionCorner (SDL_Surface&, const cBox<cPosition>&, const cRgbColor&, int cornerSize);
 void drawSelectionCorner (SDL_Surface&, const cBox<cPosition>&, const cRgbColor&, int cornerSize, const cBox<cPosition>& clipRect);
 

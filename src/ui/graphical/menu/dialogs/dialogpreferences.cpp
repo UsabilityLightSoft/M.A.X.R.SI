@@ -23,7 +23,6 @@
 #include "output/video/video.h"
 #include "resources/pcx.h"
 #include "settings.h"
-#include "ui/graphical/menu/dialogs/dialogok.h"
 #include "ui/graphical/menu/widgets/checkbox.h"
 #include "ui/graphical/menu/widgets/colorselector.h"
 #include "ui/graphical/menu/widgets/combobox.h"
@@ -35,7 +34,10 @@
 #include "ui/widgets/lineedit.h"
 #include "utility/language.h"
 #include "utility/string/iequals.h"
-#include "utility/string/toNumber.h"
+
+#include <algorithm>
+#include <cmath>
+#include <utility>
 
 //------------------------------------------------------------------------------
 cDialogPreferences::cDialogPreferences() :
@@ -115,8 +117,13 @@ cDialogPreferences::cDialogPreferences() :
 		}
 	});
 
-	resolutionLabel = emplaceChild<cLabel> (cBox<cPosition> (getPosition() + cPosition (140, 298), getPosition() + cPosition (140 + 95, 298 + 10)), lngPack.i18n ("Settings~Resolution") + lngPack.i18n ("Punctuation~Colon"), eUnicodeFontType::LatinNormal, eAlignmentType::Right);
-	resolutionsComboBox = emplaceChild<cComboBox> (cBox<cPosition> (getPosition() + cPosition (240, 294), getPosition() + cPosition (240 + 100, 294 + 17)));
+	// the scale of the user interface (instead of the screen resolution): applied at once
+	uiScaleLabel = emplaceChild<cLabel> (cBox<cPosition> (getPosition() + cPosition (140, 298), getPosition() + cPosition (140 + 95, 298 + 10)), lngPack.i18n ("Settings~UiScale") + lngPack.i18n ("Punctuation~Colon"), eUnicodeFontType::LatinNormal, eAlignmentType::Right);
+	uiScaleComboBox = emplaceChild<cComboBox> (cBox<cPosition> (getPosition() + cPosition (240, 294), getPosition() + cPosition (240 + 100, 294 + 17)));
+	uiScaleComboBox->setMaxVisibleItems (uiScalePercents.size() + 1);
+	signalConnectionManager.connect (uiScaleComboBox->onItemChanged, [this] (const std::string&) { uiScaleChanged(); });
+	uiScaleHintLabel = emplaceChild<cLabel> (cBox<cPosition> (getPosition() + cPosition (150, 338), getPosition() + cPosition (340, 348)), "", eUnicodeFontType::LatinNormal, eAlignmentType::Right);
+	signalConnectionManager.connect (Video.resolutionChanged, [this]() { updateUiScaleItems(); });
 
 	loadValues();
 }
@@ -137,7 +144,8 @@ void cDialogPreferences::retranslate()
 	colorLabel->setText (lngPack.i18n ("Title~Color"));
 	scrollSpeedLabel->setText (lngPack.i18n ("Settings~ScrollSpeed"));
 	languageLabel->setText (lngPack.i18n ("Settings~Language") + lngPack.i18n ("Punctuation~Colon"));
-	resolutionLabel->setText (lngPack.i18n ("Settings~Resolution") + lngPack.i18n ("Punctuation~Colon"));
+	uiScaleLabel->setText (lngPack.i18n ("Settings~UiScale") + lngPack.i18n ("Punctuation~Colon"));
+	updateUiScaleItems();
 
 	doneButton->setText (lngPack.i18n ("Others~Done"));
 	cancelButton->setText (lngPack.i18n ("Others~Cancel"));
@@ -203,14 +211,7 @@ void cDialogPreferences::loadValues()
 		languagesComboBox->setSelectedIndex (selectedLanguageIndex);
 	}
 
-	resolutionsComboBox->clearItems();
-	const auto& resolutions = Video.getDetectedResolutions();
-	for (const auto& [w, h] : resolutions)
-	{
-		resolutionsComboBox->addItem (std::to_string (w) + "x" + std::to_string (h));
-	}
-	const auto currentResolutionIndex = Video.validateResolution (Video.getResolutionX(), Video.getResolutionY());
-	if (currentResolutionIndex != -1) resolutionsComboBox->setSelectedIndex (currentResolutionIndex);
+	updateUiScaleItems();
 
 	storePreviewValues();
 }
@@ -234,52 +235,18 @@ void cDialogPreferences::saveValues()
 	settings.setAutosave (autosaveCheckBox->isChecked());
 	settings.setShowIntro (introCheckBox->isChecked());
 
-	bool needRestart = false;
 	if (settings.getVideoSettings().windowMode != windowCheckBox->isChecked())
 	{
+		// window or fullscreen without changing the video mode: no restart needed
 		settings.getVideoSettings().windowMode = windowCheckBox->isChecked();
-		needRestart = true;
+		Video.setWindowMode (windowCheckBox->isChecked(), true);
 	}
 
 	settings.setScrollSpeed (scrollSpeedSlider->getValue());
 
-	// save resolution
-	const auto oldScreenX = Video.getResolutionX();
-	const auto oldScreenY = Video.getResolutionY();
+	// the scale has been applied when it was chosen
+	settings.getVideoSettings().uiScale = Video.getUiScale();
 
-	const auto& resolutionText = resolutionsComboBox->getSelectedText();
-
-	const auto newResolutionX = toInt (resolutionText.substr (0, resolutionText.find ("x"))).value_or (0);
-	const auto newResolutionY = toInt (resolutionText.substr (resolutionText.find ("x") + 1)).value_or (0);
-
-	if (newResolutionX > 0 && newResolutionY > 0)
-	{
-		if (newResolutionX != oldScreenX || newResolutionY != oldScreenY)
-		{
-			Video.setResolution (newResolutionX, newResolutionY, true);
-			settings.getVideoSettings().resolution = cPosition (newResolutionX, newResolutionY);
-
-			if (Video.getResolutionX() != oldScreenX || Video.getResolutionY() != oldScreenY)
-			{
-				needRestart = true;
-			}
-		}
-	}
-	else
-	{
-		// TODO: handle invalid resolution?!
-
-		// lngPack.i18n ("Comp~ResolutionWarning")
-		// added info to old langpack if needed, else it can be removed from lang-files - nonsinn
-	}
-	if (needRestart)
-	{
-		auto application = getActiveApplication();
-		if (application)
-		{
-			application->show (std::make_shared<cDialogOk> (lngPack.i18n ("Comp~RestartRequired")));
-		}
-	}
 	applySettings (Video, settings.getVideoSettings());
 	settings.saveInFile();
 }
@@ -296,6 +263,8 @@ void cDialogPreferences::storePreviewValues()
 	storedMusicMute = cSettings::getInstance().isMusicMute();
 	storedEffectsMute = cSettings::getInstance().isSoundMute();
 	storedVoicesMute = cSettings::getInstance().isVoiceMute();
+
+	storedUiScale = cSettings::getInstance().getVideoSettings().uiScale;
 }
 
 //------------------------------------------------------------------------------
@@ -328,6 +297,8 @@ void cDialogPreferences::restorePreviewValues()
 	cSettings::getInstance().setSoundMute (storedEffectsMute);
 	cSettings::getInstance().setVoiceMute (storedVoicesMute);
 	cSettings::getInstance().saveInFile();
+
+	if (Video.getUiScale() != storedUiScale) Video.setUiScale (storedUiScale);
 }
 
 //------------------------------------------------------------------------------
@@ -390,4 +361,77 @@ void cDialogPreferences::voicesMuteChanged()
 {
 	cSettings::getInstance().setVoiceMute (disableVoicesCheckBox->isChecked());
 	cSettings::getInstance().saveInFile();
+}
+
+namespace
+{
+	//--------------------------------------------------------------------------
+	std::string toPercentText (double scale)
+	{
+		return std::to_string (std::lround (scale * 100)) + "%";
+	}
+} // namespace
+
+//------------------------------------------------------------------------------
+void cDialogPreferences::updateUiScaleItems()
+{
+	updatingUiScaleItems = true;
+
+	const auto outputSize = Video.getOutputSize();
+	const int current = Video.getUiScale();
+
+	uiScaleComboBox->clearItems();
+	uiScaleItemPercents.clear();
+	const auto addItem = [&] (int percent, const std::string& text) {
+		uiScaleComboBox->addItem (text);
+		// values that would make the picture smaller than the menus are reduced: shown dimmed
+		uiScaleComboBox->setItemDimmed (uiScaleItemPercents.size(), !isUiScaleFitting (percent, outputSize));
+		uiScaleItemPercents.push_back (percent);
+	};
+	addItem (0, lngPack.i18n ("Settings~UiScale_Auto", toPercentText (Video.getAutoUiScaleFactor())));
+	for (const int percent : uiScalePercents)
+	{
+		addItem (percent, std::to_string (percent) + "%");
+	}
+	if (std::ranges::find (uiScaleItemPercents, current) == uiScaleItemPercents.end())
+	{
+		// a value from the settings file, that is not in the list
+		addItem (current, std::to_string (current) + "%");
+	}
+	selectUiScaleItem (current);
+	uiScaleHintLabel->setText (isUiScaleFitting (current, outputSize) ? "" : lngPack.i18n ("Settings~UiScale_WindowTooSmall", std::to_string (current) + "%"));
+
+	updatingUiScaleItems = false;
+}
+
+//------------------------------------------------------------------------------
+void cDialogPreferences::selectUiScaleItem (int percent)
+{
+	const auto it = std::ranges::find (uiScaleItemPercents, percent);
+	if (it == uiScaleItemPercents.end()) return;
+
+	const bool wasUpdating = std::exchange (updatingUiScaleItems, true);
+	uiScaleComboBox->setSelectedIndex (it - uiScaleItemPercents.begin());
+	updatingUiScaleItems = wasUpdating;
+}
+
+//------------------------------------------------------------------------------
+void cDialogPreferences::uiScaleChanged()
+{
+	if (updatingUiScaleItems) return;
+
+	const auto index = uiScaleComboBox->getSelectedIndex();
+	if (!index || *index >= uiScaleItemPercents.size()) return;
+
+	const int percent = uiScaleItemPercents[*index];
+	if (uiScaleComboBox->isItemDimmed (*index))
+	{
+		// the window is too small for this scale: keep the current one and tell why
+		selectUiScaleItem (Video.getUiScale());
+		uiScaleHintLabel->setText (lngPack.i18n ("Settings~UiScale_WindowTooSmall", std::to_string (percent) + "%"));
+		return;
+	}
+	uiScaleHintLabel->setText ("");
+	// applied with the next frame: the game (if any) is shown in the new scale at once
+	Video.setUiScale (percent);
 }

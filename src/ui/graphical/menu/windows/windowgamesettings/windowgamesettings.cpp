@@ -21,6 +21,7 @@
 
 #include "game/data/gamesettings.h"
 #include "game/startup/lobbyclient.h"
+#include "input/mouse/mouse.h"
 #include "resources/pcx.h"
 #include "ui/graphical/menu/widgets/checkbox.h"
 #include "ui/graphical/menu/widgets/pushbutton.h"
@@ -28,6 +29,7 @@
 #include "ui/graphical/menu/widgets/special/radiogroupvalue.h"
 #include "ui/uidefines.h"
 #include "ui/widgets/label.h"
+#include "ui/widgets/tooltip.h"
 #include "ui/widgets/validators/validatorint.h"
 #include "utility/language.h"
 #include "utility/narrow_cast.h"
@@ -97,7 +99,7 @@ cWindowGameSettings::cWindowGameSettings (bool forHotSeatGame_) :
 	}
 	gameTypeGroup = emplaceChild<cRadioGroupValue<eGameSettingsGameType>>();
 	auto* gameTypeTurnsCheckBox = gameTypeGroup->emplaceCheckBox (eGameSettingsGameType::Turns, getPosition() + cPosition (240, currentLine), lngPack.i18n ("Option~Type_Turns"), eUnicodeFontType::LatinNormal, eCheckBoxTextAnchor::Left, eCheckBoxType::TextOnly);
-	gameTypeGroup->emplaceCheckBox (eGameSettingsGameType::Simultaneous, getPosition() + cPosition (240 + 173, currentLine), lngPack.i18n ("Option~Type_Simu"), eUnicodeFontType::LatinNormal, eCheckBoxTextAnchor::Left, eCheckBoxType::TextOnly);
+	gameTypeSimultaneousCheckBox = gameTypeGroup->emplaceCheckBox (eGameSettingsGameType::Simultaneous, getPosition() + cPosition (240 + 173, currentLine), lngPack.i18n ("Option~Type_Simu"), eUnicodeFontType::LatinNormal, eCheckBoxTextAnchor::Left, eCheckBoxType::TextOnly);
 	signalConnectionManager.connect (gameTypeTurnsCheckBox->toggled, [this, gameTypeTurnsCheckBox]() {
 		if (gameTypeTurnsCheckBox->isChecked())
 			disableTurnEndDeadlineOptions();
@@ -219,6 +221,41 @@ cWindowGameSettings::cWindowGameSettings (bool forHotSeatGame_) :
 
 	auto backButton = emplaceChild<cPushButton> (getPosition() + cPosition (50, 440), ePushButtonType::StandardBig, lngPack.i18n ("Others~Back"));
 	signalConnectionManager.connect (backButton->clicked, [this]() { backClicked(); });
+
+	// last child: drawn on top of everything
+	toolTip = emplaceChild<cToolTip>();
+}
+
+//------------------------------------------------------------------------------
+void cWindowGameSettings::setTurnBasedOnly (const std::string& hint)
+{
+	turnBasedOnlyHint = hint;
+	const bool restricted = !hint.empty();
+	if (restricted)
+	{
+		gameTypeGroup->selectValue (eGameSettingsGameType::Turns);
+		gameTypeSimultaneousCheckBox->disable();
+	}
+	else
+	{
+		gameTypeSimultaneousCheckBox->enable();
+	}
+	gameTypeSimultaneousCheckBox->setDimmed (restricted);
+}
+
+//------------------------------------------------------------------------------
+void cWindowGameSettings::draw (SDL_Surface& destination, const cBox<cPosition>& clipRect)
+{
+	const auto* mouse = getActiveMouse();
+	if (!turnBasedOnlyHint.empty() && mouse && gameTypeSimultaneousCheckBox->getArea().withinOrTouches (mouse->getPosition()))
+	{
+		toolTip->showFor (gameTypeSimultaneousCheckBox->getArea(), turnBasedOnlyHint, getArea());
+	}
+	else
+	{
+		toolTip->hide();
+	}
+	cWindow::draw (destination, clipRect);
 }
 
 //------------------------------------------------------------------------------

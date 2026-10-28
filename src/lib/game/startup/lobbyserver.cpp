@@ -19,6 +19,8 @@
 
 #include "lobbyserver.h"
 
+#include "game/data/gamesettings.h"
+#include "game/data/player/playerbasicdata.h"
 #include "game/data/savegame.h"
 #include "game/data/units/unitdata.h"
 #include "game/startup/lobbyclient.h"
@@ -438,6 +440,20 @@ namespace
 } // namespace
 
 //------------------------------------------------------------------------------
+void cLobbyServer::warnIfAiNotTurnBased (eGameSettingsGameType gameType) const
+{
+	if (gameType == eGameSettingsGameType::Turns || gameType == eGameSettingsGameType::HotSeat) return;
+	for (const auto& player : players)
+	{
+		if (!isSiAiPlayerName (player.getName())) continue;
+		// e.g. an older AI client that does not refuse to be ready, or a saved game of this type:
+		// the AI will not play its turns
+		Log.warn ("The game starts not turn based, but " + player.getName() + " (AI of M.A.X.R.SI) plays turn based games only");
+		NetLog.warn ("The game starts not turn based, but " + player.getName() + " (AI of M.A.X.R.SI) plays turn based games only");
+	}
+}
+
+//------------------------------------------------------------------------------
 void cLobbyServer::handleAskToFinishLobby (const cMuMsgAskToFinishLobby& message)
 {
 	const int fromPlayer = message.playerNr;
@@ -508,11 +524,13 @@ void cLobbyServer::handleAskToFinishLobby (const cMuMsgAskToFinishLobby& message
 		}
 
 		connectionManager->setLocalServer (server.get());
+		warnIfAiNotTurnBased (server->getModel().getGameSettings()->gameType);
 		onStartSavedGame (*server, saveGameInfo);
 		server->start (saveGameInfo.number);
 
 		return;
 	}
+	if (gameSettings) warnIfAiNotTurnBased (gameSettings->gameType);
 
 	landingPositionManager = std::make_shared<cLandingPositionManager> (players);
 

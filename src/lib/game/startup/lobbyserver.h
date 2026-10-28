@@ -35,6 +35,7 @@
 #include <vector>
 
 class cLobbyClient;
+enum class eGameSettingsGameType;
 
 enum class eOpenServerResult
 {
@@ -107,6 +108,8 @@ private:
 	void changeOptions (const cMuMsgOptions&);
 	void changePlayerAttributes (const cMuMsgIdentification&);
 	void handleAskToFinishLobby (const cMuMsgAskToFinishLobby&);
+	/** The AI of M.A.X.R.SI plays turn based only: a game with it of another type is written to the log. */
+	void warnIfAiNotTurnBased (eGameSettingsGameType) const;
 
 	void landingRoomStatus (const cMuMsgInLandingPositionSelectionStatus&);
 	void clientLands (const cMuMsgLandingPosition&);

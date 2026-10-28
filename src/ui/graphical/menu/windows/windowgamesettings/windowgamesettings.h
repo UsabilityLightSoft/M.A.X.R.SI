@@ -24,6 +24,7 @@
 #include "utility/signal/signal.h"
 #include "utility/signal/signalconnectionmanager.h"
 
+#include <string>
 #include <utility>
 
 class cGameSettings;
@@ -33,6 +34,7 @@ class cEditableCheckBox;
 class cLabel;
 class cLineEdit;
 class cLobbyClient;
+class cToolTip;
 template <typename>
 class cRadioGroupValue;
 
@@ -49,6 +51,15 @@ public:
 
 	void applySettings (const cGameSettings& gameSettings);
 	void initFor (cLobbyClient&);
+
+	/**
+	 * With a hint (e.g. an AI that plays turn based only is in the lobby): "Turn based" is selected,
+	 * the other game type is dimmed and can not be chosen, the hint is shown while the mouse is over it.
+	 * Without a hint all game types can be chosen again (the selected one stays).
+	 */
+	void setTurnBasedOnly (const std::string& hint);
+
+	void draw (SDL_Surface& destination, const cBox<cPosition>& clipRect) override;
 
 	cSignal<void (const cGameSettings&)> done;
 
@@ -74,6 +85,9 @@ private:
 	cRadioGroupValue<eGameSettingsBridgeheadType>* bridgeheadGroup = nullptr;
 	cRadioGroupValue<bool>* alienGroup = nullptr;
 	cRadioGroupValue<eGameSettingsGameType>* gameTypeGroup = nullptr;
+	cCheckBox* gameTypeSimultaneousCheckBox = nullptr;
+	std::string turnBasedOnlyHint;
+	cToolTip* toolTip = nullptr;
 
 	cRadioGroupValue<bool>* clansGroup = nullptr;
 

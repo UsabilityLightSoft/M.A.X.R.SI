@@ -76,13 +76,13 @@ cGameGui::cGameGui (std::shared_ptr<const cStaticMap> staticMap_, std::shared_pt
 
 	gameMap = emplaceChild<cGameMapWidget> (cBox<cPosition> (cPosition (cHud::panelLeftWidth, cHud::panelTopHeight), getEndPosition() - cPosition (cHud::panelRightWidth, cHud::panelBottomHeight)), staticMap, animationTimer, soundManager, frameCounter);
 
-	messageList = emplaceChild<cGameMessageListView> (cBox<cPosition> (cPosition (cHud::panelLeftWidth + 4, cHud::panelTopHeight + 7), cPosition (getEndPosition().x() - cHud::panelRightWidth - 4, cHud::panelTopHeight + 200)));
+	messageList = emplaceChild<cGameMessageListView> (cBox<cPosition> (cPosition (cHud::panelLeftWidth + 4, cHud::panelTopHeight + 7), cPosition (getEndPosition().x() - cHud::panelRightWidth - 4, cHud::panelTopHeight + cHud::getMessageListHeight (getSize().y()))));
 
 	hud = addChild (std::move (hudOwning));
 
 	hud->setMinimalZoomFactor (gameMap->computeMinimalZoomFactor());
 
-	chatBox = emplaceChild<cChatBox<cLobbyChatBoxListViewItem, cChatBoxPlayerListViewItem>> (cBox<cPosition> (cPosition (cHud::panelLeftWidth + 4, getEndPosition().y() - cHud::panelBottomHeight - 12 - 100), getEndPosition() - cPosition (cHud::panelRightWidth + 4, cHud::panelBottomHeight + 12)));
+	chatBox = emplaceChild<cChatBox<cLobbyChatBoxListViewItem, cChatBoxPlayerListViewItem>> (cBox<cPosition> (cPosition (cHud::panelLeftWidth + 4, getEndPosition().y() - cHud::panelBottomHeight - 12 - cHud::getChatBoxHeight (getSize().y())), getEndPosition() - cPosition (cHud::panelRightWidth + 4, cHud::panelBottomHeight + 12)));
 
 	miniMap = emplaceChild<cMiniMapWidget> (cBox<cPosition> (cPosition (15, 356), cPosition (15 + 112, 356 + 112)), staticMap);
 
@@ -888,11 +888,14 @@ void cGameGui::handleResolutionChange()
 
 	hudPanels->resize (cPosition (hudPanels->getSize().x(), getSize().y()));
 
-	gameMap->resize (getSize() - cPosition (cHud::panelTotalWidth, cHud::panelTopHeight));
+	// the map keeps the center of its shown part (cGameMapWidget::handleResized)
+	gameMap->resize (getSize() - cPosition (cHud::panelTotalWidth, cHud::panelTotalHeight));
+	hud->setMinimalZoomFactor (gameMap->computeMinimalZoomFactor());
+	resetMiniMapViewWindow();
 
-	messageList->setArea (cBox<cPosition> (cPosition (cHud::panelLeftWidth + 4, cHud::panelTopHeight + 7), cPosition (getEndPosition().x() - cHud::panelRightWidth - 4, cHud::panelTopHeight + 200)));
+	messageList->setArea (cBox<cPosition> (cPosition (cHud::panelLeftWidth + 4, cHud::panelTopHeight + 7), cPosition (getEndPosition().x() - cHud::panelRightWidth - 4, cHud::panelTopHeight + cHud::getMessageListHeight (getSize().y()))));
 
-	chatBox->setArea (cBox<cPosition> (cPosition (cHud::panelLeftWidth + 4, getEndPosition().y() - cHud::panelBottomHeight - 12 - 100), getEndPosition() - cPosition (cHud::panelRightWidth + 4, cHud::panelBottomHeight + 12)));
+	chatBox->setArea (cBox<cPosition> (cPosition (cHud::panelLeftWidth + 4, getEndPosition().y() - cHud::panelBottomHeight - 12 - cHud::getChatBoxHeight (getSize().y())), getEndPosition() - cPosition (cHud::panelRightWidth + 4, cHud::panelBottomHeight + 12)));
 
 	primiaryInfoLabel->setArea (cBox<cPosition> (cPosition (cHud::panelLeftWidth, 235), cPosition (getEndPosition().x() - cHud::panelRightWidth, 235 + font->getFontHeight (eUnicodeFontType::LatinBig))));
 	additionalInfoLabel->setArea (cBox<cPosition> (cPosition (cHud::panelLeftWidth, 235 + font->getFontHeight (eUnicodeFontType::LatinBig)), cPosition (getEndPosition().x() - cHud::panelRightWidth, 235 + font->getFontHeight (eUnicodeFontType::LatinBig) + font->getFontHeight (eUnicodeFontType::LatinNormal))));
