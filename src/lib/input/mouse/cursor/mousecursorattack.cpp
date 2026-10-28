@@ -60,7 +60,9 @@ SDL_Surface* cMouseCursorAttack::getSurface() const
 //------------------------------------------------------------------------------
 cPosition cMouseCursorAttack::getHotPoint() const
 {
-	return cPosition (19, 19);
+	// the center of the cross hairs (attack.pcx, attack_oor.pcx: the circle is x 4..31, y 1..26;
+	// below it the bar of the hit points). Was (19, 19): 5 pixels below the center.
+	return cPosition (17, 13);
 }
 
 //------------------------------------------------------------------------------
