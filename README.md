@@ -26,6 +26,9 @@ as upstream ([License.md](License.md)).
   same best score (as in M.A.X.) and a stolen vehicle noticed at the next turn of its owner.
 - **Seven large generated maps** up to 250×250 (`Gen_*`): continents, archipelago, straits, lakes, mixed and two sea
   maps with the bases at the coast (`Gen_Coast` — no way by land, `Gen_Gulf`).
+- **Sixteen more maps, 112×112 and 250×250** (`Hooks1`, `Isles2`, `Ring3`, `Sea4`, `Lake5`, `Moat6`, `Atolls7`, `Twins8`):
+  flanking by sea, driving around from different sides, little land and much water, many islands for outposts; layouts
+  and landing points — CC0 1.0 (`data/maps/MAPS_LICENSE.md`).
 - `ai_headless` — AI against AI without a window (deterministic, for tournaments and training data).
 
 ## Play on Windows
@@ -53,7 +56,7 @@ M.A.X.R.SI — форк ремейка M.A.X.R. с **компьютерным п
 высадку (кредит за каждые начатые 5 единиц груза), большие здания, передачу и ещё четыре действия, пути и имя
 пользователя с русскими буквами, поиск пути, гонка таймера; сыщик ищет своим зрением; машина и действие ждут шага
 невидимого; выключенные пришельцы просыпаются; правила форка — ничья при равенстве очков и угон, замеченный в начале
-хода хозяина. Карты — семь больших сгенерированных, из них две морские с базами у берега. Исправления движка
+хода хозяина. Карты — семь больших сгенерированных, из них две морские с базами у берега; ещё 16 карт 112×112 и 250×250 (обход с воды, объезд с разных сторон, мало суши, острова под форпосты) — расположение суши и точки высадки под CC0 1.0. Исправления движка
 предложены авторам M.A.X.R.
 
 ---
