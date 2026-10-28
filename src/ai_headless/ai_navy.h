@@ -242,6 +242,8 @@ private:
 	int guardsWanted_ = 0;
 	int enemySubs_ = 0;      // подлодок врага в памяти (не старше 20 ходов)
 	int subSuspectUntil_ = -1;          // Р17 (П22): урон из ниоткуда у воды — подлодка подозревается до этого хода
+	int minesAtYard_ = 0;               // Р17 (п. 143): своих мин у верфи сейчас (свежая верфь — минёр раньше корвета)
+	bool enemyYardSeen_ = false;        // Р17 (п. 143): верфь врага видна (его подлодки придут)
 	cPosition subSuspectPos_ {-1, -1};
 	bool subSuspectNoted_ = false;
 	int enemyShipMetal_ = 0; // металла в вооружённых кораблях врага (память)

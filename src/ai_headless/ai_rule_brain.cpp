@@ -2409,10 +2409,15 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 				for (const auto& kv : plans_) addHumans (planType (kv.second));
 				ecoHabitat = cap - use < unitsData->getStaticUnitData (cEcoPlan::kIdEcoSphere).needsHumans;
 			}
+			// Р17 (п. 144): сфере нужен человек — пока жилья на неё нет (ни построено, ни в стройке, ни в планах), сферу не закладывать:
+			// жильё раньше (Р7, Three Isles против себя: сфера с 177-го хода без очков до конца). План жилья — в счёт: «ждать построенного
+			// или строящегося» (r17s) — сферы позже, D против base4 на больших картах хуже (0.613 против 0.674)
+			const char* ecoHomeEnv = std::getenv ("MAXR_ECO_HOME");
+			const bool sphereWaitsHome = ecoHabitat && !(ecoHomeEnv != nullptr && ecoHomeEnv[0] == '0');
 			if (ecoOk && eco_.urgent())
 			{
 				if (ecoHabitat) wants.push_back (kIdHabitat);
-				wants.push_back (cEcoPlan::kIdEcoSphere);
+				if (!sphereWaitsHome) wants.push_back (cEcoPlan::kIdEcoSphere);
 			}
 			// шаг 13 (П7): учебный центр — пехота видит коммандос; ему нужен человек (жилой блок даёт 3)
 			const bool trainingWanted = (defense_.wantTrainingHall() || commando_.wantTrainingHall()) && consumersOk && totalOf (kIdTraining) < 1
@@ -2455,7 +2460,7 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			if (ecoOk && !eco_.urgent())
 			{
 				if (ecoHabitat) wants.push_back (kIdHabitat);
-				wants.push_back (cEcoPlan::kIdEcoSphere);
+				if (!sphereWaitsHome) wants.push_back (cEcoPlan::kIdEcoSphere); // Р17 (п. 144): жильё раньше сферы
 			}
 			// шаг 13, часть 3 (П15–П17, П10): авиазавод и ангар — после фабрик (экономика сначала: программа авиации
 			// включается по доходу и ходу, урок флота части 2)
