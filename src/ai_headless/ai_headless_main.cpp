@@ -108,6 +108,7 @@
 #include <clocale>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -994,20 +995,22 @@ try
 			Log.error ("ai_headless: cannot open " + llmReplies->getPath());
 		llmReplies->log (gameInfo);
 	}
+	// Р22: мозги правил — и для проверки «после загрузки» (MAXR_BRAIN_RESET): тот же мозг заново
+	auto ruleBrainOf = [] (const std::string& b) -> std::shared_ptr<ai::cAiBrain> {
+		if (b == "base") return std::make_shared<ai::cBaseRuleBrain>();
+		if (b == "base2") return std::make_shared<ai::base2::cRuleBrain>();
+		if (b == "base3") return std::make_shared<ai::base3::cRuleBrain>();
+		if (b == "base4") return std::make_shared<ai::base4::cRuleBrain>();
+		if (b == "base5") return std::make_shared<ai::base5::cRuleBrain>();
+		if (b == "rule") return std::make_shared<ai::cRuleBrain>();
+		return nullptr;
+	};
 	for (int i = 0; i < kPlayers; ++i)
 	{
 		if (brains[i] == "llm")
 			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::cLlmAdvisorBrain> (llmJournal, llmConfig, llmReplies, llmReplay));
-		else if (brains[i] == "base")
-			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::cBaseRuleBrain>());
-		else if (brains[i] == "base2")
-			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::base2::cRuleBrain>());
-		else if (brains[i] == "base3")
-			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::base3::cRuleBrain>());
-		else if (brains[i] == "base4")
-			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::base4::cRuleBrain>());
-		else if (brains[i] == "base5")
-			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::base5::cRuleBrain>());
+		else if (brains[i] == "base" || brains[i] == "base2" || brains[i] == "base3" || brains[i] == "base4" || brains[i] == "base5")
+			engine.addPlayer (i, clients[i].get(), ruleBrainOf (brains[i]));
 		else if (brains[i] == "scenario")
 			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::cScenarioBrain>());
 		else if (brains[i] == "red1")
@@ -1021,6 +1024,29 @@ try
 	}
 
 	Log.info ("ai_headless: game started, maxTurns=" + std::to_string (maxTurns));
+	// Р22: проверка «после загрузки» без окна — MAXR_BRAIN_RESET=<ход>[:<мозг0>,<мозг1>]: в начале этого хода мозги правил
+	// создаются заново, как у клиента ИИИ после загрузки сохранения (модель с заданиями движения та же, память мозга — планы,
+	// операции, враги — пуста); после двоеточия — каким мозгом продолжить (до хода партия та же: «base5,base5» и
+	// «40:rule,base5» — ход 40 после «загрузки» у прежнего и нового мозга)
+	int brainResetTurn = 0;
+	std::vector<std::string> resetBrains = brains;
+	if (const char* envReset = std::getenv ("MAXR_BRAIN_RESET"); envReset != nullptr && std::atoi (envReset) > 1)
+	{
+		brainResetTurn = std::atoi (envReset);
+		if (const char* colon = std::strchr (envReset, ':'); colon != nullptr)
+		{
+			std::string err;
+			if (!parseBrains (colon + 1, kPlayers, resetBrains, err))
+			{
+				std::cout << "[ai_headless] ERROR: MAXR_BRAIN_RESET brains '" << (colon + 1) << "': " << err << std::endl;
+				return -1;
+			}
+		}
+		std::cout << "[ai_headless] MAXR_BRAIN_RESET: fresh rule brains at turn " << brainResetTurn << ":";
+		for (int i = 0; i < kPlayers; ++i)
+			std::cout << " p" << i << "=" << resetBrains[i];
+		std::cout << std::endl;
+	}
 
 	// Первый ход ИИ — только когда высадка ВСЕХ игроков дошла до ВСЕХ клиентских
 	// моделей: иначе дайджест хода 1 зависел бы от того, успел ли клиент принять
@@ -1070,6 +1096,10 @@ try
 		{
 			Log.info ("ai_headless: turn " + std::to_string (turn));
 			lastTurn = turn;
+			// Р22: ход ещё не начат ни одним игроком (решения — в engine.run ниже) — мозги заново
+			if (turn == brainResetTurn)
+				for (int i = 0; i < kPlayers; ++i)
+					if (auto b = ruleBrainOf (resetBrains[i])) engine.resetBrain (i, std::move (b), turn);
 			lastProgressTick = SDL_GetTicks();
 		}
 		// Шаг 11: итог партии читается, когда начало хода доиграно (ответный огонь начала хода

@@ -150,6 +150,18 @@ cAiEngine::~cAiEngine()
 	journal_.close();
 }
 
+void cAiEngine::resetBrain (int playerId, std::shared_ptr<cAiBrain> brain, int turn)
+{
+	for (auto& ctx : players_)
+		if (ctx.playerId == playerId)
+		{
+			journal_.log ({{"event", "brain_reset"}, {"player", playerId}, {"turn", turn}, {"brain", brain->name()},
+				{"why", "MAXR_BRAIN_RESET: a fresh brain, as after loading a saved game"}});
+			ctx.brain = std::move (brain);
+			return;
+		}
+}
+
 void cAiEngine::addPlayer (int playerId, cClient* client, std::shared_ptr<cAiBrain> brain)
 {
 	const std::size_t index = players_.size();
