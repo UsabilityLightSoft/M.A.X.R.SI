@@ -242,6 +242,8 @@ public:
 	sGameOverStat& getGameOverStat() { return gameOverStat; }
 
 	uint32_t getChecksum (uint32_t crc) const;
+	/** the parts of the checksum as " p<id>.name=crc" pairs (see cModel::getChecksumReport) */
+	std::string getChecksumReport() const;
 
 	mutable cSignal<void()> creditsChanged;
 	mutable cSignal<void()> hasFinishedTurnChanged;

@@ -193,6 +193,40 @@ uint32_t cModel::getChecksum() const
 
 	return crc;
 }
+
+//------------------------------------------------------------------------------
+std::string cModel::getChecksumReport() const
+{
+	std::string report;
+	const auto add = [&report] (const std::string& name, uint32_t crc) { report += " " + name + "=" + std::to_string (crc); };
+
+	add ("total", getChecksum());
+	add ("random", calcCheckSum (randomGenerator, 0));
+	add ("gameId", calcCheckSum (gameId, 0));
+	add ("gameSettings", calcCheckSum (*gameSettings, 0));
+	add ("map", calcCheckSum (*map, 0));
+	add ("neutralBuildings", calcCheckSum (neutralBuildings, 0));
+	add ("neutralVehicles", calcCheckSum (neutralVehicles, 0));
+	add ("nextUnitId", calcCheckSum (nextUnitId, 0));
+	add ("unitsData", calcCheckSum (*unitsData, 0));
+	add ("moveJobs", calcCheckSum (moveJobs, 0));
+	add ("attackJobs", calcCheckSum (attackJobs, 0));
+	add ("turnCounter", calcCheckSum (*turnCounter, 0));
+	add ("turnEndState", calcCheckSum (turnEndState, 0));
+	add ("activeTurnPlayer", calcCheckSum (activeTurnPlayer->getId(), 0));
+	add ("turnEndDeadline", calcCheckSum (turnEndDeadline, 0));
+	add ("turnLimitDeadline", calcCheckSum (turnLimitDeadline, 0));
+	add ("turnTimeClock", calcCheckSum (*turnTimeClock, 0));
+	add ("helperJobs", calcCheckSum (helperJobs, 0));
+	add ("casualtiesTracker", calcCheckSum (*casualtiesTracker, 0));
+	for (const auto& building : neutralBuildings)
+		add ("b" + std::to_string (building->getId()), building->getChecksum (0));
+	for (const auto& vehicle : neutralVehicles)
+		add ("v" + std::to_string (vehicle->getId()), vehicle->getChecksum (0));
+	for (const auto& player : playerList)
+		report += player->getChecksumReport();
+	return report;
+}
 //------------------------------------------------------------------------------
 void cModel::setGameSettings (const cGameSettings& gameSettings_)
 {

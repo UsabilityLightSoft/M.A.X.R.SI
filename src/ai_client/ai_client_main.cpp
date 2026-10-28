@@ -947,6 +947,8 @@ void cAiClient::startGameFromLobby()
 	const auto ms = [&t0]() { return std::to_string (std::chrono::duration_cast<std::chrono::milliseconds> (Clock::now() - t0).count()); };
 	Log.info ("ai_client: START_GAME received");
 	auto c = std::make_shared<cClient> (connectionManager);
+	// данные юнитов — до игроков, как на сервере (правка 46): иначе до высадки последнего игрока «OUT OF SYNC»
+	if (!savedGameSelected) c->setPreparationData (lobby->getLobbyPreparationData());
 	c->setPlayers (lobbyPlayers, lobby->getLocalPlayer().getNr());
 	if (savedGameSelected)
 	{
@@ -955,7 +957,6 @@ void cAiClient::startGameFromLobby()
 	}
 	else
 	{
-		c->setPreparationData (lobby->getLobbyPreparationData());
 		Log.info ("ai_client: client created in " + ms() + " ms");
 		startGame (c, true, true);
 	}
