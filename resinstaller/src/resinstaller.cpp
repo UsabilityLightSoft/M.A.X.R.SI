@@ -3742,7 +3742,7 @@ static void installMaps()
 //------------------------------------------------------------------------------
 static void installSounds()
 {
-	iTotalFiles = 31;
+	iTotalFiles = 34;
 	iErrors = 0;
 	iInstalledFiles = 0;
 	oggEncode = 1;
@@ -3787,6 +3787,10 @@ static void installSounds()
 	copyWAV (sMAXPath / ("EXPBULD6" + waveExtension), path / "exp_big1.wav");
 	copyWAV (sMAXPath / ("EXPLBLD1" + waveExtension), path / "exp_big2.wav");
 	copyWAV (sMAXPath / ("EXPLBLD2" + waveExtension), path / "exp_big3.wav");
+
+	copyWAV (sMAXPath / ("HITSMAL" + waveExtension), path / "hit_small.wav");
+	copyWAV (sMAXPath / ("HITMED" + waveExtension), path / "hit_med.wav");
+	copyWAV (sMAXPath / ("HITLARGE" + waveExtension), path / "hit_large.wav");
 
 	if (logFile != nullptr)
 	{
