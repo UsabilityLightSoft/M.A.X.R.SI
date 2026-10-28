@@ -263,6 +263,9 @@ private:
 	};
 	sApcFerry apc_;
 	int apcStuckUntil_ = -1; // БМП не смогла взять коммандос (заперта своими) — без поездок до этого хода
+	// Р17 (п. 116): округа клетки (радиус r) видна в этот ход или прошлый — пехоту врага там видно
+	bool freshAround (const cWorldModel& world, const cPosition& p, int r) const;
+	unsigned int raidWaitNoted_ = kNoUnit; // налёт, по которому «ждём глаз AWAC» уже записано в журнал
 	std::set<unsigned int> claimed_;
 	std::vector<cPosition> reserved_;
 	sCounts counts_;

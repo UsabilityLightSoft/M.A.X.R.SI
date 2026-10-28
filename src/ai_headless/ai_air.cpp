@@ -54,7 +54,8 @@ constexpr int kSubNear = 24;        // подлодка врага у нашей
 constexpr int kStageDist = 16;      // стоянка бомбардировщиков — в стольких клетках от ближайшего здания врага
 constexpr int kFactoryWait = 20;    // остров или враг точно за водой, программа «удар» включена столько ходов, а авиазавода нет — он раньше шахт
 constexpr int kIslandSharePct = 40; // своя суша меньше этой доли всей суши — остров (мест под шахты мало, враг за водой)
-constexpr int kRaidPrepare = 30;    // подготовка налёта (коммандос к зенитке) — не дольше
+constexpr int kRaidPrepare = 40;    // подготовка налёта (коммандос к зенитке) — не дольше (Р17: 30 → 40 — коммандос ждёт глаз AWAC)
+constexpr int kRaidArmyGap = 12;    // Р17 (п. 116): цель налёта — не ближе к цели своей армии в походе или бою (её снесёт армия)
 constexpr int kDeathZoneR = 10;     // где погиб свой самолёт — опасно (радиус)…
 constexpr int kDeathZoneTurns = 40; // …столько ходов
 constexpr int kLossWindow = 30;     // потерь самолётов за столько ходов…
@@ -1336,9 +1337,11 @@ void cAirForce::awacPlan (const cModel& model, const cPlayer& player, const cMap
 	const char* why = "awac: circle the enemy base outside AA";
 	if (raid_.state != eRaid::Idle && raid_.staging.x() >= 0)
 	{
-		// налёт — смотреть цель с безопасной клетки ближе к ней
-		goal = raid_.targetPos;
-		why = "awac: watch the raid target";
+		// налёт — смотреть цель с безопасной клетки ближе к ней; Р17 (п. 116): в подготовке — зенитку налёта и подход к ней:
+		// коммандос идёт к ней, только когда её округа видна в этот ход (пехоту врага у зенитки видно — обойти; s13p3p и Р17:
+		// коммандос налёта гибли от пехоты, которую никто не видел)
+		goal = raid_.state == eRaid::Prepare && raid_.aaPos.x() >= 0 ? raid_.aaPos : raid_.targetPos;
+		why = raid_.state == eRaid::Prepare ? "awac: watch the raid AA (the commando sneaks only where we see)" : "awac: watch the raid target";
 	}
 	else
 	{
@@ -1968,6 +1971,11 @@ void cAirForce::raidPlan (const cModel& model, const cPlayer& player, const cMap
 			if (!m.building) continue;
 			const int v = strikeValue (model, m);
 			if (v < 60 || !targetAlive (model, player, m)) continue;
+			// Р17 (п. 116): у цели своей армии в походе или бою — не налёт (12 из 23 налётов r17base сняты: «цель или зенитка пропала»)
+			bool armyThere = false;
+			for (const auto& at : armyTargets_)
+				if (cheb (at, m.pos) <= kRaidArmyGap) armyThere = true;
+			if (armyThere) continue;
 			for (int dy = -4; dy <= 4; ++dy)
 				for (int dx = -4; dx <= 4; ++dx)
 				{

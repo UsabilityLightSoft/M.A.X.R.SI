@@ -3728,6 +3728,13 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 	// шаг 13, часть 3: коммандос (П2, П18) — чужие, диверсия, налёт; авиация (П15–П17, П10) — AWAC, бомбардировщики,
 	// истребители, авиатранспорт, налёт «AWAC + коммандос + бомбардировщики»
 	commando_.plan (model, *player, view, world_, roles_, defense_, out);
+	{
+		// Р17 (п. 116): цели операций армии в походе или бою — налёт их не берёт (их снесёт армия)
+		std::vector<cPosition> armyTargets;
+		for (const auto& op : ops_.operations())
+			if ((op.state == eOpState::Advance || op.state == eOpState::Attack) && op.target.x() >= 0) armyTargets.push_back (op.target);
+		air_.setArmyTargets (std::move (armyTargets));
+	}
 	air_.plan (model, *player, view, world_, roles_, defense_, commando_, out);
 	// задания операций армии (шаг 8) — машинам без приказа: огонь, отход, тревога и оперативка — раньше
 	std::map<unsigned int, sOpTask> opTasks;

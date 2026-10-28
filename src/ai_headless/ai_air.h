@@ -80,6 +80,8 @@ public:
 	const char* programName() const;
 	// Р17 (п. 125): армада без переправы — враг копит наземную армию за водой, пути по суше нет
 	bool armada() const { return armada_; }
+	// Р17 (п. 116): цели своих операций армии в походе или бою (налёт не берёт цели рядом — их снесёт армия)
+	void setArmyTargets (std::vector<cPosition> t) { armyTargets_ = std::move (t); }
 	bool wantAirFactory() const { return wantFactory_; }
 	bool wantHangar() const { return wantHangar_; }
 	// производство авиазавода: следующий самолёт (sID() — ничего); пишет в журнал, из чего выбирали
@@ -313,6 +315,7 @@ private:
 	int armadaNow_ = 0;
 	std::set<unsigned int> cutTargets_; // соединители врага у его электростанций, шахт и заводов (цели при армаде)
 	std::map<unsigned int, unsigned int> approachOf_; // бомбардировщик → цель подлёта (в журнал — при смене)
+	std::vector<cPosition> armyTargets_;               // Р17: цели своих операций армии в походе или бою
 	// Р17 (п. 125): «пути по суше нет» — наземная ПВО врага (мобильная зенитка: ход 7 + дальность 7) через воду не пройдёт:
 	// стоянка, точка подлёта и отход — не ближе kGroundAaSafe клеток к суше врага (Gen_Coast 42 против армады base2: 5
 	// бомбардировщиков погибли разом на стоянке у его базы). До суши врага — по клеткам (Чебышёв, до kGroundAaSafe)

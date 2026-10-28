@@ -45,7 +45,9 @@ constexpr int kSabotageRank = 2;     // диверсия у врага — с э
 constexpr int kSabotageChance = 75;  // и шанс выключить не ниже, % (неудача — тревога и огонь)
 constexpr int kSabotageCooldown = 3; // после удачи — отойти и вернуться не раньше
 constexpr int kStealthExpand = 12000; // предел узлов A* в обход сыщиков
-constexpr int kRaidStale = 30;       // налёт без готовности коммандос — снять через столько ходов
+constexpr int kRaidStale = 40;       // налёт без готовности коммандос — снять через столько ходов (Р17: 30 → 40, ждёт глаз AWAC)
+constexpr int kRaidWatch = 12;       // Р17 (п. 116): ближе к клетке у зенитки налёта — шаг, только когда её округа видна…
+constexpr int kRaidWatchR = 4;       // …в этом радиусе (обзор пехоты 4), в этот ход или прошлый (70% клеток)
 constexpr int kHomeHold = 5;         // без дела — у центра базы (Чебышёв)
 constexpr int kAlienEnemyGap = 15;   // чужие ближе к зданиям врага — не трогать: его пехота и армия найдут коммандос
 constexpr int kStatusEvery = 10;
@@ -802,6 +804,22 @@ void cCommandos::cancelRaid (const char* why)
 	raid_ = {};
 }
 
+bool cCommandos::freshAround (const cWorldModel& world, const cPosition& p, int r) const
+{
+	// не меньше 70% клеток округи видны в этот ход или прошлый (AWAC держится вне досягаемости зенитки — дальний край её округи
+	// ему не виден; r17i: «ждём глаз» 38 ходов подряд при требовании «все клетки»)
+	int all = 0, seen = 0;
+	for (int dy = -r; dy <= r; ++dy)
+		for (int dx = -r; dx <= r; ++dx)
+		{
+			const cPosition c = p + cPosition (dx, dy);
+			if (c.x() < 0 || c.y() < 0 || c.x() >= W_ || c.y() >= H_) continue;
+			++all;
+			if (world.seenTurn (c) >= turn_ - 1) ++seen;
+		}
+	return all > 0 && seen * 10 >= all * 7;
+}
+
 int cCommandos::nearestFree (const cModel& model, const cWorldModel& world, const cPosition& p) const
 {
 	int best = std::numeric_limits<int>::max();
@@ -948,6 +966,18 @@ void cCommandos::planOne (const cModel& model, const cPlayer& player, const cMap
 			}
 			else
 			{
+				// Р17 (п. 116): у зенитки — шаг только туда, где видим (AWAC налёта смотрит её округу): пехота врага у зенитки, которую
+				// никто не видел, обнаруживала и убивала коммандос налёта (r17base: из 23 налётов до удара дошёл один)
+				if (cheb (c.getPosition(), dest) <= kRaidWatch && !freshAround (world, dest, kRaidWatchR) && !inDetectorZone (c.getPosition()))
+				{
+					if (raidWaitNoted_ != raid_.target)
+					{
+						raidWaitNoted_ = raid_.target;
+						event ("raid wait eyes", {{"unitId", id}, {"target", raid_.target}, {"pos", posJ (c.getPosition())}, {"dest", posJ (dest)},
+							{"why", "the AA surroundings are not seen this turn: wait for the AWAC before the last steps"}});
+					}
+					return;
+				}
 				auto path = routeTo (model, view, c, dest, t, true);
 				if (path.empty() || !pushPath (c, view, std::move (path), "sneaks to the AA of the raid", out))
 					if (turn_ - raid_.since > 6) cancelRaid ("no stealthy path to the target");
