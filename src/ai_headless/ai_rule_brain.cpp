@@ -524,8 +524,11 @@ constexpr int kSurveyorHome = 20;   // разведчик сначала раз�
 // следующая — до tries попыток (раньше юнит в этом случае стоял на месте).
 // Шаг 7: только клетки без угрозы и путь в обход опасных клеток; если обойти
 // нельзя — клетка отбрасывается (только для этого юнита) и берётся следующая.
+// Р24 (п. 164): skip — клетки, которые не брать целью (геолог: у базы врага); смотрится только у кандидатов ближе
+// лучшего (как угроза) — выбор тот же, что «ближайшая из годных»
 std::vector<cPosition> pathToUnexplored (const cVehicle& v, const cMapView& view,
-	sScoutCache& cache, const cWorldModel& world, eThreatLayer layer, const cPosition* home = nullptr, int radius = 0, int tries = 3)
+	sScoutCache& cache, const cWorldModel& world, eThreatLayer layer, const cPosition* home = nullptr, int radius = 0, int tries = 3,
+	const cSurvey* skipNearEnemy = nullptr)
 {
 	auto& pass = scoutPassable (cache, v, view);
 	const cPosition from = v.getPosition();
@@ -543,6 +546,7 @@ std::vector<cPosition> pathToUnexplored (const cVehicle& v, const cMapView& view
 			if (d < bestDist)
 			{
 				if (world.threatFor (v, p, layer) > 0) continue;
+				if (skipNearEnemy != nullptr && skipNearEnemy->nearEnemy (p)) continue;
 				if (std::find (unsafe.begin(), unsafe.end(), static_cast<int> (i)) != unsafe.end()) continue;
 				bestDist = d;
 				bestI = static_cast<int> (i);
@@ -5163,8 +5167,10 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 					continue;
 				}
 			}
-			auto path = pathToUnexplored (*vehicle, view, scoutCache, world_, bl, &landing, kSurveyorHome);
-			if (path.empty()) path = pathToUnexplored (*vehicle, view, scoutCache, world_, bl);
+			// Р24 (п. 164): цели у базы врага не брать (а не обрезать путь к ближайшей — геолог стоял, пока она у врага)
+			const cSurvey* skipNear = survey_.enabled() && survey_.skipNearEnemy() ? &survey_ : nullptr;
+			auto path = pathToUnexplored (*vehicle, view, scoutCache, world_, bl, &landing, kSurveyorHome, 3, skipNear);
+			if (path.empty()) path = pathToUnexplored (*vehicle, view, scoutCache, world_, bl, nullptr, 0, 3, skipNear);
 			if (survey_.enabled() && !path.empty() && survey_.nearEnemy (path.back())) path.clear(); // Р7: не к базе врага
 			if (!path.empty())
 			{

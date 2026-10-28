@@ -50,6 +50,8 @@ constexpr sExperimentKnob kExperimentKnobs[] = {
 	{"MAXR_SEASUPPLY", true},
 	{"MAXR_SURVEY", true},
 	{"MAXR_SURVEY_ROAM", true}, // Р17 (п. 140)
+	{"MAXR_SURVEY_GUESS", true}, // Р24 (п. 164): точка напротив у центра карты
+	{"MAXR_SURVEY_SKIP", true}, // Р24 (п. 164): прежняя разведка без простоя
 	{"MAXR_YARD_MINES_FIRST", true}, // Р17 (п. 143)
 };
 
