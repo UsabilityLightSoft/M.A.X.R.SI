@@ -77,11 +77,19 @@ public:
 	 */
 	static int getMessageListHeight (int pictureHeight);
 
+	/**
+	 * The farthest zoom: the whole map fits into the map area.
+	 * The zoom slider goes from zoom factor 1 to it on a logarithmic scale.
+	 */
 	void setMinimalZoomFactor (float zoomFactor);
 	void setZoomFactor (float zoomFactor);
 	float getZoomFactor() const;
-	void increaseZoomFactor (double percent);
-	void decreaseZoomFactor (double percent);
+	/**
+	 * Zoom in or out by a step: a fraction of the whole range of the slider (on its logarithmic scale),
+	 * but at least one pixel of the tile size.
+	 */
+	void zoomIn (double fractionOfRange);
+	void zoomOut (double fractionOfRange);
 
 	void lockEndButton();
 	void unlockEndButton();
@@ -181,6 +189,8 @@ public:
 private:
 	void handleZoomPlusClicked();
 	void handleZoomMinusClicked();
+	void handleZoomSliderMoved();
+	void updateZoomSlider();
 
 private:
 	UniqueSurface surface;
@@ -197,6 +207,9 @@ private:
 	cPushButton* filesButton = nullptr;
 
 	cSlider* zoomSlider = nullptr;
+	float zoomFactor = 1.f;
+	float minimalZoomFactor = 1.f;
+	bool updatingZoomSlider = false;
 
 	cCheckBox* surveyButton = nullptr;
 	cCheckBox* hitsButton = nullptr;

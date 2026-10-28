@@ -20,6 +20,7 @@
 #include "hud.h"
 
 #include "SDLutility/tosdl.h"
+#include "game/data/gui/mapzoom.h"
 #include "game/data/units/unit.h"
 #include "game/logic/turncounter.h"
 #include "game/logic/turntimeclock.h"
@@ -39,6 +40,14 @@
 #include "utility/language.h"
 
 #include <algorithm>
+
+namespace
+{
+	// values of the zoom slider: its logarithmic scale is fine enough for every tile size
+	constexpr int zoomSliderMaxValue = 1000;
+	// the zoom buttons go through the whole range in six presses
+	constexpr double zoomButtonStep = 1. / 6;
+} // namespace
 
 //------------------------------------------------------------------------------
 cHud::cHud (std::shared_ptr<cAnimationTimer> animationTimer)
@@ -126,8 +135,8 @@ cHud::cHud (std::shared_ptr<cAnimationTimer> animationTimer)
 	turnLabel = emplaceChild<cLabel> (cBox<cPosition> (cPosition (471, 7), cPosition (471 + 55, 7 + 10)), "", eUnicodeFontType::LatinNormal, eAlignmentType::CenterHorizontal);
 	turnTimeClockWidget = emplaceChild<cTurnTimeClockWidget> (cBox<cPosition> (cPosition (537, 7), cPosition (537 + 55, 7 + 10)));
 
-	zoomSlider = emplaceChild<cSlider> (cBox<cPosition> (cPosition (22, 275), cPosition (22 + 126, 275 + 15)), 0, 100, eOrientationType::Horizontal, eSliderHandleType::HudZoom, eSliderType::Invisible);
-	signalConnectionManager.connect (zoomSlider->valueChanged, [this]() { zoomChanged(); });
+	zoomSlider = emplaceChild<cSlider> (cBox<cPosition> (cPosition (22, 275), cPosition (22 + 126, 275 + 15)), 0, zoomSliderMaxValue, eOrientationType::Horizontal, eSliderHandleType::HudZoom, eSliderType::Invisible);
+	signalConnectionManager.connect (zoomSlider->valueChanged, [this]() { handleZoomSliderMoved(); });
 	auto zoomPlusButton = emplaceChild<cPushButton> (cBox<cPosition> (cPosition (2, 275), cPosition (2 + 15, 275 + 15)));
 	signalConnectionManager.connect (zoomPlusButton->clicked, [this]() { handleZoomPlusClicked(); });
 	auto zoomMinusButton = emplaceChild<cPushButton> (cBox<cPosition> (cPosition (152, 275), cPosition (152 + 15, 275 + 15)));
@@ -278,7 +287,12 @@ UniqueSurface cHud::generateSurface()
 {
 	UniqueSurface surface (SDL_CreateRGBSurface (0, Video.getResolutionX(), Video.getResolutionY(), Video.getColDepth(), 0, 0, 0, 0));
 
-	SDL_FillRect (surface.get(), nullptr, 0x00FF00FF);
+	// a picture larger than the images of the HUD (2380x1440): dark where no image is,
+	// not transparent (there were the remains of earlier pictures, the map does not reach there)
+	SDL_FillRect (surface.get(), nullptr, SDL_MapRGB (surface->format, 0, 0, 0));
+	// the map is seen through the hole of the HUD (and through the transparent pixels of its images)
+	SDL_Rect hole = {panelLeftWidth, panelTopHeight, surface->w - panelTotalWidth, surface->h - panelTotalHeight};
+	SDL_FillRect (surface.get(), &hole, 0x00FF00FF);
 	SDL_SetColorKey (surface.get(), SDL_TRUE, 0x00FF00FF);
 
 	const auto& images = getHudImages();
@@ -354,33 +368,61 @@ UniqueSurface cHud::generateSurface()
 }
 
 //------------------------------------------------------------------------------
-void cHud::setMinimalZoomFactor (float zoomFactor)
+void cHud::setMinimalZoomFactor (float minimalZoomFactor_)
 {
-	zoomSlider->setMaxValue ((int) std::ceil (100. - 100. * zoomFactor));
+	minimalZoomFactor = std::min (minimalZoomFactor_, 1.f);
+
+	const auto oldZoomFactor = zoomFactor;
+	zoomFactor = std::clamp (zoomFactor, minimalZoomFactor, 1.f);
+	updateZoomSlider();
+	if (zoomFactor != oldZoomFactor) zoomChanged();
 }
 
 //------------------------------------------------------------------------------
-void cHud::setZoomFactor (float zoomFactor)
+void cHud::setZoomFactor (float zoomFactor_)
 {
-	zoomSlider->setValue (static_cast<int> (100. - zoomFactor * 100));
+	const auto oldZoomFactor = zoomFactor;
+	zoomFactor = std::clamp (zoomFactor_, minimalZoomFactor, 1.f);
+	updateZoomSlider();
+	if (zoomFactor != oldZoomFactor) zoomChanged();
 }
 
 //------------------------------------------------------------------------------
 float cHud::getZoomFactor() const
 {
-	return 1.f - (float) zoomSlider->getValue() / 100;
+	return zoomFactor;
 }
 
 //------------------------------------------------------------------------------
-void cHud::increaseZoomFactor (double percent)
+void cHud::zoomIn (double fractionOfRange)
 {
-	zoomSlider->increase ((int) ((zoomSlider->getMaxValue() - zoomSlider->getMinValue()) * percent));
+	setZoomFactor (computeNextZoom (zoomFactor, minimalZoomFactor, fractionOfRange, true));
 }
 
 //------------------------------------------------------------------------------
-void cHud::decreaseZoomFactor (double percent)
+void cHud::zoomOut (double fractionOfRange)
 {
-	zoomSlider->decrease ((int) ((zoomSlider->getMaxValue() - zoomSlider->getMinValue()) * percent));
+	setZoomFactor (computeNextZoom (zoomFactor, minimalZoomFactor, fractionOfRange, false));
+}
+
+//------------------------------------------------------------------------------
+void cHud::handleZoomSliderMoved()
+{
+	if (updatingZoomSlider) return;
+
+	const auto oldZoomFactor = zoomFactor;
+	zoomFactor = computeZoomFromSliderValue (zoomSlider->getValue(), zoomSlider->getMaxValue(), minimalZoomFactor);
+	// without a range (the whole map fits at zoom factor 1) the handle goes back
+	if (minimalZoomFactor >= 1.f) updateZoomSlider();
+	if (zoomFactor != oldZoomFactor) zoomChanged();
+}
+
+//------------------------------------------------------------------------------
+void cHud::updateZoomSlider()
+{
+	updatingZoomSlider = true;
+	zoomSlider->setValue (computeSliderValueFromZoom (zoomFactor, zoomSlider->getMaxValue(), minimalZoomFactor));
+	updatingZoomSlider = false;
 }
 
 //------------------------------------------------------------------------------
@@ -622,13 +664,13 @@ void cHud::deactivateShortcuts()
 //------------------------------------------------------------------------------
 void cHud::handleZoomPlusClicked()
 {
-	zoomSlider->decrease ((zoomSlider->getMaxValue() - zoomSlider->getMinValue()) / 6);
+	zoomIn (zoomButtonStep);
 }
 
 //------------------------------------------------------------------------------
 void cHud::handleZoomMinusClicked()
 {
-	zoomSlider->increase ((zoomSlider->getMaxValue() - zoomSlider->getMinValue()) / 6);
+	zoomOut (zoomButtonStep);
 }
 
 //------------------------------------------------------------------------------

@@ -43,7 +43,7 @@ bool cUnitSelectionBox::isValid() const
 //------------------------------------------------------------------------------
 bool cUnitSelectionBox::isValidStart() const
 {
-	return box.getMinCorner()[0] != -1 && box.getMinCorner()[1];
+	return box.getMinCorner()[0] != -1 && box.getMinCorner()[1] != -1;
 }
 
 //------------------------------------------------------------------------------
