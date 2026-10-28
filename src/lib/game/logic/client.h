@@ -100,6 +100,8 @@ public:
 	//
 
 	void sendSyncMessage (unsigned int gameTime, bool crcOK, unsigned int timeBuffer, unsigned int ticksPerFrame, unsigned int eventCounter) const;
+	/** asks the server for its model: the local model is out of sync and does not converge again */
+	void requestModelResync() const;
 
 	void addSurveyorMoveJob (const cVehicle&);
 	void removeSurveyorMoveJob (const cVehicle&);

@@ -733,6 +733,42 @@ uint32_t cPlayer::getChecksum (uint32_t crc) const
 }
 
 //------------------------------------------------------------------------------
+std::string cPlayer::getChecksumReport() const
+{
+	std::string report;
+	const std::string prefix = " p" + std::to_string (id) + ".";
+	const auto add = [&] (const std::string& name, uint32_t crc) { report += prefix + name + "=" + std::to_string (crc); };
+
+	add ("total", getChecksum (0));
+	add ("player", player.getCheckSum (0));
+	add ("dynamicUnitsData", calcCheckSum (dynamicUnitsData, 0));
+	for (const auto& data : dynamicUnitsData)
+		add ("data" + data.getId().getText(), data.getChecksum (0));
+	add ("base", calcCheckSum (base, 0));
+	for (const auto& vehicle : vehicles)
+		add ("v" + std::to_string (vehicle->getId()), vehicle->getChecksum (0));
+	for (const auto& building : buildings)
+		add ("b" + std::to_string (building->getId()), building->getChecksum (0));
+	add ("landingPos", calcCheckSum (landingPos, 0));
+	add ("scanMap", calcCheckSum (scanMap, 0));
+	add ("resourceMap", calcCheckSum (resourceMap, 0));
+	add ("sentriesMapAir", calcCheckSum (sentriesMapAir, 0));
+	add ("sentriesMapGround", calcCheckSum (sentriesMapGround, 0));
+	add ("detectLandMap", calcCheckSum (detectLandMap, 0));
+	add ("detectSeaMap", calcCheckSum (detectSeaMap, 0));
+	add ("detectMinesMap", calcCheckSum (detectMinesMap, 0));
+	add ("pointsHistory", calcCheckSum (pointsHistory, 0));
+	add ("isDefeated", calcCheckSum (isDefeated, 0));
+	add ("clan", calcCheckSum (clan, 0));
+	add ("credits", calcCheckSum (credits, 0));
+	add ("hasFinishedTurn", calcCheckSum (hasFinishedTurn, 0));
+	add ("researchState", calcCheckSum (researchState, 0));
+	add ("researchCenters", calcCheckSum (researchCentersWorkingOnArea, calcCheckSum (researchCentersWorkingTotal, 0)));
+	add ("gameOverStat", gameOverStat.getChecksum (0));
+	return report;
+}
+
+//------------------------------------------------------------------------------
 bool cPlayer::mayHaveOffensiveUnit() const
 {
 	const auto canAttackOrBuild = [] (const auto& unit) {

@@ -25,6 +25,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 class cClient;
@@ -45,6 +46,10 @@ class cPlayer;
 											received for MAX_WAITING_FOR_SERVER ticks */
 #define FAST_TICK_WINDOW 100 /** Headless fast tick: maximum ticks, the server may run ahead of the slowest client.
 										Must stay below PAUSE_GAME_TIMEOUT, otherwise the clients are marked as not responding */
+#define AUTO_RESYNC_TICKS 300 /** A client, that is out of sync for so many ticks in a row, requests the model from the server.
+										Longer than the out of sync time at the game start (until the last player has landed) */
+#define AUTO_RESYNC_PAUSE 6000 /** Minimum ticks between two automatic resync requests of a client */
+#define MAX_OUT_OF_SYNC_REPORTS 3 /** The checksum parts are written to the net log for so many out of sync periods per client */
 
 struct sGameTimerClientDebugData
 {
@@ -98,12 +103,16 @@ private:
 	static bool isPlayerDeciding (const cModel&);
 	std::map<int, sGameTimerClientDebugData> clientDebugData;
 	std::map<int, unsigned int> receivedTime; // time that the client has reported to server in last sync message
+	std::map<int, bool> clientInSync; // checksum state, that the client has reported in the last sync message
+	std::map<int, unsigned int> outOfSyncReports; // out of sync periods written to the net log, per client
 	unsigned int sentGameTime = 0; // time that has server has reported to clients in last sync message
 
 public:
 	cGameTimerServer() = default;
 	void run (cModel&, cServer& server);
-	void handleSyncMessage (const cNetMessageSyncClient&, unsigned int gameTime);
+	/** returns true, when the checksum parts of the server model should be written to the net log:
+	 * the client has just reported, that it is out of sync */
+	bool handleSyncMessage (const cNetMessageSyncClient&, unsigned int gameTime);
 	void setPlayerNumbers (const std::vector<std::shared_ptr<cPlayer>>& playerList);
 
 	/**
@@ -144,8 +153,15 @@ private:
 	unsigned int debugRemoteChecksum = 0; // saved data for debug view only
 	unsigned int ping = 0; // saved data for debug view only
 
+	unsigned int outOfSyncTicks = 0; // ticks in a row, the local checksum differs from the server checksum
+	unsigned int outOfSyncReports = 0; // out of sync periods, whose checksum parts have been written to the net log
+	std::optional<unsigned int> lastAutoResyncRequest; // game time of the last automatic resync request
+
 	void checkServerResponding (cClient&);
 	void runFast (cClient&, cModel&);
+	/** called every tick, the client is out of sync: writes the checksum parts to the net log
+	 * at the start of the period and requests the model from the server, when it lasts too long */
+	void handleOutOfSync (cClient&, const cModel&);
 
 public:
 	cGameTimerClient() = default;
