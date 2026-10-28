@@ -17,7 +17,8 @@
  * золото (ai_tech): центры исследований по доходу, тема по пользе против
  * видимого врага, переработка золота и покупка улучшений, обновление машин в
  * депо; шаг 13 — оборона (ai_defense), флот (ai_navy), коммандос (ai_commando) и авиация (ai_air);
- * Р7 (часть 4а) — эко-сферы и победа по очкам (ai_eco).
+ * Р7 (часть 4а) — эко-сферы и победа по очкам (ai_eco); Р22 — пересмотр приказов каждый ход (ai_reorders): машина с путём из
+ * прошлых ходов едет дальше, только если приказ ещё имеет смысл и лучшей задачи нет.
  * Детерминированный, тестируемый, fallback для LLM-советника.
  ***************************************************************************/
 
@@ -31,6 +32,7 @@
 #include "ai_defense.h"
 #include "ai_eco.h"
 #include "ai_navy.h"
+#include "ai_reorders.h"
 #include "ai_roles.h"
 #include "ai_survey.h"
 #include "ai_tactics.h"
@@ -106,6 +108,11 @@ private:
 	void operationalDecisions (int playerId, const cModel& model, std::vector<cOrder>& out);
 	void microDecisions (int playerId, const cModel& model, std::vector<cOrder>& out);
 
+	// Р22: начало хода — пересмотр машин с путём из прошлых ходов (ai_reorders): едет дальше или отпущена
+	void reviewOrders (int playerId, const cModel& model);
+	// заходы 2+ (шаг 11) — сами решения; decidePass добавляет их в память намерений (Р22)
+	std::vector<cOrder> decidePassOrders (int playerId, const cModel& model, int pass);
+
 	// планы стройщиков (id машины → план); упорядочено по id — детерминированно
 	std::map<unsigned int, sBuildPlan> plans_;
 	// машины, которым оперативка уже дала приказ (отогнаны с площадки), — микро их не трогает
@@ -137,6 +144,8 @@ private:
 	cSurvey survey_;
 	// Р17 (П19–П22, огонь наугад): тактика заходов (ai_tactics)
 	cTactics tactics_;
+	// Р22: пересмотр приказов каждый ход — память намерений, отпущенные машины (ai_reorders)
+	cOrderReview review_;
 	// шаг 13: минёр уже включил закладку в этом ходу — в следующем заходе выключить
 	std::vector<unsigned int> minesToggled_;
 	// Р7 (п. 114): потолок сухопутной армии «пути по суше нет» уже записан в журнал

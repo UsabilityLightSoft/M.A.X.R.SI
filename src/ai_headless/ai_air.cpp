@@ -7,6 +7,7 @@
 #include "ai_commando.h"
 #include "ai_defense.h"
 #include "ai_navy.h"
+#include "ai_reorders.h"
 #include "ai_roles.h"
 #include "ai_world_model.h"
 
@@ -166,6 +167,12 @@ void cAirForce::event (const char* what, nlohmann::json extra)
 	events_.push_back (std::move (e));
 }
 
+bool cAirForce::moveBusy (const cVehicle& v) const
+{
+	return review_ != nullptr ? review_->moveBusy (v) : (v.isUnitMoving() || v.getMoveJob() != nullptr);
+}
+
+//------------------------------------------------------------------------------
 std::vector<nlohmann::json> cAirForce::takeEvents()
 {
 	std::vector<nlohmann::json> res;
@@ -1235,7 +1242,7 @@ bool cAirForce::service (const cModel& model, const cPlayer& player, const cMapV
 	}
 	if (serviceSet_.insert (v.getId()).second)
 		event ("to hangar", {{"unitId", v.getId()}, {"type", sd.getDefaultName()}, {"ammo", v.data.getAmmo()}, {"hp", v.data.getHitpoints()}});
-	if (v.isUnitMoving() || v.getMoveJob() != nullptr) return true;
+	if (moveBusy (v)) return true;
 	if (h->isNextTo (v.getPosition()) && h->canLoad (&v))
 	{
 		cOrder o;
@@ -1843,7 +1850,7 @@ bool cAirForce::aaFerry (const cModel& model, const cPlayer& player, const cMapV
 		long long bestD = std::numeric_limits<long long>::max();
 		for (const auto& v : player.getVehicles())
 		{
-			if (roles.roleOf (*v) != eRole::AntiAir || v->isUnitLoaded() || v->isDisabled() || v->isUnitMoving() || v->getMoveJob() != nullptr) continue;
+			if (roles.roleOf (*v) != eRole::AntiAir || v->isUnitLoaded() || v->isDisabled() || moveBusy (*v)) continue;
 			if (v->data.getShots() <= 0 || cheb (v->getPosition(), threat->pos) <= 8 || cheb (v->getPosition(), t.getPosition()) > 30) continue;
 			const long long d = dist2 (v->getPosition(), t.getPosition());
 			if (d < bestD)
@@ -2193,7 +2200,7 @@ void cAirForce::plan (const cModel& model, const cPlayer& player, const cMapView
 	for (const cVehicle* v : free)
 	{
 		const eRole r = roles.roleOf (*v);
-		if (v->isUnitMoving() || v->getMoveJob() != nullptr) continue;
+		if (moveBusy (*v)) continue;
 		if (r == eRole::Awac)
 		{
 			awacPlan (model, player, view, world, *v, out, 1);
@@ -2294,7 +2301,7 @@ std::vector<cOrder> cAirForce::planPass (const cModel& model, const cPlayer& pla
 	for (const auto& v : player.getVehicles())
 	{
 		const eRole r = roles.roleOf (*v);
-		if (!isAirRole (r) || v->isUnitLoaded() || v->isDisabled() || v->isUnitMoving() || v->getMoveJob() != nullptr) continue;
+		if (!isAirRole (r) || v->isUnitLoaded() || v->isDisabled() || moveBusy (*v)) continue;
 		bool ordered = false;
 		for (const auto& o : out)
 			if (o.unitId == v->getId()) ordered = true;
