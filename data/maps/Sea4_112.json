@@ -1,0 +1,195 @@
+{
+ "name": "Sea4_112",
+ "file": "Sea4_112.wrl",
+ "type": "mask",
+ "size": 112,
+ "seed": 25004,
+ "attempt": 0,
+ "symmetric_rot180": false,
+ "generator_version": "1",
+ "tileset_source": "Delta.wrl (M.A.X.R., data/maps) — все 96 плиток, палитра и типы",
+ "landing": [
+  [
+   67,
+   22
+  ],
+  [
+   93,
+   98
+  ]
+ ],
+ "landing_env": "67,22;93,98",
+ "landing_note": "базы в разных областях суши (нет пути по суше) — exe шага 13 берёт высадку из этого файла рядом с .wrl (maps/<карта>.json) и MAXR_LANDING; exe шага 10 такой высадки не примет",
+ "objects": {
+  "jungle_pond": 34,
+  "jungle": 55,
+  "bush": 16,
+  "ruin_a": 1,
+  "ruin_c": 1,
+  "rocks": 2,
+  "hill": 1,
+  "crater": 1,
+  "dirt": 14,
+  "bodies": 18,
+  "shrub": 12,
+  "bones": 11,
+  "patch": 4
+ },
+ "checks": {
+  "seams_le_4px": true,
+  "no_diagonal_tiles": true,
+  "landing_clear_ge4": true,
+  "landing_region_ok": true,
+  "landing_near_sea_le30": true,
+  "shape_iou_ge070": true,
+  "topology_land_same": true,
+  "topology_water_same": true,
+  "landing_field_centred": true,
+  "room_balance_ge085": true,
+  "no_land_path": true,
+  "bases_at_main_sea_le20": true,
+  "sea_path_between_bases": true
+ },
+ "stats": {
+  "size": 112,
+  "water_pct": 35.3,
+  "coast_pct": 7.4,
+  "land_pct": 54.2,
+  "blocked_pct": 3.03,
+  "tank_regions_ge20": 5,
+  "tank_largest": 1946,
+  "water_regions_ge4": 3,
+  "sea_largest_pct_of_water": 94.0,
+  "seam_max_px": 4,
+  "seam_pairs_gt4": 0,
+  "same_tank_region": false,
+  "tank_path_steps": null,
+  "straight_distance": 80.3,
+  "shape_iou": 0.918,
+  "shape_agree_pct": 94.9,
+  "ref_land_pct": 61.2,
+  "map_land_pct_incl_coast": 61.0,
+  "coast_shift_mean_cells": 0.73,
+  "coast_shift_p95_cells": 2,
+  "coast_shift_max_cells": 3,
+  "islands_ge4_ref": 6,
+  "islands_ge4_map": 6,
+  "topology_land_merged": 0,
+  "topology_land_split": 0,
+  "topology_water_merged": 0,
+  "topology_water_split": 0,
+  "room_ratio": 0.999,
+  "region_ratio": 0.932,
+  "outpost_min_cells": 25,
+  "outpost_islands": 3,
+  "outpost_cells": [
+   1618,
+   1382,
+   40
+  ],
+  "sea_path_steps": 64,
+  "sea_route_steps": 76,
+  "landings": [
+   {
+    "x": 67,
+    "y": 22,
+    "tank_region": 2,
+    "tank_region_cells": 1946,
+    "clear": 5,
+    "room_r18": 1013,
+    "to_water_or_coast": 5,
+    "to_blocked": 10,
+    "to_main_sea": 6,
+    "to_main_sea_euclid": 6.7,
+    "land_share_r10_pct": 82.3,
+    "land_share_r18_pct": 74.0
+   },
+   {
+    "x": 93,
+    "y": 98,
+    "tank_region": 3,
+    "tank_region_cells": 1813,
+    "clear": 5,
+    "room_r18": 1014,
+    "to_water_or_coast": 5,
+    "to_blocked": 10,
+    "to_main_sea": 6,
+    "to_main_sea_euclid": 6.7,
+    "land_share_r10_pct": 86.4,
+    "land_share_r18_pct": 85.6
+   }
+  ]
+ },
+ "params": {
+  "level": null,
+  "water": 0.38809429334102874,
+  "warp": 0.008,
+  "noise": 0.005,
+  "noise_fine": 0.0025,
+  "min_lake": 6,
+  "min_island": 4,
+  "forest": 0.05,
+  "ruins_per_10k": 2.0,
+  "naval": true,
+  "base_mode": "regions",
+  "purpose": "water_flank",
+  "reference": "4.png",
+  "reference_info": {
+   "file": "4.png",
+   "image_size": [
+    343,
+    346
+   ],
+   "crop_xywh": [
+    2,
+    6,
+    334,
+    332
+   ],
+   "class_rgb": [
+    [
+     75,
+     119,
+     43
+    ],
+    [
+     169,
+     135,
+     182
+    ]
+   ],
+   "class_texture": [
+    2.35,
+    1.32
+   ],
+   "land_class": 0,
+   "land_rgb": [
+    75,
+    119,
+    43
+   ],
+   "water_rgb": [
+    169,
+    135,
+    182
+   ],
+   "land_rule": "auto",
+   "land_share_raw": 0.61,
+   "land_share": 0.6119,
+   "lakes_filled_px": 218
+  },
+  "base_hint": [
+   [
+    0.64,
+    0.14,
+    0.16
+   ],
+   [
+    0.84,
+    0.78,
+    0.16
+   ]
+  ]
+ },
+ "sha256": "018b366ca48013c32fb47d606769443709d0b7e050b221372ee37aada1e86d0b"
+}

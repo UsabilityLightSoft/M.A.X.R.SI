@@ -43,6 +43,9 @@ as upstream ([License.md](License.md)).
   players after the unit data (no "OUT OF SYNC" before the last landing).
 - **Seven large generated maps** up to 250×250 (`Gen_*`): continents, archipelago, straits, lakes, mixed and two sea
   maps with the bases at the coast (`Gen_Coast` — no way by land, `Gen_Gulf`).
+- **Sixteen more maps, 112×112 and 250×250** (`Hooks1`, `Isles2`, `Ring3`, `Sea4`, `Lake5`, `Moat6`, `Atolls7`, `Twins8`):
+  flanking by sea, driving around from different sides, little land and much water, many islands for outposts; layouts
+  and landing points — CC0 1.0 (`data/maps/MAPS_LICENSE.md`).
 - `ai_headless` — AI against AI without a window (deterministic, for tournaments and training data).
 
 ## Play on Windows
@@ -88,7 +91,7 @@ Chosen, авиация); тактика заходов: раненая маши�
 попаданий (39), на заводе «Готово» недоступна при пустой очереди (41), предупреждение при одиночной загрузке сетевой
 партии (42), «Лёгкий завод» (43), «f» — только центр, «Цвет» — «o» (44), в лобби с ИИИ — только «По очереди» (45),
 клиент при рассинхроне дольше 3 с сам берёт модель сервера и создаёт игроков после данных юнитов (46). Карты — семь
-больших сгенерированных, из них две морские с базами у берега. Авторам M.A.X.R. предложены правки 01–12, 15 и 16,
+больших сгенерированных, из них две морские с базами у берега; ещё 16 карт 112×112 и 250×250 (обход с воды, объезд с разных сторон, мало суши, острова под форпосты) — расположение суши и точки высадки под CC0 1.0. Авторам M.A.X.R. предложены правки 01–12, 15 и 16,
 остальные — на очереди.
 
 ---
