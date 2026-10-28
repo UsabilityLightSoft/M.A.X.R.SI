@@ -38,6 +38,10 @@ constexpr int kTakenGap = 3;       // цели двух геологов — н�
 constexpr int kTries = 4;          // целей без пути — столько пробовать за ход
 constexpr int kStatusEvery = 50;
 constexpr double kPi = 3.14159265358979323846;
+constexpr int kRoamAge = 8;        // Р17 (п. 140): «где может быть» враг — память не старше (машины память держит 8 ходов)…
+constexpr int kRoamTurns = 3;      // …ход врага за прошедшие ходы — не больше трёх…
+constexpr int kRoamMaxR = 24;      // …и радиус не больше
+constexpr int kRoamHome = 4;       // уход от свежего врага — к клеткам у центра базы (Чебышёв)
 
 int cheb (const cPosition& a, const cPosition& b)
 {
@@ -102,6 +106,13 @@ bool cSurvey::mineCell (const cModel& model, const cPosition& c) const
 	return map.isValidPosition (c) && !map.isWater (c) && !map.isCoast (c) && !map.isBlocked (c);
 }
 
+bool cSurvey::roaming (const cPosition& p, bool freshOnly) const
+{
+	for (const auto& r : roam_)
+		if ((!freshOnly || r.fresh) && cheb (r.pos, p) <= r.r) return true;
+	return false;
+}
+
 bool cSurvey::nearEnemy (const cPosition& p) const
 {
 	for (const auto& b : enemyBuildings_)
@@ -126,6 +137,18 @@ void cSurvey::update (const cModel& model, const cPlayer& player, const cWorldMo
 		if (kv.second.building && kv.second.owner >= 0) enemyBuildings_.push_back (kv.second.pos);
 	guess_ = enemyBuildings_.empty() ? cPosition (W_ - 1 - center_.x(), H_ - 1 - center_.y()) : cPosition (-1, -1);
 	taken_.clear();
+	// Р17 (п. 140): где может быть враг (см. ai_survey.h); MAXR_SURVEY_ROAM=0 — как в Р7
+	roam_.clear();
+	if (const char* ro = std::getenv ("MAXR_SURVEY_ROAM"); !(ro != nullptr && ro[0] == '0'))
+		for (const auto& kv : world.enemies())
+		{
+			const sEnemyMemory& m = kv.second;
+			if (m.building || m.ship || m.plane || !m.hitsGround()) continue; // бомбардировщик облетит любую зону — от него ПВО
+			const int age = world.age (m);
+			if (age > kRoamAge) continue;
+			const int r = std::min (kRoamMaxR, m.range + 1 + m.speed * (std::min (age, kRoamTurns - 1) + 1));
+			roam_.push_back ({m.pos, r, age <= 2});
+		}
 
 	// жилы: неразведанные соседи разведанных клеток с ресурсом у базы
 	veinTargets_.clear();
@@ -274,6 +297,34 @@ std::vector<cPosition> cSurvey::pathFor (const cModel& model, const cPlayer& pla
 		return {}; // ни того, ни другого — прежнее поведение (ближайшая безопасная клетка)
 	}
 
+	// Р17 (п. 140): в зоне «где может быть» свежего врага (виден ≤ 2 ходов назад; дальность + его ход за прошедшие ходы) — к центру
+	// базы, пока зона не остынет (под огнём — выше, «угроза с подъезда» — прежний уход в ai_rule_brain)
+	if (roaming (at, true) && cheb (at, center_) > kRoamHome)
+	{
+		for (int rr = 0; rr <= kRoamHome; ++rr)
+		{
+			std::vector<std::tuple<long long, int, cPosition>> home;
+			for (int dy = -rr; dy <= rr; ++dy)
+				for (int dx = -rr; dx <= rr; ++dx)
+				{
+					if (std::max (std::abs (dx), std::abs (dy)) != rr) continue;
+					const cPosition c = center_ + cPosition (dx, dy);
+					if (!view.isValidPosition (c) || !view.possiblePlace (v, c) || takenNear (c)) continue;
+					home.emplace_back (dist2 (at, c), angleKey (c), c);
+				}
+			std::sort (home.begin(), home.end(), byKey);
+			for (size_t i = 0; i < home.size() && i < 4; ++i)
+			{
+				auto path = pathTo (std::get<2> (home[i]));
+				if (path.empty()) continue;
+				taken_.push_back (std::get<2> (home[i]));
+				event ("roam retreat", {{"unitId", v.getId()}, {"from", {{"x", at.x()}, {"y", at.y()}}}, {"to", {{"x", std::get<2> (home[i]).x()}, {"y", std::get<2> (home[i]).y()}}},
+					{"why", "an armed enemy seen within 2 turns could reach here by now: back to the base centre until it cools down"}});
+				why = "surveyor: enemy may be near (seen lately): back to the base centre";
+				return path;
+			}
+		}
+	}
 	// враг совсем рядом (база или точка напротив ближе kCloseEnemy) — кольца и жилы не нужны (своя земля мала): прежняя разведка.
 	// Donuts (базы в 13 клетках): кольцевая разведка — D 0.40 против 0.535 у прежней на тех же сидах; механизм не установлен
 	{
@@ -291,7 +342,7 @@ std::vector<cPosition> cSurvey::pathFor (const cModel& model, const cPlayer& pla
 		std::vector<std::tuple<long long, int, cPosition>> cands;
 		for (const auto& c : veinTargets_)
 		{
-			if (takenNear (c) || nearEnemy (c) || world.threatFor (v, c, eThreatLayer::Reach) > 0) continue;
+			if (takenNear (c) || nearEnemy (c) || world.threatFor (v, c, eThreatLayer::Reach) > 0 || roaming (c, false)) continue; // Р17
 			cands.emplace_back (dist2 (at, c), angleKey (c), c);
 		}
 		std::sort (cands.begin(), cands.end(), byKey);
@@ -331,7 +382,7 @@ std::vector<cPosition> cSurvey::pathFor (const cModel& model, const cPlayer& pla
 				const cPosition c = center_ + cPosition (dx, dy);
 				if (!view.isValidPosition (c) || takenNear (c) || nearEnemy (c)) continue;
 				if (c != at && !view.possiblePlace (v, c)) continue;
-				if (world.threatFor (v, c, eThreatLayer::Reach) > 0 || !unexploredMineAround (c)) continue;
+				if (world.threatFor (v, c, eThreatLayer::Reach) > 0 || !unexploredMineAround (c) || roaming (c, false)) continue; // Р17
 				// в пределах хода и впереди по часовой (сдвиг угла 1…179°) — дальше вперёд; иначе — ближе к геологу
 				const int ahead = (angleKey (c) - myAngle + 360) % 360;
 				const bool inStride = cheb (c, at) <= kStride && ahead > 0 && ahead < 180;

@@ -35,6 +35,7 @@ constexpr sExperimentKnob kExperimentKnobs[] = {
 	{"MAXR_EARLY_DEFENDER", true}, // Р17 (п. 55)
 	{"MAXR_ECO", true},
 	{"MAXR_FACTORY_ENERGY", true}, // Р17 (п. 55)
+	{"MAXR_FAR_MINE_AA", true}, // Р17 (п. 140)
 	{"MAXR_HITRUN", true}, // Р17 (П19, П20)
 	{"MAXR_LANDLOCK", true},
 	{"MAXR_LANDLOCK_FACTORIES", true}, // Р17 (п. 142)
@@ -44,6 +45,7 @@ constexpr sExperimentKnob kExperimentKnobs[] = {
 	{"MAXR_SEAMINES", true},
 	{"MAXR_SEASUPPLY", true},
 	{"MAXR_SURVEY", true},
+	{"MAXR_SURVEY_ROAM", true}, // Р17 (п. 140)
 };
 
 nlohmann::json experimentSettings()

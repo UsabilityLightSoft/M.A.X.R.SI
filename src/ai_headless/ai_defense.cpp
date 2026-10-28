@@ -65,6 +65,9 @@ constexpr int kCoastSea = 100;          // П25: водоём от стольк�
 constexpr int kCoastGunSpread = 6;      // ракетные пушки — не ближе друг к другу (Чебышёв)
 constexpr int kCoastGunsMax = 6;
 constexpr int kEnemyShipFresh = 30;     // корабль врага в памяти не старше стольких ходов — угроза берегу
+constexpr int kFarMine = 6;             // Р17 (п. 140): дальняя шахта — дальше стольких клеток от края базы…
+constexpr int kFarMineCover = 6;        // …и своей зенитки ближе нет — зенитка у неё…
+constexpr int kFarMineAa = 4;           // …таких зениток не больше
 constexpr int kGuessIslandPct = 40;     // Р17 (п. 142): догадка «пути по суше нет» — на острове (своя суша меньше этой доли всей)…
 constexpr int kGuessFar = 40;           // …или точка напротив нашей базы не ближе (Чебышёв): Donuts — 29–37, Gen_Coast — 73
 
@@ -969,6 +972,45 @@ cBaseDefense::sBuild cBaseDefense::nextSmall (const cModel& model, const cPlayer
 	if (static_cast<int> (guns.size()) < aaWanted_)
 		if (const cPosition c = aaSpot (aaWanted_); c.x() >= 0)
 			return {kIdGunAA, c, "aa ring " + std::to_string (guns.size() + 1) + " of " + std::to_string (aaWanted_)};
+	// 6¼) Р17 (п. 140, охрана дальних шахт): авиация врага видна, кольцо ПВО готово — зенитка у своей шахты дальше kFarMine от края
+	//     базы, если своей зенитки у неё (kFarMineCover) нет; таких — не больше kFarMineAa (Р7: база шире — налёт с хода 60 сносит
+	//     вдвое больше: rear 146 → 284 металла; бомбардировщики бьют шахты, электростанции и соединители). MAXR_FAR_MINE_AA=0 — выкл.
+	if (airAlarm_ && static_cast<int> (guns.size()) >= aaWanted_)
+	{
+		const char* fmEnv = std::getenv ("MAXR_FAR_MINE_AA");
+		if (!(fmEnv != nullptr && fmEnv[0] == '0'))
+		{
+			int farGuns = 0;
+			for (const auto& g : guns)
+				if (cheb (g, center_) > radius_ + kFarMine - 2) ++farGuns;
+			if (farGuns < kFarMineAa)
+				for (const auto& b : player.getBuildings())
+				{
+					if (b->getStaticUnitData().buildingData.canMineMaxRes <= 0 || b->subBase == nullptr) continue;
+					const cPosition m = b->getPosition();
+					if (cheb (m, center_) <= radius_ + kFarMine) continue;
+					bool covered = false;
+					for (const auto& g : guns)
+						if (cheb (g, m) <= kFarMineCover) covered = true;
+					if (covered) continue;
+					cPosition best (-1, -1);
+					long long bestKey = std::numeric_limits<long long>::max();
+					for (int dy = -3; dy <= 4; ++dy)
+						for (int dx = -3; dx <= 4; ++dx)
+						{
+							const cPosition c = m + cPosition (dx, dy);
+							if (!spotOk (model, player, world, kIdGunAA, c, reserved, walls)) continue;
+							const long long key = dist2 (c, m) * 100000 + offs (c);
+							if (key < bestKey)
+							{
+								bestKey = key;
+								best = c;
+							}
+						}
+					if (best.x() >= 0) return {kIdGunAA, best, "aa at a far mine (enemy air seen: bombers hit far mines first)"};
+				}
+		}
+	}
 	// 6½) П25: ракетные пушки у моря заранее (упор «море», своя верфь)
 	if (!navalThreat)
 		if (const sBuild s = coastSpot(); s.valid()) return s;
