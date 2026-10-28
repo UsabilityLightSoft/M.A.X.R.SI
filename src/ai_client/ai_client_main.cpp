@@ -510,7 +510,7 @@ void cAiClient::connectSignals()
 		if (std::none_of (notReady.begin(), notReady.end(), [me] (const cPlayerBasicData& p) { return p.getNr() == me; })) return;
 		const auto reasons = notReadyReasons();
 		if (reasons.empty())
-			chat ("Я уже готов - нажмите «OK» ещё раз. / I am ready now - press OK again.");
+			chat ("Я уже готов - нажмите \"OK\" ещё раз. / I am ready now - press OK again.");
 		else
 			explainNotReady (reasons);
 	});
@@ -607,7 +607,7 @@ void cAiClient::updateIdentity()
 	if (!greeted)
 	{
 		greeted = true;
-		chat ("Привет! Я ИИИ " + name + ", играю только «По очереди». / Hi! I am the AI " + name + ", I play Turn based only.");
+		chat ("Привет! Я ИИИ " + name + ", играю только \"По очереди\". / Hi! I am the AI " + name + ", I play Turn based only.");
 		chat ("Паспорт / passport: " + passportText());
 	}
 	// не готов — почему и что нажать: при входе в лобби и каждый раз, когда причина сменилась (хост сменил настройки
@@ -623,7 +623,7 @@ void cAiClient::updateIdentity()
 	if (!reasons.empty())
 		explainNotReady (reasons);
 	else if (explained && !savedGameSelected && lobbyMap)
-		chat ("Готов: карта «" + utf8::to_string (lobbyMap->getFilename()) + "», «По очереди» - жмите «OK». / Ready: map "
+		chat ("Готов: карта \"" + utf8::to_string (lobbyMap->getFilename()) + "\", \"По очереди\" - жмите \"OK\". / Ready: map "
 			+ utf8::to_string (lobbyMap->getFilename()) + ", Turn based - press OK.");
 }
 
@@ -631,7 +631,8 @@ void cAiClient::updateIdentity()
 // Почему не готов: причина и путь в меню подписями игры — data/languages/ru и en/maxr.po: «Выбор карты» / Choose planet
 // (Title~Choose_Planet), «Опции» / Options (Title~Options), «Тип игры:» / Game Type: (Title~Game_Type), «По очереди» /
 // Turn based (Option~Type_Turns), «Одновременно» / Simultaneous (Option~Type_Simu), «OK» (Others~OK). Стрелка — «->»,
-// тире — «-»: в шрифтах игры (ISO 8859-1, -2, -5) нет «→» и «—». Пусто — готов.
+// тире — «-»: в шрифтах игры (ISO 8859-1, -2, -5) нет «→» и «—». Кавычки в чате — прямые: «» окно игры рисует
+// квадратиками (Р16, снимок ui_scale/56; так же правка 42). Пусто — готов.
 std::vector<cAiClient::sNotReady> cAiClient::notReadyReasons() const
 {
 	std::vector<sNotReady> r;
@@ -641,25 +642,25 @@ std::vector<cAiClient::sNotReady> cAiClient::notReadyReasons() const
 	{
 		if (!mapDownload.empty())
 			r.push_back ({"download " + mapDownload,
-				"Не готов: качаю у хоста карту «" + mapDownload + "». Когда скачается, выберите её ещё раз: «Выбор карты» -> «" + mapDownload + "» -> «OK».",
+				"Не готов: качаю у хоста карту \"" + mapDownload + "\". Когда скачается, выберите её ещё раз: \"Выбор карты\" -> \"" + mapDownload + "\" -> \"OK\".",
 				"Not ready: downloading the map " + mapDownload + " from the host. When done, select it again: Choose planet -> " + mapDownload + " -> OK."});
 		else if (!mapDownloaded.empty())
 			r.push_back ({"downloaded " + mapDownloaded,
-				"Не готов: карта «" + mapDownloaded + "» скачана - выберите её ещё раз: «Выбор карты» -> «" + mapDownloaded + "» -> «OK».",
+				"Не готов: карта \"" + mapDownloaded + "\" скачана - выберите её ещё раз: \"Выбор карты\" -> \"" + mapDownloaded + "\" -> \"OK\".",
 				"Not ready: the map " + mapDownloaded + " is downloaded - select it again: Choose planet -> " + mapDownloaded + " -> OK."});
 		else if (!mapMissing.empty())
 			r.push_back ({"missing " + mapMissing,
-				"Не готов: у меня нет карты «" + mapMissing + "», скачать её нельзя - выберите другую: «Выбор карты» -> карта -> «OK».",
+				"Не готов: у меня нет карты \"" + mapMissing + "\", скачать её нельзя - выберите другую: \"Выбор карты\" -> карта -> \"OK\".",
 				"Not ready: I have no map " + mapMissing + " and cannot download it - select another one: Choose planet -> map -> OK."});
 		else
-			r.push_back ({"map", "Не готов: карта не выбрана - «Выбор карты» -> карта -> «OK».", "Not ready: no map selected - Choose planet -> map -> OK."});
+			r.push_back ({"map", "Не готов: карта не выбрана - \"Выбор карты\" -> карта -> \"OK\".", "Not ready: no map selected - Choose planet -> map -> OK."});
 	}
 	if (!lobbySettings)
-		r.push_back ({"settings", "Не готов: нет настроек игры - «Опции» -> «Тип игры:» -> «По очереди» -> «OK».",
+		r.push_back ({"settings", "Не готов: нет настроек игры - \"Опции\" -> \"Тип игры:\" -> \"По очереди\" -> \"OK\".",
 			"Not ready: no game settings - Options -> Game Type: -> Turn based -> OK."});
 	else if (lobbySettings->gameType != eGameSettingsGameType::Turns)
 		r.push_back ({"type " + gameTypeText (lobbySettings->gameType),
-			"Не готов: тип игры «" + gameTypeTextRu (lobbySettings->gameType) + "» - я играю только «По очереди»: «Опции» -> «Тип игры:» -> «По очереди» -> «OK».",
+			"Не готов: тип игры \"" + gameTypeTextRu (lobbySettings->gameType) + "\" - я играю только \"По очереди\": \"Опции\" -> \"Тип игры:\" -> \"По очереди\" -> \"OK\".",
 			"Not ready: Game Type " + gameTypeText (lobbySettings->gameType) + " - I play Turn based only: Options -> Game Type: -> Turn based -> OK."});
 	return r;
 }
