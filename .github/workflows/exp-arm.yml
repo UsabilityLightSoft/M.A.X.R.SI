@@ -1,0 +1,59 @@
+# Experiment branches of the fork only (exp/*): a copy of ubuntu.yml on an ARM runner (char is unsigned there)
+# and, for comparison, on x86-64. Without path filters: a branch that changes only tests/ runs, too.
+name: exp-arm
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'exp/**'
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        submodules: recursive
+
+    - name: apt-get update
+      run: sudo apt-get update
+
+    - name: install dependencies
+      run: |
+        sudo apt-get install libsdl2-dev libsdl2-mixer-dev libsdl2-net-dev libogg-dev libvorbis-dev libvorbisenc2 libvorbisidec-dev
+
+    - name: platform
+      run: |
+        uname -m
+        cmake --version
+        c++ --version
+        echo "char is $(echo | c++ -dM -E - | grep -q __CHAR_UNSIGNED__ && echo unsigned || echo signed)"
+        echo "::notice title=platform ${{ matrix.os }}::$(uname -m), $(c++ --version | head -1), char is $(echo | c++ -dM -E - | grep -q __CHAR_UNSIGNED__ && echo unsigned || echo signed)"
+
+    - name: build
+      run: |
+        mkdir build && cd build
+        cmake .. -DBUILD_TESTING=1
+        make maxr_dedicatedserver maxr maxr_tests resinstaller -j4
+
+    - name: test
+      run: |
+        cd build
+        set +e
+        ctest --output-on-failure > ctest.log 2>&1
+        rc1=$?
+        ./maxr_tests > tests.log 2>&1
+        rc2=$?
+        cat ctest.log tests.log
+        grep -E "tests passed|tests failed" ctest.log | sed 's/^/::notice title=ctest ${{ matrix.os }}::/'
+        grep -E "^\[doctest\] (test cases|assertions)" tests.log | sed 's/^/::notice title=maxr_tests ${{ matrix.os }}::/'
+        grep -E ": ERROR: " tests.log | sort -u | head -20 | sed 's/^/::error title=maxr_tests ${{ matrix.os }}::/'
+        grep -E "^  values: " tests.log | sort -u | head -20 | sed 's/^/::error title=values ${{ matrix.os }}::/'
+        [ $rc1 -eq 0 ] && [ $rc2 -eq 0 ]
