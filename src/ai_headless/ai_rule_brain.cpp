@@ -427,6 +427,8 @@ constexpr int kMaxSmallFactories = 1;
 constexpr int kLandArmyCap = 16;
 // Р17 (п. 142): и больших фабрик не больше (две — центрам исследований нужны две фабрики, kResearchMinFactories)
 constexpr int kLandLockFactories = 2;
+// Р17 (п. 55): «танк-защитник раньше конструкторов» — только до этого хода (ранний раш)
+constexpr int kEarlyDefenderTurn = 120;
 // Р7 (п. 94): план эко-сферы не начался за столько ходов — снять, площадку не брать kEcoBadSiteTurns ходов
 constexpr int kEcoPlanStale = 12;
 constexpr int kEcoBadSiteTurns = 40;
@@ -2795,6 +2797,63 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 		if (groundFactory (*b))
 			for (size_t i = 0; i < b->getBuildListSize(); ++i)
 				if (b->getBuildListItem (i).getType() == kIdKonstrukt) ++konstruktQueued;
+	// Р17 (п. 55, П24, ранний раш): вооружённая машина врага у ключевого здания (фабрика, шахта, электростанция; видна сейчас или
+	// прошлым ходом), а своих боевых машин рядом нет — большая фабрика выпускает танк раньше конструкторов, срочно (Mushroom 43:
+	// одинокий танк-разведчик врага с 38-го хода стоял у базы и к 44-му снёс единственную фабрику, у нас — ни одной боевой машины)
+	int defendersWanted = 0;
+	bool defenderUrgent = false; // танк-защитник поставлен в очередь в этот ход — быстрая скорость
+	bool defenderAlert = false;  // враг у ключевого здания, своих боевых машин рядом нет
+	{
+		const char* off = std::getenv ("MAXR_EARLY_DEFENDER"); // опыт «вариант против варианта»: MAXR_EARLY_DEFENDER=0 — как до Р17
+		std::vector<cPosition> keys;
+		if (!(off != nullptr && off[0] == '0'))
+			for (const auto& b : player->getBuildings())
+			{
+				const auto& bsd = b->getStaticUnitData();
+				if (bsd.buildingData.canMineMaxRes > 0 || !bsd.canBuild.empty() || bsd.produceEnergy > 0)
+					for (const auto& c : footprintCells (b->getPosition(), b->getIsBig())) keys.push_back (c);
+			}
+		cPosition intruder (-1, -1);
+		// только в начале партии (до kEarlyDefenderTurn) и у ядра базы: на больших картах «враг у шахты» — обычное дело, а скорость 2
+		// стоит фабрике ×12 металла (r17i: Gen_Lakes — 242 хода тревоги, 98 разгонов)
+		const cPosition core = defense_.baseCenter();
+		const int coreR = defense_.baseRadius() + 4;
+		if (turn > kEarlyDefenderTurn) keys.clear();
+		for (const auto& kv : world_.enemies())
+		{
+			const sEnemyMemory& m = kv.second;
+			if (m.building || m.plane || m.ship || !m.hitsGround() || world_.age (m) > 1) continue;
+			if (core.x() >= 0 && std::max (std::abs (m.pos.x() - core.x()), std::abs (m.pos.y() - core.y())) > coreR) continue;
+			bool near = false;
+			for (const auto& k : keys)
+				if ((k - m.pos).l2NormSquared() <= (kAlarmRadius + 2) * (kAlarmRadius + 2))
+				{
+					near = true;
+					break;
+				}
+			if (!near) continue;
+			bool covered = false;
+			for (const auto& v : player->getVehicles())
+				if (isArmyRole (roles_.roleOf (*v)) && !v->isUnitLoaded() && (v->getPosition() - m.pos).l2NormSquared() <= 12 * 12)
+				{
+					covered = true;
+					break;
+				}
+			if (!covered)
+			{
+				defendersWanted = 1;
+				intruder = m.pos;
+				break;
+			}
+		}
+		defenderAlert = defendersWanted > 0;
+		if (defendersWanted > 0 && earlyDefenderNoted_ != turn)
+		{
+			earlyDefenderNoted_ = turn;
+			extraEvents_.push_back ({{"event", "early defender"}, {"level", "operational"}, {"intruder", {{"x", intruder.x()}, {"y", intruder.y()}}},
+				{"army", armyNow}, {"why", "an armed enemy at our key building and no own combat unit near: a tank before constructors, urgently"}});
+		}
+	}
 	// следующая машина фабрики: конструктор, пока их меньше нужного (большая фабрика),
 	// иначе — по ролям (ai_roles); sID() — малой фабрике сейчас ничего не нужно
 	auto nextFor = [&] (const cBuilding& b) -> sID {
@@ -2826,6 +2885,15 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			comp_.noteQueued (roles_, inf);
 			return inf;
 		}
+		// Р17 (п. 55): враг у ключевого здания, своих рядом нет — танк раньше конструкторов
+		if (kind == "BigGroundVehicle" && defendersWanted > 0)
+			if (const sID t = roles_.typeFor (eRole::Tank, kind); t != sID())
+			{
+				--defendersWanted;
+				defenderUrgent = true;
+				comp_.noteQueued (roles_, t);
+				return t;
+			}
 		if (unitsData->getStaticUnitData (kIdKonstrukt).buildAs == kind && nKonstrukt + konstruktQueued < konstruktTarget)
 		{
 			++konstruktQueued;
@@ -2888,7 +2956,8 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			const bool urgent = roles_.roleOfType (first) == eRole::AntiAir
 				|| (roles_.roleOfType (first) == eRole::Guard && defense_.commandoAlarm()) // шаг 13: диверсант — охрана срочно
 				|| (roles_.roleOfType (first) == eRole::Corvette && navy_.counts().corvettes == 0) // шаг 13, ч. 2: первый корвет — охрана верфи
-				|| ((roles_.roleOfType (first) == eRole::Fighter || roles_.roleOfType (first) == eRole::Bomber) && air_.urgent()); // шаг 13, ч. 3
+				|| ((roles_.roleOfType (first) == eRole::Fighter || roles_.roleOfType (first) == eRole::Bomber) && air_.urgent()) // шаг 13, ч. 3
+				|| (defenderUrgent && roles_.roleOfType (first) == eRole::Tank); // Р17 (п. 55): враг у ключевого здания
 			const int speed = ((speedUp || urgent) && budget >= factoryMetalPerRound (b, 1)) ? 1 : 0;
 			cOrder o;
 			o.type = eOrderType::ChangeBuildList;
@@ -2972,6 +3041,21 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 				speed = 0;
 				slowForBuilders = true;
 			}
+			// Р17 (п. 55): враг у ключевого здания, своих рядом нет, а фабрика строит боевую машину — скорость 2, если металл хода
+			// есть (танк выйдет за ход; Mushroom 43: танк вышел на 42-м, а фабрику снесли на 44-м)
+			bool defendRush = false;
+			if (defenderAlert && b.getStaticUnitData().canBuild == "BigGroundVehicle" && b.getBuildSpeed() < 2
+				&& isArmyRole (roles_.roleOfType (b.getBuildListItem (0).getType())))
+			{
+				const int extra = factoryMetalPerRound (b, 2) - b.getMetalPerRound();
+				if (budget >= extra && storedLeft >= extra)
+				{
+					speed = 2;
+					budget -= extra;
+					defendRush = true;
+					slowForBuilders = false;
+				}
+			}
 			if (changed || speed != b.getBuildSpeed())
 			{
 				cOrder o;
@@ -2982,7 +3066,8 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 				o.buildSpeed = speed;
 				o.repeat = b.getRepeatBuild();
 				o.level = "op";
-				o.reason = slowForBuilders ? "slow down factory (builders need metal)"
+				o.reason = defendRush ? "speed up factory (enemy at our base, no defenders)"
+					: slowForBuilders ? "slow down factory (builders need metal)"
 					: (speed != b.getBuildSpeed() ? "speed up factory (metal piles up)" : produceReason (o.buildList));
 				prodOrders.push_back (std::move (o));
 			}
@@ -3086,6 +3171,29 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			goldFree += b.getStaticData().convertsGold;
 			energyNeed -= b.getStaticUnitData().needsEnergy;
 		}
+		// Р17 (п. 55, ранний раш): энергия — сначала большой фабрике. Ни одна большая фабрика главной базы не работает, а у первой
+		// есть задание и металл на ход — её энергию шахте, исследованиям и переработке не отдавать (base4 против себя: ранние
+		// разгромы на Mushroom и Lava — 9 и 10 партий из 25; Mushroom 49: вторая шахта, запущенная, пока фабрика выпускала машину,
+		// забрала последнюю единицу энергии — фабрика стояла с хода 30 по 45, к ходу 50 у нас 4 машины, а база врага вывела танки)
+		int factoryEnergy = 0;
+		{
+			const char* off = std::getenv ("MAXR_FACTORY_ENERGY"); // опыт «вариант против варианта»: MAXR_FACTORY_ENERGY=0 — как до Р17
+			if (!(off != nullptr && off[0] == '0'))
+			{
+				bool working = false;
+				const cBuilding* idle = nullptr;
+				for (const auto& bp : player->getBuildings())
+				{
+					const cBuilding& b = *bp;
+					if (b.subBase != main || b.isDisabled() || b.getStaticUnitData().canBuild != "BigGroundVehicle") continue;
+					if (b.isUnitWorking()) working = true;
+					else if (idle == nullptr && !b.isBuildListEmpty() && b.buildingCanBeStarted()
+						&& econ.metalStored >= factoryMetalPerRound (b, b.getBuildSpeed()))
+						idle = &b;
+				}
+				if (!working && idle != nullptr) factoryEnergy = idle->getStaticUnitData().needsEnergy;
+			}
+		}
 		// Р7: эко-сферы — первыми (очко за ход; энергия и человек — раньше исследований). Не хватает энергии или людей (тесная
 		// база без нефти — Three Isles, Donuts: сфера стояла построенной без очков) — остановить исследования, учебный центр,
 		// переработку золота: очко за ход дороже, а их остановка обратима
@@ -3158,7 +3266,7 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			if (!isMine && !isResearch && !isRefinery) continue;
 			if (isRefinery && goldFree < sd.buildingData.convertsGold) continue;
 			if (sd.needsHumans > humanFree) continue;
-			if (!energyFeasible (energyNeed + sd.needsEnergy, econ.stations, econ.generators, econ.oil)) continue;
+			if (!energyFeasible (energyNeed + factoryEnergy + sd.needsEnergy, econ.stations, econ.generators, econ.oil)) continue; // Р17: фабрике — раньше
 			cOrder o;
 			o.type = eOrderType::StartWork;
 			o.playerId = playerId;
