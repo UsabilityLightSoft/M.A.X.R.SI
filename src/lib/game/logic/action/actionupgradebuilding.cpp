@@ -86,6 +86,8 @@ void cActionUpgradeBuilding::execute (cModel& model) const
 		if (b->getOwner() && b->data.getScan() < upgradedData.getScan())
 		{
 			b->getOwner()->updateScan (*b, upgradedData.getScan());
+			// search for stealth units in the new scan range
+			b->detectOtherUnits (*model.getMap());
 		}
 		if (b->getOwner() && b->isSentryActive() && b->data.getRange() < upgradedData.getRange())
 		{
@@ -93,8 +95,6 @@ void cActionUpgradeBuilding::execute (cModel& model) const
 		}
 
 		b->upgradeToCurrentVersion();
-		// search for stealth units in the new scan range
-		b->detectOtherUnits (*model.getMap());
 	}
 	subbase.addMetal (-totalCosts);
 
