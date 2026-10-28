@@ -1526,6 +1526,111 @@ const cBuilding* refillSource (const cPlayer& player, const cSubBase* main, cons
 } // namespace
 
 //------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+// Р17 (п. 86, П26): клан по карте и своей высадке (см. ai_rule_brain.h)
+sClanChoice ruleChooseClan (const cStaticMap& map, const cPosition& landing)
+{
+	sClanChoice out;
+	const char* clanEnv = std::getenv ("MAXR_CLAN");
+	if (clanEnv != nullptr && clanEnv[0] == '0')
+	{
+		out.why = "MAXR_CLAN=0: the clan by seat";
+		return out;
+	}
+	if (clanEnv != nullptr && clanEnv[0] == 'c' && clanEnv[1] >= '0' && clanEnv[1] <= '6') // опыт: MAXR_CLAN=cN — клан N
+	{
+		out.clan = clanEnv[1] - '0';
+		out.why = std::string ("MAXR_CLAN=") + clanEnv + ": the clan is forced (experiment)";
+		return out;
+	}
+	constexpr int kChosen = 0, kMusashi = 4; // The Chosen, Musashi (data/clans.json)
+	const int W = map.getSize().x(), H = map.getSize().y();
+	const size_t N = static_cast<size_t> (W) * H;
+	auto tankGround = [&] (const cPosition& p) { return map.isValidPosition (p) && !map.isWater (p) && !map.isCoast (p) && !map.isBlocked (p); };
+	// области суши танка и водоёмы (8-связность)
+	std::vector<int> land (N, -1), sea (N, -1);
+	std::vector<int> landSizes, seaSizes, queue;
+	for (size_t s = 0; s < N; ++s)
+	{
+		const cPosition sp (static_cast<int> (s % W), static_cast<int> (s / W));
+		const bool isLand = tankGround (sp), isSea = map.isWater (sp);
+		if ((!isLand || land[s] >= 0) && (!isSea || sea[s] >= 0)) continue;
+		std::vector<int>& lab = isLand ? land : sea;
+		std::vector<int>& sizes = isLand ? landSizes : seaSizes;
+		const int id = static_cast<int> (sizes.size());
+		lab[s] = id;
+		queue.assign (1, static_cast<int> (s));
+		for (size_t qi = 0; qi < queue.size(); ++qi)
+		{
+			const int cx = queue[qi] % W, cy = queue[qi] / W;
+			for (int dy = -1; dy <= 1; ++dy)
+				for (int dx = -1; dx <= 1; ++dx)
+				{
+					const cPosition n (cx + dx, cy + dy);
+					if (n.x() < 0 || n.y() < 0 || n.x() >= W || n.y() >= H) continue;
+					const size_t o = static_cast<size_t> (n.y()) * W + n.x();
+					if (lab[o] >= 0 || (isLand ? !tankGround (n) : !map.isWater (n))) continue;
+					lab[o] = id;
+					queue.push_back (static_cast<int> (o));
+				}
+		}
+		sizes.push_back (static_cast<int> (queue.size()));
+	}
+	auto regionNear = [&] (const cPosition& p) {
+		for (int r = 0; r <= 4; ++r)
+			for (int dy = -r; dy <= r; ++dy)
+				for (int dx = -r; dx <= r; ++dx)
+				{
+					if (std::max (std::abs (dx), std::abs (dy)) != r) continue;
+					const cPosition c = p + cPosition (dx, dy);
+					if (c.x() < 0 || c.y() < 0 || c.x() >= W || c.y() >= H) continue;
+					const int g = land[static_cast<size_t> (c.y()) * W + c.x()];
+					if (g >= 0) return g;
+				}
+		return -1;
+	};
+	const int home = regionNear (landing);
+	long long landTotal = 0;
+	for (int s : landSizes)
+		if (s >= 20) landTotal += s;
+	const int share = home >= 0 && landTotal > 0 ? static_cast<int> (static_cast<long long> (landSizes[home]) * 100 / landTotal) : 100;
+	// до моря (водоём от 400 клеток) от высадки, Чебышёв до 20
+	int seaDist = -1;
+	for (int r = 0; r <= 20 && seaDist < 0; ++r)
+		for (int dy = -r; dy <= r && seaDist < 0; ++dy)
+			for (int dx = -r; dx <= r && seaDist < 0; ++dx)
+			{
+				if (std::max (std::abs (dx), std::abs (dy)) != r) continue;
+				const cPosition c = landing + cPosition (dx, dy);
+				if (c.x() < 0 || c.y() < 0 || c.x() >= W || c.y() >= H) continue;
+				const int w = sea[static_cast<size_t> (c.y()) * W + c.x()];
+				if (w >= 0 && seaSizes[w] >= 400) seaDist = r;
+			}
+	// как у стратегии (ai_defense, П3 и Р17): наша суша — больше 60% всей — «суша»; остров (меньше 40%) — враг за водой; между —
+	// догадка «точка напротив на другой суше», если она далеко (≥ 40 клеток)
+	const cPosition opp (W - 1 - landing.x(), H - 1 - landing.y());
+	const int oppRegion = regionNear (opp);
+	const int oppDist = std::max (std::abs (opp.x() - landing.x()), std::abs (opp.y() - landing.y()));
+	const bool noLandPath = home >= 0 && share < 60
+		&& (share < 40 || (oppRegion >= 0 && oppRegion != home && oppDist >= 40));
+	// по плану: танки — основа армии и обороны на всех картах, где у базы есть море или путь по суше (там и флот, и высадки; Р17,
+	// замеры против base4: Musashi лучше Crimson Path на Three Isles 0.530 против 0.474, Gen_Continents 0.743 против 0.621,
+	// Gen_Archipelago 0.667 против 0.627, Gen_Coast 0.646 против 0.570); только враг за водой и моря у базы нет — до него долетают
+	// одни самолёты (упор «воздух»), там The Chosen
+	if (noLandPath && seaDist < 0)
+	{
+		out.clan = kChosen;
+		out.why = "the enemy is most likely beyond water and no sea near our landing: only planes reach him — The Chosen (air force)";
+	}
+	else
+	{
+		out.clan = kMusashi;
+		out.why = std::string (noLandPath ? "the enemy is most likely beyond water, the sea is near" : "a land path to the enemy")
+			+ " (our land is " + std::to_string (share) + "% of the land): tanks are the core of our army and defence — Musashi (damage 20, armor 12, hp 28)";
+	}
+	return out;
+}
+
 std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 {
 	std::vector<cOrder> orders;

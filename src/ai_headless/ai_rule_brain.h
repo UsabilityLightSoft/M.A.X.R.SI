@@ -44,11 +44,24 @@
 #include <vector>
 
 class cModel;
+class cStaticMap;
 
 namespace ai
 {
 
 struct cOrder;
+
+// Р17 (п. 86, П26): клан, как человек в лобби, — по карте (её видно до игры), своей точке высадки и плану: враг по догадке за водой,
+// а моря у базы нет — до него долетают одни самолёты: The Chosen (авиация); иначе — Musashi (танки: урон 20, броня 12, прочность 28
+// против 16/10/24 — основа армии и обороны правил на любой карте с морем или путём по суше: по замерам Р17 Musashi лучше Crimson Path и
+// на морских картах). Клан врага в лобби не виден — не учитывается. Axis Inc. (7) не берём: у него другой бесплатный набор высадки.
+// MAXR_CLAN=0 — клан по месту, как до Р17 (игрок 0 — 0, игрок 1 — 1); MAXR_CLAN=cN — клан N (опыт)
+struct sClanChoice
+{
+	int clan = -1; // −1 — по месту
+	std::string why;
+};
+sClanChoice ruleChooseClan (const cStaticMap& map, const cPosition& landing);
 
 class cRuleBrain : public cAiBrain
 {

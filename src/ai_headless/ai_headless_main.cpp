@@ -879,6 +879,16 @@ try
 		<< (landing.distance < 0 ? " (different land regions)" : "") << ", land region "
 		<< landing.regionSize << (landing.regionSize1 != landing.regionSize ? "/" + std::to_string (landing.regionSize1) : std::string())
 		<< " cells, room " << landing.room[0] << "/" << landing.room[1] << std::endl;
+	// Р17 (п. 86, П26): ИИИ правил выбирает клан, как человек в лобби, — по карте и своей точке высадки; прочие мозги — по месту
+	// (игрок 0 — клан 0, игрок 1 — клан 1, как прежде). Бесплатный набор высадки у кланов 0–6 одинаков (Axis Inc. не выбирается)
+	std::array<int, 2> clans {0, 1};
+	for (int i = 0; i < 2; ++i)
+		if (brains[i] == "rule")
+		{
+			const ai::sClanChoice c = ai::ruleChooseClan (*staticMap, landing.landing[i]);
+			if (c.clan >= 0) clans[i] = c.clan;
+			std::cout << "[ai_headless] clan p" << i << "=" << clans[i] << " (" << c.why << ")" << std::endl;
+		}
 
 	// --- игроки ---
 	std::vector<cPlayerBasicData> playersBasicData;
@@ -960,7 +970,7 @@ try
 	for (int i = 0; i < 2; ++i)
 	{
 		sInitPlayerData initPlayerData;
-		initPlayerData.clan = i;
+		initPlayerData.clan = clans[i]; // Р17 (п. 86): ИИИ правил — по карте, прочие — по месту
 		initPlayerData.landingPosition = landing.send[i];
 		initPlayerData.landingUnits = landingUnits[i];
 		clients[i]->initNewGame (initPlayerData);
