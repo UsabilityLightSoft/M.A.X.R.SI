@@ -53,6 +53,7 @@ namespace ai
 
 class cBaseDefense;
 class cRoleBook;
+class cOrderReview;
 class cWorldModel;
 
 class cCommandos
@@ -77,6 +78,8 @@ public:
 	bool wantsPass() const { return wantPass_; }
 	// коммандос и БМП под командой модуля — микро правил их не трогает
 	bool claimed (unsigned int id) const { return claimed_.count (id) != 0; }
+	// Р22: пересмотр приказов мозга — машина с путём из прошлых ходов занята, пока он её не отпустил (nullptr — занята всегда)
+	void setReview (const cOrderReview* review) { review_ = review; }
 
 	// --- налёт (ai_air) ---
 	// зенитка (или иное здание) g, которую надо выключить перед ударом: коммандос подходит и ждёт рядом
@@ -130,6 +133,9 @@ public:
 	const sCounts& counts() const { return counts_; }
 
 private:
+	// Р22: едет сейчас или ждёт продолжения пути и не отпущена пересмотром (ai_reorders)
+	bool moveBusy (const cVehicle& v) const;
+	const cOrderReview* review_ = nullptr;
 	enum class eTask
 	{
 		Idle,

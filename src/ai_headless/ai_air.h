@@ -60,6 +60,7 @@ class cCommandos;
 class cComposition;
 class cNavy;
 class cRoleBook;
+class cOrderReview;
 class cWorldModel;
 struct sEnemyMemory;
 
@@ -100,6 +101,8 @@ public:
 	bool wantsPass() const { return wantPass_; }
 	// самолёт под командой авиации — микро правил его не трогает
 	bool claimed (unsigned int id) const { return claimed_.count (id) != 0; }
+	// Р22: пересмотр приказов мозга — машина с путём из прошлых ходов занята, пока он её не отпустил (nullptr — занята всегда)
+	void setReview (const cOrderReview* review) { review_ = review; }
 
 	std::vector<nlohmann::json> takeEvents();
 	nlohmann::json toJson() const;
@@ -126,6 +129,9 @@ public:
 	const sCounts& counts() const { return counts_; }
 
 private:
+	// Р22: едет сейчас или ждёт продолжения пути и не отпущена пересмотром (ai_reorders)
+	bool moveBusy (const cVehicle& v) const;
+	const cOrderReview* review_ = nullptr;
 	struct sAaSource
 	{
 		cPosition pos;

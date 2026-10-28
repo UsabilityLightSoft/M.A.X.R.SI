@@ -5,6 +5,7 @@
 #include "ai_commando.h"
 
 #include "ai_defense.h"
+#include "ai_reorders.h"
 #include "ai_roles.h"
 #include "ai_world_model.h"
 
@@ -130,6 +131,12 @@ void cCommandos::event (const char* what, nlohmann::json extra)
 	events_.push_back (std::move (e));
 }
 
+bool cCommandos::moveBusy (const cVehicle& v) const
+{
+	return review_ != nullptr ? review_->moveBusy (v) : (v.isUnitMoving() || v.getMoveJob() != nullptr);
+}
+
+//------------------------------------------------------------------------------
 std::vector<nlohmann::json> cCommandos::takeEvents()
 {
 	std::vector<nlohmann::json> res;
@@ -924,7 +931,7 @@ void cCommandos::planOne (const cModel& model, const cPlayer& player, const cMap
 	const cMap& map = *model.getMap();
 	const unsigned int id = c.getId();
 	if (c.isUnitLoaded() || c.isDisabled() || ferried_.count (id) != 0) return;
-	if (c.isUnitMoving() || c.getMoveJob() != nullptr) return;
+	if (moveBusy (c)) return;
 	sTask& t = tasks_[id];
 	// 1) обнаружен — уйти
 	if (c.isDetectedByAnyPlayer())
@@ -1242,7 +1249,7 @@ void cCommandos::apcPlan (const cModel& model, const cPlayer& player, const cMap
 		if (apc == nullptr) return;
 	}
 	claimed_.insert (apc->getId());
-	if (apc->isUnitMoving() || apc->getMoveJob() != nullptr || apc->isDisabled()) return;
+	if (moveBusy (*apc) || apc->isDisabled()) return;
 	const cVehicle* c = apc_.commando != kNoUnit ? model.getVehicleFromID (apc_.commando) : nullptr;
 	if (apc_.commando != kNoUnit && c == nullptr)
 	{

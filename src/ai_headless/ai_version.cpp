@@ -44,6 +44,7 @@ constexpr sExperimentKnob kExperimentKnobs[] = {
 	{"MAXR_LANDLOCK_FACTORIES", true}, // Р17 (п. 142)
 	{"MAXR_NAVY", true},
 	{"MAXR_OUTRANGED", true}, // Р17 (П21)
+	{"MAXR_REVIEW", false}, // Р22: пересмотр приказов (0 — выкл., all — без гистерезиса)
 	{"MAXR_SCOUT", true},
 	{"MAXR_SEAMINES", true},
 	{"MAXR_SEASUPPLY", true},

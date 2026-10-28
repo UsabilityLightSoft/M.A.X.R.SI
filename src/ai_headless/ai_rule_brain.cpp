@@ -23,6 +23,7 @@
 #include "game/data/units/unitdata.h"
 #include "game/data/units/vehicle.h"
 #include "game/logic/attackjob.h"
+#include "game/logic/movejob.h"
 #include "game/logic/pathcalculator.h"
 #include "utility/log.h"
 #include "utility/mathtools.h"
@@ -128,12 +129,13 @@ int effectiveDamagePerShot (int damage, int armor)
 	return std::max (1, damage - armor);
 }
 
-// юнит свободен для приказа (не занят стройкой/движением/загрузкой/минами)
-bool isIdle (const cVehicle& v)
+// юнит свободен для приказа (не занят стройкой/движением/загрузкой/минами). Р22: машина, что ждёт продолжения пути из
+// прошлых ходов, свободна, если пересмотр приказов её отпустил (ai_reorders)
+bool isIdle (const cVehicle& v, const cOrderReview& review)
 {
 	if (v.isDisabled()) return false;
 	if (v.isUnitLoaded()) return false;
-	if (v.isUnitMoving() || v.getMoveJob() != nullptr) return false;
+	if (review.moveBusy (v)) return false;
 	if (v.isUnitBuildingABuilding() || v.isUnitClearing()
 		|| v.isUnitLayingMines() || v.isUnitClearingMines()) return false;
 	return true;
@@ -432,6 +434,10 @@ constexpr int kEarlyDefenderTurn = 120;
 // Р7 (п. 94): план эко-сферы не начался за столько ходов — снять, площадку не брать kEcoBadSiteTurns ходов
 constexpr int kEcoPlanStale = 12;
 constexpr int kEcoBadSiteTurns = 40;
+// Р22: приказ Move старше стольких ходов (путь ещё не кончился) — решать заново, даже если он ещё имеет смысл
+constexpr int kMaxCarryTurns = 8;
+// Р22: раненая, что отходит, отпущена, когда починена хотя бы до стольких % (выше порогов отхода shouldRetreat — без дёрганья)
+constexpr int kRetreatDonePct = 70;
 
 // путь до хода: столько клеток, сколько машина пройдёт за ход (шаг 9: сопровождение и
 // ремонтник не уходят по длинному пути на несколько ходов — каждый ход задание заново)
@@ -1523,6 +1529,59 @@ const cBuilding* refillSource (const cPlayer& player, const cSubBase* main, cons
 	return nullptr;
 }
 
+// шаг 7: тревога у базы — вооружённые враги у ключевых зданий (шахты, фабрики, электростанции, центры исследований, эко-сферы)
+// и идущей стройки; машины — видны сейчас или недавно (память), группами: враги ближе kAlarmGroup друг к другу — одна группа
+// (порядок по id — детерминированно). Р22: вынесено из микро — тревогу смотрит и пересмотр приказов
+std::vector<std::vector<const sEnemyMemory*>> alarmGroups (const cPlayer& player, const cWorldModel& world)
+{
+	// ключевые клетки: шахты, фабрики, электростанции, центры исследований, идущая стройка
+	std::vector<cPosition> keys;
+	for (const auto& b : player.getBuildings())
+	{
+		const auto& bsd = b->getStaticUnitData();
+		if (bsd.buildingData.canMineMaxRes > 0 || !bsd.canBuild.empty() || bsd.produceEnergy > 0 || bsd.buildingData.canResearch
+			|| bsd.buildingData.canScore) // Р7: эко-сфера — её очки пропадут вместе с ней
+			for (const auto& c : footprintCells (b->getPosition(), b->getIsBig()))
+				keys.push_back (c);
+	}
+	for (const auto& v : player.getVehicles())
+		if (v->isUnitBuildingABuilding())
+			for (const auto& c : footprintCells (v->getPosition(), v->getIsBig()))
+				keys.push_back (c);
+
+	// враги у базы: вооружены; машины — видны сейчас или недавно (память)
+	std::vector<std::vector<const sEnemyMemory*>> groups;
+	for (const auto& kv : world.enemies())
+	{
+		const sEnemyMemory& m = kv.second;
+		if (!m.armed()) continue;
+		if (!m.building && world.age (m) > kAlarmFresh) continue;
+		long long dOur = std::numeric_limits<long long>::max();
+		for (const auto& k : keys)
+			dOur = std::min<long long> (dOur, (k - m.pos).l2NormSquared());
+		if (dOur > static_cast<long long> (kAlarmRadius) * kAlarmRadius) continue;
+		// враг ближе к своим зданиям, чем к нашим (базы рядом — Donuts), — не налёт на нас
+		long long dTheir = std::numeric_limits<long long>::max();
+		for (const auto& kv2 : world.enemies())
+			if (kv2.second.building && kv2.second.owner == m.owner && kv2.first != m.id)
+				dTheir = std::min<long long> (dTheir, (kv2.second.pos - m.pos).l2NormSquared());
+		if (dTheir <= dOur) continue;
+		// группа — враги ближе kAlarmGroup друг к другу (порядок по id — детерминированно)
+		bool joined = false;
+		for (auto& g : groups)
+			if (std::any_of (g.begin(), g.end(), [&] (const sEnemyMemory* o) {
+					return (o->pos - m.pos).l2NormSquared() <= kAlarmGroup * kAlarmGroup;
+				}))
+			{
+				g.push_back (&m);
+				joined = true;
+				break;
+			}
+		if (!joined) groups.push_back ({&m});
+	}
+	return groups;
+}
+
 } // namespace
 
 //------------------------------------------------------------------------------
@@ -1682,8 +1741,13 @@ std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 		eco_.update (model, *player, econ.metalMaxProd, turn);
 		// Р7 (п. 104): умный геолог — центр базы, зона врага, жилы
 		survey_.update (model, *player, world_, defense_.baseCenter(), turn);
+		// Р22: машины с путём из прошлых ходов — пересмотр до решений хода (отпущенные решаются как свободные)
+		reviewOrders (playerId, model);
 	}
 	minesToggled_.clear();
+	// Р22: авиация и коммандос тоже отпускают своих по пересмотру (их проверки «занята движением»)
+	air_.setReview (&review_);
+	commando_.setReview (&review_);
 	strategicDecisions (playerId, model, orders);
 	operationalDecisions (playerId, model, orders);
 	microDecisions (playerId, model, orders);
@@ -1746,6 +1810,10 @@ std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 	}
 	// шаг 11 (для шага 16): явное «стоять» с причиной и мир правил — в журнал хода
 	noteWorld (playerId, model, orders);
+	// Р22: отпущенным пересмотром без нового пути — стоп (иначе в конце хода движок продолжит старый путь); приказы хода —
+	// в память намерений (что и зачем машине велено — для пересмотра в следующем ходу)
+	review_.finish (orders, playerId);
+	review_.note (model, orders, world_.turn(), 1);
 	// шаг 11: второй заход — когда есть чем стрелять: после движения и выстрелов этого захода
 	// могут найтись цели, которые оставшиеся выстрелы убьют наверняка, и обнаруженные диверсанты
 	wantPass_ = !minesToggled_.empty() || navy_.wantsPass() // шаг 13: минёр включил закладку — выключить в следующем заходе; флот — выгрузка
@@ -1776,6 +1844,7 @@ std::vector<nlohmann::json> cRuleBrain::takeJournalEvents()
 	for (auto& e : eco_.takeEvents()) events.push_back (std::move (e)); // Р7: эко-сферы
 	for (auto& e : survey_.takeEvents()) events.push_back (std::move (e)); // Р7: геолог
 	for (auto& e : tactics_.takeEvents()) events.push_back (std::move (e)); // Р17: тактика заходов
+	for (auto& e : review_.takeEvents()) events.push_back (std::move (e)); // Р22: пересмотр приказов
 	for (auto& e : extraEvents_) events.push_back (std::move (e));
 	extraEvents_.clear();
 	return events;
@@ -1800,7 +1869,7 @@ void cRuleBrain::noteWorld (int playerId, const cModel& model, const std::vector
 		units.push_back ({v->getId(), roleName (roles_.roleOf (*v)), op != opOf.end() ? op->second.first : 0,
 			op != opOf.end() && op->second.second ? 1 : 0, world_.groundFire (p), world_.groundStrike (p)});
 		// «стоять»: вооружённая свободная машина в контакте без приказа
-		if (v->getStaticUnitData().canAttack == 0 || v->data.getShotsMax() <= 0 || !isIdle (*v)) continue;
+		if (v->getStaticUnitData().canAttack == 0 || v->data.getShotsMax() <= 0 || !isIdle (*v, review_)) continue;
 		if (std::binary_search (ordered.begin(), ordered.end(), v->getId())) continue;
 		bool contact = false;
 		for (const auto& kv : world_.enemies())
@@ -1824,11 +1893,193 @@ void cRuleBrain::noteWorld (int playerId, const cModel& model, const std::vector
 }
 
 //------------------------------------------------------------------------------
+// Р22 (решение Владыки 28.10.2026): пересмотр машин с путём из прошлых ходов (ai_reorders.h). Машина едет дальше, только
+// если приказ ещё имеет смысл, клетка, где она встанет в этот ход, не под угрозой и заметно лучшей задачи нет (гистерезис:
+// отход, уход от угрозы, путь к площадке, в депо и в разведку не дёргаются туда-сюда); иначе — отпущена: решения хода берут её
+// как свободную (isIdle), а дела не нашлось — стоп (cOrderReview::finish). Проверки — по порядку, первая сработавшая и есть
+// причина (в журнал, событие «review»).
+void cRuleBrain::reviewOrders (int playerId, const cModel& model)
+{
+	const cPlayer* player = model.getPlayer (playerId);
+	if (player == nullptr || player->isDefeated) return;
+	const int turn = world_.turn();
+	review_.beginTurn (model, *player, turn);
+	if (review_.mode() == cOrderReview::eMode::Off) return;
+	// кандидаты: путь из прошлых ходов ждёт продолжения; строящие, расчищающие, тянущие дорогу, выключенные и связанные
+	// выстрелом — заняты другим (их приказы не про путь)
+	std::vector<const cVehicle*> carried;
+	for (const auto& v : player->getVehicles())
+		if (cOrderReview::carried (*v) && !v->isDisabled() && !v->bandPosition && !v->isUnitBuildingABuilding() && !v->isUnitClearing()
+			&& !v->isAttacking() && !v->isBeingAttacked())
+			carried.push_back (v.get());
+	if (carried.empty()) return;
+	if (review_.mode() == cOrderReview::eMode::All) // опыт: без гистерезиса — каждый приказ заново
+	{
+		for (const cVehicle* v : carried) review_.decide (*v, false, "MAXR_REVIEW=all: every order anew");
+		return;
+	}
+	const cMap& map = *model.getMap();
+	const cMapView view (model.getMap(), sharedPlayerOf (model, playerId));
+	const auto& unitsData = model.getUnitsData();
+	std::vector<sEnemy> enemies;
+	collectVisibleEnemies (*player, model, view, enemies);
+	const auto alarms = alarmGroups (*player, world_);
+	tFootprints inProgress; // строящееся сейчас — площадки планов не должны на него налезать (как planValid оперативки)
+	for (const auto& v : player->getVehicles())
+		if (v->isUnitBuildingABuilding()) inProgress.emplace_back (v->getPosition(), v->getIsBig());
+	bool depot = false;
+	for (const auto& b : player->getBuildings())
+		if (b->getStaticUnitData().ID == kIdDepot && !b->isDisabled()) depot = true;
+	const bool blind = defense_.counts().radarsWanted > 0 && defense_.counts().radarsWorking == 0;
+
+	for (const cVehicle* vp : carried)
+	{
+		const cVehicle& v = *vp;
+		const cMoveJob& job = *v.getMoveJob();
+		const cOrderReview::sIntent* in = review_.intentOf (v.getId());
+		const eIntent kind = in != nullptr ? in->kind : eIntent::Unknown;
+		const eRole role = roles_.roleOf (v);
+		// конец пути и клетка, где машина встанет в этот ход, если поедет дальше (очки хода и сбережённые заданием)
+		cPosition dest = v.getPosition();
+		for (const auto& c : job.getPath()) dest = c;
+		cPosition stop = v.getPosition();
+		{
+			int budget = v.data.getSpeed() + static_cast<int> (job.getSavedSpeed());
+			for (const auto& c : job.getPath())
+			{
+				const int cost = cPathCalculator::calcNextCost (stop, c, &v, &view);
+				if (cost > budget) break;
+				budget -= cost;
+				stop = c;
+			}
+		}
+		const bool combat = isCombatUnit (v) && v.data.getAmmo() > 0;
+		const int hpPct = v.data.getHitpointsMax() > 0 ? v.data.getHitpoints() * 100 / v.data.getHitpointsMax() : 100;
+		// враг в дальности с места — выстрел (как фокус-огонь; машины врага и его вооружённые здания: соединитель не повод)
+		auto enemyInRange = [&] () {
+			if (!combat || role == eRole::Scout || role == eRole::Submarine || isAirRole (role) || role == eRole::Commando) return false;
+			const bool splash = v.getStaticUnitData().muzzleType == eMuzzleType::RocketCluster;
+			for (const auto& e : enemies)
+				if ((e.unit->isAVehicle() || e.damage > 0) && v.canAttackObjectAt (e.pos, view, false)
+					&& !(splash && ownWithinSplash (map, player, e.pos)))
+					return true;
+			return false;
+		};
+		// тревога у базы (как микро): боец армии не в походе, группа врагов, по которой он бьёт, — не дальше kAlarmMaxDist
+		auto nearAlarm = [&] () {
+			if (!combat || !isArmyRole (role) || ops_.committed (v.getId()) || navy_.claimed (v.getId())) return false;
+			for (const auto& g : alarms)
+			{
+				int flag = 0;
+				for (const sEnemyMemory* m : g) flag |= m->plane ? 1 : (m->ship ? 2 : 4);
+				if ((v.getStaticUnitData().canAttack & flag) == 0) continue;
+				for (const sEnemyMemory* m : g)
+					if ((v.getPosition() - m->pos).l2NormSquared() <= static_cast<long long> (kAlarmMaxDist) * kAlarmMaxDist) return true;
+			}
+			return false;
+		};
+		// цель потеряла смысл — причина; пусто — цель жива
+		auto goalLost = [&] () -> std::string {
+			switch (kind)
+			{
+				case eIntent::BuildSite:
+				{
+					const auto it = plans_.find (v.getId());
+					if (it == plans_.end()) return "no build plan any more";
+					const auto& sd = unitsData->getStaticUnitData (sID (it->second.typeFirst, it->second.typeSecond));
+					const bool big = sd.buildingData.isBig;
+					if (!inFootprint (dest, it->second.pos, big)) return "the build plan has another site";
+					if (!canPlaceIgnoringVehicles (map, *player, sd, it->second.pos) || overlapsAny (it->second.pos, big, inProgress)
+						|| footprintThreatened (world_, it->second.pos, big, kBuilderLayer))
+						return "the build site is taken or under threat";
+					return {};
+				}
+				case eIntent::Errand:
+					if (in->reason.rfind ("to base for metal", 0) == 0)
+					{
+						const auto it = plans_.find (v.getId());
+						if (it == plans_.end()) return "no build plan: no metal needed";
+						if (v.getStoredResources() >= it->second.cost) return "has the metal for the plan";
+					}
+					return {};
+				case eIntent::Refit:
+					if (in->reason.rfind ("to depot for refit", 0) == 0 && (!depot || refit_.count (v.getId()) == 0))
+						return "no refit waits for it";
+					if (in->reason.rfind ("scanner: to depot", 0) == 0 && (!depot || blind)) return "the base is blind: the radar is needed out";
+					if (in->reason.rfind ("scanner: base is blind", 0) == 0 && !blind) return "the radars see again";
+					return {};
+				case eIntent::Explore:
+					if (v.getStaticUnitData().vehicleData.canSurvey)
+					{
+						// геолог видит 3×3: цель потеряла смысл, когда вокруг неё всё разведано
+						for (int dy = -1; dy <= 1; ++dy)
+							for (int dx = -1; dx <= 1; ++dx)
+							{
+								const cPosition c = dest + cPosition (dx, dy);
+								if (map.isValidPosition (c) && !player->hasResourceExplored (c)) return {};
+							}
+						return "everything around the target is surveyed";
+					}
+					if (player->hasResourceExplored (dest)) return "the target cell is explored";
+					return {};
+				case eIntent::Approach:
+					if (in->target != kNoUnit)
+					{
+						const cUnit* t = model.getUnitFromID (in->target);
+						if (t == nullptr || t->getOwner() == player || !view.canSeeUnit (*t)) return "the target is gone or out of sight";
+					}
+					return {};
+				case eIntent::Retreat:
+					if (hpPct >= kRetreatDonePct) return "repaired: no need to retreat";
+					return {};
+				default:
+					return {};
+			}
+		};
+		std::string why;
+		const bool escape = kind == eIntent::Evacuate || kind == eIntent::Retreat;
+		if (in == nullptr)
+			why = "no order of ours (a loaded game or a foreign path): decide anew";
+		else if (in->dest != dest)
+			why = "the path is not the one we gave: decide anew";
+		else if (kind == eIntent::PerTurn)
+			why = "a per-turn order left a path (a detour around a blocked cell): decide anew";
+		else if (turn - in->turn > kMaxCarryTurns)
+			why = "the order is " + std::to_string (turn - in->turn) + " turns old: decide anew";
+		else if (enemyInRange())
+			why = "an enemy in range: fire";
+		else if ((kind == eIntent::Explore || kind == eIntent::Approach) && combat && isArmyRole (role) && shouldRetreat (v, enemies))
+			why = "damaged: retreat";
+		else if (!combat && kind != eIntent::Evacuate && world_.threatFor (v, v.getPosition(), kBuilderLayer) > 0)
+			why = "under enemy threat: get away";
+		else if ((kind == eIntent::Explore || kind == eIntent::Refit || kind == eIntent::Approach) && nearAlarm())
+			why = "base alarm near: defend";
+		else if (escape && (kind == eIntent::Retreat ? world_.groundFire (dest) > 0 : world_.threatFor (v, dest, kBuilderLayer) > 0))
+			why = "the escape cell is under enemy threat now";
+		else if (!escape && (combat ? world_.groundFire (stop) > 0 : world_.threatFor (v, stop, kBuilderLayer) > 0))
+			why = "it would stop under enemy threat this turn";
+		else
+			why = goalLost();
+		if (why.empty())
+			review_.decide (v, true, "the order still holds");
+		else
+			review_.decide (v, false, why);
+	}
+}
+
+//------------------------------------------------------------------------------
 // Шаг 11: заходы 2+ хода — приказы прошлого захода доиграны, поле новое. Только простое и
 // безопасное (см. ai_rule_brain.h): обнаруженный диверсант — огонь всеми, кто достаёт; враг,
 // которого оставшиеся выстрелы убьют наверняка, — ровно столько выстрелов, сколько нужно.
 // Один приказ Attack — один выстрел; у кого выстрелы остались, выстрелит в следующем заходе.
 std::vector<cOrder> cRuleBrain::decidePass (int playerId, const cModel& model, int pass)
+{
+	auto out = decidePassOrders (playerId, model, pass);
+	review_.note (model, out, world_.turn(), pass); // Р22: приказы захода — в память намерений
+	return out;
+}
+
+std::vector<cOrder> cRuleBrain::decidePassOrders (int playerId, const cModel& model, int pass)
 {
 	std::vector<cOrder> out;
 	wantPass_ = false;
@@ -1862,7 +2113,7 @@ std::vector<cOrder> cRuleBrain::decidePass (int playerId, const cModel& model, i
 	// стрелки: свободные боевые машины с выстрелом и боезапасом (разведчики не стреляют — разведка)
 	std::vector<const cVehicle*> shooters;
 	for (const auto& v : player->getVehicles())
-		if (isIdle (*v) && isCombatUnit (*v) && v->data.getAmmo() > 0 && !v->isAttacking() && !v->isBeingAttacked()
+		if (isIdle (*v, review_) && isCombatUnit (*v) && v->data.getAmmo() > 0 && !v->isAttacking() && !v->isBeingAttacked()
 			&& roles_.roleOf (*v) != eRole::Scout && roles_.roleOf (*v) != eRole::Submarine // шаг 13, ч. 2: подлодка стреляет только по кораблям (флот)
 			&& !air_.claimed (v->getId()) && !commando_.claimed (v->getId()) // шаг 13, ч. 3: самолёты и коммандос — свои модули
 			&& !isAirRole (roles_.roleOf (*v)) && roles_.roleOf (*v) != eRole::Commando)
@@ -2361,7 +2612,7 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 	// своя машина без дела мешает (площадка, выезд фабрики) — отогнать на 3–6 клеток от center
 	std::vector<unsigned int> shooed;
 	auto shooAway = [&] (const cVehicle& u, const cPosition& center, const char* reason) {
-		if (u.getOwner() != player || !isIdle (u)) return;
+		if (u.getOwner() != player || !isIdle (u, review_)) return;
 		if (std::find (shooed.begin(), shooed.end(), u.getId()) != shooed.end()) return;
 		for (const auto& o : builderOrders)
 			if (o.unitId == u.getId()) return;
@@ -2415,7 +2666,7 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			if (v.getBuildTurns() == 0) pushFinishBuild (v); // иначе здание не появится
 			continue;
 		}
-		if (v.isUnitMoving() || v.getMoveJob() != nullptr) continue;
+		if (review_.moveBusy (v)) continue; // Р22: едет по старому пути и не отпущен пересмотром
 
 		// заперт своими зданиями (высадка в угол) — освободить проход, как в GUI
 		if (const cBuilding* blocker = trappingBuilding (map, *player, factoryData, v))
@@ -2684,7 +2935,7 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			if (v.getBuildTurns() == 0 && !v.bandPosition) pushFinishBuild (v);
 			continue;
 		}
-		if (v.isUnitMoving() || v.getMoveJob() != nullptr || v.bandPosition) continue;
+		if (review_.moveBusy (v) || v.bandPosition) continue; // Р22: см. конструкторы
 		if (evacuate (v)) continue; // под угрозой — не строить, уйти
 		if (isStuck (v)) continue;
 
@@ -2848,7 +3099,7 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 		// шаг 13 (П8): минёр тоже берёт металл у базы (мина — единица металла), пока поле не заложено; Р7 (п. 113, 117) — и
 		// грузовое судно (боезапас флоту в море), и морской минёр (мины у верфи) — у верфи и зданий базы у воды
 		if ((vr != eRole::Repair && vr != eRole::Supply && vr != eRole::MineLayer && vr != eRole::SeaSupply && vr != eRole::SeaMineLayer)
-			|| !isIdle (v) || main == nullptr) continue;
+			|| !isIdle (v, review_) || main == nullptr) continue;
 		if (vr == eRole::MineLayer && defense_.mineField().empty()) continue;
 		if (vr == eRole::SeaMineLayer && navy_.seaMineField().empty()) continue;
 		const int cap = v.getStaticUnitData().storageResMax;
@@ -3267,7 +3518,7 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			{
 				if (!map.isValidPosition (c)) continue;
 				const cVehicle* u = map.getField (c).getVehicle();
-				if (u == nullptr || u->getOwner() != player || u->getId() == kv.first || !isIdle (*u)) continue;
+				if (u == nullptr || u->getOwner() != player || u->getId() == kv.first || !isIdle (*u, review_)) continue;
 				if (std::find (busy.begin(), busy.end(), u->getId()) != busy.end()) continue;
 				cPosition dest (-1, -1); // ближайшая свободная клетка вне площадок
 				for (int r = 1; r <= 4 && dest.x() < 0; ++r)
@@ -3524,7 +3775,7 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 				}
 				continue;
 			}
-			if (!isIdle (v)) continue;
+			if (!isIdle (v, review_)) continue;
 			if (blind)
 			{
 				// у центра базы — радар на колёсах
@@ -3624,7 +3875,7 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 		for (const auto& vp : player->getVehicles())
 		{
 			const cVehicle& v = *vp;
-			if (!isIdle (v) || !isArmyRole (roles_.roleOf (v)) || ops_.committed (v.getId())) continue;
+			if (!isIdle (v, review_) || !isArmyRole (roles_.roleOf (v)) || ops_.committed (v.getId())) continue;
 			if (std::find (opMoved_.begin(), opMoved_.end(), v.getId()) != opMoved_.end()) continue;
 			const bool chosen = refit_.count (v.getId()) != 0;
 			if (!chosen && (refitGap (v) < kRefitGap || !depotSafe)) continue;
@@ -3722,7 +3973,7 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 		for (const auto& vehicle : player->getVehicles())
 		{
 			const cVehicle& v = *vehicle;
-			if (!isIdle (v) || !isCombatUnit (v) || !isSupportRole (roles_.roleOf (v)) || opMovedId (v.getId())) continue;
+			if (!isIdle (v, review_) || !isCombatUnit (v) || !isSupportRole (roles_.roleOf (v)) || opMovedId (v.getId())) continue;
 			if (v.isBeingAttacked() || v.isAttacking()) continue; // связана выстрелом — не двинется
 			if (world_.groundFire (v.getPosition()) == 0) continue;
 			sStandoff s = findStandoff (model, view, world_, v, attackableTargets (model, world_, v), v.data.getRange(),
@@ -3737,7 +3988,7 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 	// (шаг 9: разведчики не стреляют — разведка; уходящая из-под огня поддержка — тоже)
 	std::vector<const cVehicle*> attackers;
 	for (const auto& vehicle : player->getVehicles())
-		if (isIdle (*vehicle) && isCombatUnit (*vehicle) && roles_.roleOf (*vehicle) != eRole::Scout && kite.count (vehicle->getId()) == 0
+		if (isIdle (*vehicle, review_) && isCombatUnit (*vehicle) && roles_.roleOf (*vehicle) != eRole::Scout && kite.count (vehicle->getId()) == 0
 			&& roles_.roleOf (*vehicle) != eRole::Submarine // шаг 13, ч. 2: выстрел раскрывает подлодку — бьёт только корабли (флот)
 			&& !isAirRole (roles_.roleOf (*vehicle)) && roles_.roleOf (*vehicle) != eRole::Commando) // шаг 13, ч. 3: самолёты и коммандос — свои модули
 			attackers.push_back (vehicle.get());
@@ -3798,51 +4049,7 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 	std::vector<unsigned int> covered;        // враги, на которых сил хватило: прочим к ним не идти
 	std::vector<cPosition> alarmTargets;      // клетки всех врагов тревоги — для резерва без дела
 	{
-		// ключевые клетки: шахты, фабрики, электростанции, центры исследований, идущая стройка
-		std::vector<cPosition> keys;
-		for (const auto& b : player->getBuildings())
-		{
-			const auto& bsd = b->getStaticUnitData();
-			if (bsd.buildingData.canMineMaxRes > 0 || !bsd.canBuild.empty() || bsd.produceEnergy > 0 || bsd.buildingData.canResearch
-				|| bsd.buildingData.canScore) // Р7: эко-сфера — её очки пропадут вместе с ней
-				for (const auto& c : footprintCells (b->getPosition(), b->getIsBig()))
-					keys.push_back (c);
-		}
-		for (const auto& v : player->getVehicles())
-			if (v->isUnitBuildingABuilding())
-				for (const auto& c : footprintCells (v->getPosition(), v->getIsBig()))
-					keys.push_back (c);
-
-		// враги у базы: вооружены; машины — видны сейчас или недавно (память)
-		std::vector<std::vector<const sEnemyMemory*>> groups;
-		for (const auto& kv : world_.enemies())
-		{
-			const sEnemyMemory& m = kv.second;
-			if (!m.armed()) continue;
-			if (!m.building && world_.age (m) > kAlarmFresh) continue;
-			long long dOur = std::numeric_limits<long long>::max();
-			for (const auto& k : keys)
-				dOur = std::min<long long> (dOur, (k - m.pos).l2NormSquared());
-			if (dOur > static_cast<long long> (kAlarmRadius) * kAlarmRadius) continue;
-			// враг ближе к своим зданиям, чем к нашим (базы рядом — Donuts), — не налёт на нас
-			long long dTheir = std::numeric_limits<long long>::max();
-			for (const auto& kv2 : world_.enemies())
-				if (kv2.second.building && kv2.second.owner == m.owner && kv2.first != m.id)
-					dTheir = std::min<long long> (dTheir, (kv2.second.pos - m.pos).l2NormSquared());
-			if (dTheir <= dOur) continue;
-			// группа — враги ближе kAlarmGroup друг к другу (порядок по id — детерминированно)
-			bool joined = false;
-			for (auto& g : groups)
-				if (std::any_of (g.begin(), g.end(), [&] (const sEnemyMemory* o) {
-						return (o->pos - m.pos).l2NormSquared() <= kAlarmGroup * kAlarmGroup;
-					}))
-				{
-					g.push_back (&m);
-					joined = true;
-					break;
-				}
-			if (!joined) groups.push_back ({&m});
-		}
+		const auto groups = alarmGroups (*player, world_);
 
 		// свободные бойцы: без цели огня в этом ходу, не отходят, не отогнаны оперативкой
 		std::vector<const cVehicle*> idleFighters;
@@ -3961,7 +4168,7 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 		std::vector<const cVehicle*> armyFree;
 		for (const cVehicle* v : opCtx.fighters)
 		{
-			if (!isArmyRole (roles_.roleOf (*v)) || !isIdle (*v) || ops_.committed (v->getId())) continue;
+			if (!isArmyRole (roles_.roleOf (*v)) || !isIdle (*v, review_) || ops_.committed (v->getId())) continue;
 			if (std::find (navyBusy.begin(), navyBusy.end(), v->getId()) != navyBusy.end() || shouldRetreat (*v, enemies)) continue;
 			armyFree.push_back (v);
 		}
@@ -4005,12 +4212,12 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 		for (const cVehicle* v : opCtx.fighters)
 		{
 			const unsigned int id = v->getId();
-			if (!isIdle (*v) || std::find (opMoved_.begin(), opMoved_.end(), id) != opMoved_.end() || defend.count (id) != 0
+			if (!isIdle (*v, review_) || std::find (opMoved_.begin(), opMoved_.end(), id) != opMoved_.end() || defend.count (id) != 0
 				|| shouldRetreat (*v, enemies))
 				busy.push_back (id);
 		}
 		for (const cVehicle* v : opCtx.scoutUnits)
-			if (!isIdle (*v) || opMovedId (v->getId()) || shouldRetreat (*v, enemies))
+			if (!isIdle (*v, review_) || opMovedId (v->getId()) || shouldRetreat (*v, enemies))
 				busy.push_back (v->getId());
 		ops_.plan (opCtx, busy, opTasks);
 	}
@@ -4149,7 +4356,7 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 
 	for (const auto& vehicle : player->getVehicles())
 	{
-		if (!isIdle (*vehicle)) continue;
+		if (!isIdle (*vehicle, review_)) continue;
 		if (std::find (opMoved_.begin(), opMoved_.end(), vehicle->getId()) != opMoved_.end()) continue; // отогнан с площадки
 
 		const auto& sd = vehicle->getStaticUnitData();
