@@ -144,7 +144,7 @@ sAiVersion aiVersion (const std::string& brain)
 		if (!v.settings.empty()) v.name += "~x";
 		return v;
 	}
-	// замороженные чемпионы: base — первое поколение (24.10.2026), base2 — 26.10, base3 — 26.10, base4 — 27.10.2026
+	// замороженные чемпионы: base — первое поколение (24.10.2026), base2 — 26.10, base3 — 26.10, base4 — 27.10, base5 — 28.10.2026
 	const std::string prefix = "base";
 	if (brain.rfind (prefix, 0) == 0)
 	{

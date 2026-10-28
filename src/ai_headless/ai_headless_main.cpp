@@ -36,6 +36,7 @@
 //           "base2" — замороженный итог шага 10 (ai_base2_*.cpp, 26.10.2026), эталон с шага 11.
 //           "base3" — замороженный итог шага 13, часть 1 (ai_base3_*.cpp, 26.10.2026), чемпион с части 2.
 //           "base4" — замороженный итог шага 13, часть 4а (Р7; ai_base4_*.cpp, 27.10.2026), чемпион после Р7.
+//           "base5" — замороженный итог шага 13, часть 4б (Р17; ai_base5_*.cpp, 28.10.2026), чемпион после Р17.
 //           "scenario" — сценарная проверка новых приказов (шаг 11, ai_scenario_brain.h): игроку 0
 //           при высадке добавляются машины сценария; точки высадки — MAXR_LANDING рядом.
 //           "external" — решает внешняя программа по HTTP (шаг 16, ai_external_brain.h):
@@ -63,6 +64,7 @@
 #include "ai_base2_rule_brain.h"
 #include "ai_base3_rule_brain.h"
 #include "ai_base4_rule_brain.h"
+#include "ai_base5_rule_brain.h"
 #include "ai_base_brain.h"
 #include "ai_brain.h"
 #include "ai_decision_journal.h"
@@ -138,9 +140,9 @@ static bool parseBrains (const std::string& spec, int nPlayers, std::vector<std:
 	}
 	for (const auto& item : items)
 	{
-		if (item != "rule" && item != "base" && item != "base2" && item != "base3" && item != "base4" && item != "llm" && item != "scenario" && item != "external" && item != "red1" && item != "red2")
+		if (item != "rule" && item != "base" && item != "base2" && item != "base3" && item != "base4" && item != "base5" && item != "llm" && item != "scenario" && item != "external" && item != "red1" && item != "red2")
 		{
-			err = "unknown brain '" + item + "' (allowed: rule, base, base2, base3, base4, llm, scenario, external, red1, red2)";
+			err = "unknown brain '" + item + "' (allowed: rule, base, base2, base3, base4, base5, llm, scenario, external, red1, red2)";
 			return false;
 		}
 	}
@@ -659,7 +661,7 @@ try
 		if (!parseBrains (spec, kPlayers, brains, err))
 		{
 			std::cout << "[ai_headless] ERROR: brain '" << spec << "' from " << source << ": " << err
-				<< ". Usage: rule | base | base2 | base3 | base4 | llm | rule,base4 | llm,rule" << std::endl;
+				<< ". Usage: rule | base | base2 | base3 | base4 | base5 | llm | rule,base5 | llm,rule" << std::endl;
 			return -1;
 		}
 		std::cout << "[ai_headless] brains (" << source << "):";
@@ -883,9 +885,10 @@ try
 	// (игрок 0 — клан 0, игрок 1 — клан 1, как прежде). Бесплатный набор высадки у кланов 0–6 одинаков (Axis Inc. не выбирается)
 	std::array<int, 2> clans {0, 1};
 	for (int i = 0; i < 2; ++i)
-		if (brains[i] == "rule")
+		if (brains[i] == "rule" || brains[i] == "base5")
 		{
-			const ai::sClanChoice c = ai::ruleChooseClan (*staticMap, landing.landing[i]);
+			const ai::sClanChoice c = brains[i] == "rule" ? ai::ruleChooseClan (*staticMap, landing.landing[i])
+				: [&] { const auto b5 = ai::base5::ruleChooseClan (*staticMap, landing.landing[i]); return ai::sClanChoice {b5.clan, b5.why}; }();
 			if (c.clan >= 0) clans[i] = c.clan;
 			std::cout << "[ai_headless] clan p" << i << "=" << clans[i] << " (" << c.why << ")" << std::endl;
 		}
@@ -1003,6 +1006,8 @@ try
 			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::base3::cRuleBrain>());
 		else if (brains[i] == "base4")
 			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::base4::cRuleBrain>());
+		else if (brains[i] == "base5")
+			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::base5::cRuleBrain>());
 		else if (brains[i] == "scenario")
 			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::cScenarioBrain>());
 		else if (brains[i] == "red1")
