@@ -64,6 +64,8 @@ namespace
 	constexpr double autoUiScaleTolerance = 0.9;
 	/** The scales of the user interface are multiples of this step. */
 	constexpr double uiScaleStep = 0.5;
+	/** The mouse cursor is this part of the scale of the user interface (but at least 1, see computeCursorScale). */
+	constexpr double cursorScalePerUiScale = 2. / 3.;
 	/** The screen buffer is recreated for a new window size not more often than this (milliseconds). */
 	constexpr Uint32 pictureSizeUpdateInterval = 150;
 	/** The default size of a window that is not maximized is a multiple of this size. */
@@ -271,6 +273,14 @@ bool cVideo::applyPictureSize (bool force)
 	const auto displayScale = getDisplayScale();
 	uiScaleFactor = computeUiScale (uiScale, outputSize, displayScale);
 	const auto size = computePictureSize (outputSize, uiScaleFactor);
+
+	// the cursor follows the scale of the user interface at once (also when the picture keeps its size)
+	const double newCursorScale = computeCursorScale (uiScaleFactor);
+	if (std::abs (newCursorScale - cursorScale) > 1e-9)
+	{
+		cursorScale = newCursorScale;
+		cursorScaleChanged();
+	}
 
 	if (!force && buffer != nullptr && buffer->w == size.x() && buffer->h == size.y())
 	{
@@ -536,13 +546,6 @@ void cVideo::updatePresentation()
 		++presentationVersion;
 	}
 	presentation = next;
-
-	const int newCursorScale = std::max (1, static_cast<int> (std::lround (scaling.scale * windowWidth / outputWidth)));
-	if (newCursorScale != cursorScale)
-	{
-		cursorScale = newCursorScale;
-		cursorScaleChanged();
-	}
 }
 
 //------------------------------------------------------------------------------
@@ -1143,6 +1146,13 @@ bool isUiScaleFitting (int uiScalePercent, const cPosition& outputSize)
 	if (uiScalePercent <= 0) return true; // the automatic scale always fits
 	const double scale = uiScalePercent / 100.;
 	return computeUiScale (uiScalePercent, outputSize, 1.) == scale || scale <= 1.;
+}
+
+//------------------------------------------------------------------------------
+double computeCursorScale (double uiScale)
+{
+	if (!(uiScale > 0.)) return 1.; // unknown (or not a number)
+	return std::max (1., uiScale * cursorScalePerUiScale);
 }
 
 //------------------------------------------------------------------------------

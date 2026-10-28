@@ -137,9 +137,11 @@ public:
 	cPosition windowToBuffer (const cPosition&) const;
 
 	/**
-	 * Integer factor for the mouse cursor, matching the current scale of the picture.
+	 * Factor for the mouse cursor (pixels of the window per pixel of the cursor image),
+	 * following the scale of the user interface (see @ref computeCursorScale).
+	 * @ref cursorScaleChanged is emitted, when it changes.
 	 */
-	int getCursorScale() const { return cursorScale; }
+	double getCursorScale() const { return cursorScale; }
 
 	/**
 	 * Increased each time the mapping from window positions to buffer positions changes.
@@ -303,7 +305,7 @@ private:
 	};
 	sPresentation presentation;
 	unsigned int presentationVersion = 0;
-	int cursorScale = 1;
+	double cursorScale = 1.;
 
 	cSignalConnectionManager signalConnectionManager;
 };
@@ -385,6 +387,15 @@ cPosition computePictureSize (const cPosition& outputSize, double uiScale);
  * so that it is used without being reduced.
  */
 bool isUiScaleFitting (int uiScalePercent, const cPosition& outputSize);
+
+/**
+ * The scale of the mouse cursor for a scale of the user interface:
+ * two thirds of it (the automatic scale 3 of a 4K display at 125% gives 2:
+ * the hand is 36 pixels, about 1.5 standard arrows of the system), but at least 1
+ * (the cursor images are not made smaller than drawn).
+ * Equal for the menus and the game, so that the cursor does not change its size between them.
+ */
+double computeCursorScale (double uiScale);
 
 /**
 * Works like SDL_BlittSurface.
