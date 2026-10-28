@@ -296,6 +296,7 @@ private:
 
 	void connectSignals();
 	void updateIdentity();
+	std::string savedGameAiName (int me) const;
 	void setupLobby();
 	void startPreparation();
 	void chooseLanding (eLandingPositionState);
@@ -339,6 +340,7 @@ private:
 	std::shared_ptr<cGameSettings> lobbySettings;
 	std::shared_ptr<cStaticMap> lobbyMap;
 	bool savedGameSelected = false;
+	cSaveGameInfo lobbySave;     // выбранное хостом сохранение (игроки — для имени, savedGameAiName)
 	std::string lastNotReadyKey; // причины «не готов», о которых уже сказано в чат (пусто — готов)
 	std::string mapDownload;     // карта, которую качаю у хоста
 	std::string mapDownloaded;   // карта скачана — хост должен выбрать её ещё раз
@@ -460,6 +462,7 @@ void cAiClient::connectSignals()
 		lobbySettings = settings;
 		lobbyMap = map;
 		savedGameSelected = save.number >= 0;
+		lobbySave = save;
 		optionsReceived = true;
 		if (lobbyMap && lobbyMap->isValid())
 		{
@@ -573,6 +576,15 @@ void cAiClient::updateIdentity()
 	std::string name = rank == 0 ? opt.name : opt.name + " " + std::to_string (rank + 1);
 	for (int k = rank + 2; others ([&] (const cPlayerBasicData& p) { return p.getName() == name && p.getNr() < me; }) && k < 20; ++k)
 		name = opt.name + " " + std::to_string (k);
+	if (savedGameSelected)
+	{
+		const std::string saved = savedGameAiName (me);
+		if (!saved.empty())
+		{
+			if (saved != lobby->getLocalPlayer().getName()) say ("сохранение: в нём ИИИ «" + saved + "» - беру это имя (хост узнаёт игроков сохранения по имени)");
+			name = saved;
+		}
+	}
 
 	cRgbColor color = lobby->getLocalPlayer().getColor();
 	if (lobby->getLocalPlayer().getName() != name || others ([&] (const cPlayerBasicData& p) { return sameColor (p.getColor(), color); }))
@@ -625,6 +637,28 @@ void cAiClient::updateIdentity()
 	else if (explained && !savedGameSelected && lobbyMap)
 		chat ("Готов: карта \"" + utf8::to_string (lobbyMap->getFilename()) + "\", \"По очереди\" - жмите \"OK\". / Ready: map "
 			+ utf8::to_string (lobbyMap->getFilename()) + ", Turn based - press OK.");
+}
+
+//------------------------------------------------------------------------------
+// Хост выбрал сохранение: сервер узнаёт игроков сохранения по имени (lobbyserver.cpp, byPlayerName), а ИИИ в нём
+// может зваться иначе — старые партии «AI rule», прежние версии «SI-…». Своего имени (opt.name, «… 2») в сохранении
+// нет — взять первое имя ИИИ из сохранения (isSiAiPlayerName, не побеждённого), не занятое игроком лобби с меньшим
+// номером (два ИИИ расходятся по порядку подключения). Пусто — имя по обычным правилам.
+std::string cAiClient::savedGameAiName (int me) const
+{
+	const auto inSave = [this] (const std::string& n) {
+		return std::any_of (lobbySave.players.begin(), lobbySave.players.end(), [&] (const cPlayerBasicData& p) { return p.getName() == n; });
+	};
+	if (inSave (opt.name)) return {};
+	for (const auto& p : lobbySave.players)
+	{
+		if (p.isDefeated() || !isSiAiPlayerName (p.getName())) continue;
+		const bool taken = std::any_of (lobbyPlayers.begin(), lobbyPlayers.end(), [&] (const cPlayerBasicData& o) {
+			return o.getNr() != me && o.getNr() < me && o.getName() == p.getName();
+		});
+		if (!taken) return p.getName();
+	}
+	return {};
 }
 
 //------------------------------------------------------------------------------
