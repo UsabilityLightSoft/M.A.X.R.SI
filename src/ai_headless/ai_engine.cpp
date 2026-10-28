@@ -69,6 +69,7 @@ nlohmann::json orderToJson (const cOrder& o)
 	j["unitId"] = o.unitId;
 	// шаг 13: unitId2 пишется, когда задан (kNoUnit — нет; 0 — настоящая машина, пишется)
 	if (o.unitId2 != kNoUnit) j["unitId2"] = o.unitId2;
+	if (o.blindFire) j["blind"] = true; // Р17: огонь наугад по клетке без видимой цели
 	// шаг 11: Move с unitId2 — что сделать с ним в конце пути (выстрел — по умолчанию, не пишется)
 	if (o.moveEnd != eMoveEnd::Attack) j["moveEnd"] = toString (o.moveEnd);
 	if (is ({eOrderType::Move, eOrderType::Attack, eOrderType::Build, eOrderType::BuildPath, eOrderType::ActivateUnit, eOrderType::FinishBuild})
@@ -558,6 +559,8 @@ void cAiEngine::executeOrder (cClient& client, const cOrder& o)
 			const auto& field = model.getMap()->getField (o.position);
 			const cUnit* target = field.getTopBuilding();
 			if (target == nullptr) target = field.getVehicle();
+			// Р17: огонь наугад — цели мы не знаем (сервер ударит по клетке и попадёт в то, что там есть на самом деле)
+			if (o.blindFire) target = nullptr;
 			client.attack (*u, o.position, target);
 			return;
 		}

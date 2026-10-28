@@ -350,6 +350,15 @@ void cBaseDefense::update (const cModel& model, const cPlayer& player, const cWo
 			{"type", sd.getDefaultName()}, {"pos", {{"x", u->getPosition().x()}, {"y", u->getPosition().y()}}}});
 	}
 	reportedDisabled_.clear();
+	// Р17 (П22): урон из ниоткуда у базы — как выключение: пехота ищет у клетки, тревога «диверсант»
+	for (const auto& p : hiddenHits_)
+	{
+		newDisable = true;
+		recentDisables_.emplace_back (p, turn);
+		events_.push_back ({{"event", "defense"}, {"level", "operational"}, {"what", "hidden hit"}, {"pos", {{"x", p.x()}, {"y", p.y()}}},
+			{"why", "damage from nowhere at the base: a hidden commando (or a gun from the fog) — infantry sweeps the cells"}});
+	}
+	hiddenHits_.clear();
 	// поиск у выключенного здания — 4 хода после выключения
 	recentDisables_.erase (std::remove_if (recentDisables_.begin(), recentDisables_.end(), [turn] (const auto& r) { return turn - r.second > 4; }),
 		recentDisables_.end());

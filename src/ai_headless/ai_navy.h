@@ -84,6 +84,8 @@ public:
 	bool shipyardEarly() const { return early_; }
 	// Р7 (п. 114): пути по суше к врагу нет (упор «море») — сухопутная армия только по нужде обороны
 	bool landLocked() const { return landLocked_; }
+	// Р17 (П22): урон из ниоткуда у воды (ai_tactics) — подлодка подозревается 20 ходов (до update)
+	void noteSuspectedSub (const cPosition& p, int turn) { subSuspectUntil_ = turn + 20; subSuspectPos_ = p; }
 	// Р7 (п. 117): морские мины у своей верфи — клетки поля без своих мин (по порядку закладки); минёр берёт металл у базы
 	const std::vector<cPosition>& seaMineField() const { return seaMineField_; }
 	bool wantDock() const { return wantDock_; }
@@ -239,6 +241,9 @@ private:
 	cPosition guardPoint_ {-1, -1};
 	int guardsWanted_ = 0;
 	int enemySubs_ = 0;      // подлодок врага в памяти (не старше 20 ходов)
+	int subSuspectUntil_ = -1;          // Р17 (П22): урон из ниоткуда у воды — подлодка подозревается до этого хода
+	cPosition subSuspectPos_ {-1, -1};
+	bool subSuspectNoted_ = false;
 	int enemyShipMetal_ = 0; // металла в вооружённых кораблях врага (память)
 	int coastTargets_ = 0;   // зданий врага, до которых с воды нашего моря достанет канонерка
 	std::string lastPick_;

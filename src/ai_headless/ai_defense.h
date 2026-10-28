@@ -109,6 +109,8 @@ public:
 
 	// свои юниты, выключенные коммандос врага с прошлого хода (движок ИИИ, сигнал модели) — тревога
 	void noteDisabled (const std::vector<unsigned int>& ids) { reportedDisabled_.insert (reportedDisabled_.end(), ids.begin(), ids.end()); }
+	// Р17 (П22): урон из ниоткуда у базы на суше (ai_tactics) — диверсант или пушка из тумана: тревога «диверсант», пехота обходит клетки
+	void noteHiddenHit (const cPosition& p) { hiddenHits_.push_back (p); }
 	// раз в ход, до оперативки: картина карты, уровни, что построить, посты охраны
 	void update (const cModel& model, const cPlayer& player, const cWorldModel& world, const cRoleBook& roles,
 		const cComposition& comp, const cSubBase* main, int income, int turn);
@@ -191,6 +193,7 @@ private:
 	int commandoAlarmUntil_ = 0;
 	std::vector<unsigned int> disabledSeen_;    // свои выключенные юниты, по которым уже подняли тревогу
 	std::vector<unsigned int> reportedDisabled_; // выключены с прошлого хода (noteDisabled)
+	std::vector<cPosition> hiddenHits_;          // Р17 (П22): урон из ниоткуда у базы с прошлого хода (noteHiddenHit)
 	std::vector<std::pair<cPosition, int>> recentDisables_; // клетка выключенного здания, ход — пост рядом ищет каждый ход
 	std::vector<cPosition> alarmSites_;          // клетки (левый верхний угол) выключенных зданий — стены туда сначала
 	cPosition center_ {-1, -1};

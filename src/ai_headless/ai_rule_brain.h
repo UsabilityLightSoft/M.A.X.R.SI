@@ -33,6 +33,7 @@
 #include "ai_navy.h"
 #include "ai_roles.h"
 #include "ai_survey.h"
+#include "ai_tactics.h"
 #include "ai_tech.h"
 #include "ai_world_model.h"
 
@@ -121,6 +122,8 @@ private:
 	cEcoPlan eco_;
 	// Р7 (п. 104, схема Владыки): умный геолог (ai_survey)
 	cSurvey survey_;
+	// Р17 (П19–П22, огонь наугад): тактика заходов (ai_tactics)
+	cTactics tactics_;
 	// шаг 13: минёр уже включил закладку в этом ходу — в следующем заходе выключить
 	std::vector<unsigned int> minesToggled_;
 	// Р7 (п. 114): потолок сухопутной армии «пути по суше нет» уже записан в журнал

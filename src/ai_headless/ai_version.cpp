@@ -27,6 +27,7 @@ constexpr sExperimentKnob kExperimentKnobs[] = {
 	{"MAXR_AIR", true},
 	{"MAXR_ARMADA", true}, // Р17 (п. 125)
 	{"MAXR_AWAC_HIDE", true},
+	{"MAXR_BLIND", true}, // Р17: огонь наугад
 	{"MAXR_CMD_TRAIN", false},
 	{"MAXR_CMD_TRAIN_RANK", false},
 	{"MAXR_CMD_TURN", false},
@@ -34,9 +35,11 @@ constexpr sExperimentKnob kExperimentKnobs[] = {
 	{"MAXR_EARLY_DEFENDER", true}, // Р17 (п. 55)
 	{"MAXR_ECO", true},
 	{"MAXR_FACTORY_ENERGY", true}, // Р17 (п. 55)
+	{"MAXR_HITRUN", true}, // Р17 (П19, П20)
 	{"MAXR_LANDLOCK", true},
 	{"MAXR_LANDLOCK_FACTORIES", true}, // Р17 (п. 142)
 	{"MAXR_NAVY", true},
+	{"MAXR_OUTRANGED", true}, // Р17 (П21)
 	{"MAXR_SCOUT", true},
 	{"MAXR_SEAMINES", true},
 	{"MAXR_SEASUPPLY", true},

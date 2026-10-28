@@ -345,6 +345,20 @@ void cNavy::update (const cModel& model, const cPlayer& player, const cWorldMode
 				if (defense.seaLabelOf (m.pos + cPosition (dx, dy)) == homeSea_) reach = true;
 		if (reach) ++coastTargets_;
 	}
+	// Р17 (П22): урон из ниоткуда у воды (ai_tactics) — подлодка, которой мы не видели: как виденная — корвет (только он её видит)
+	// и мины у верфи, 20 ходов
+	if (turn_ <= subSuspectUntil_ && enemySubs_ == 0)
+	{
+		enemySubs_ = 1;
+		if (!subSuspectNoted_)
+		{
+			subSuspectNoted_ = true;
+			event ("sub suspected", {{"pos", {subSuspectPos_.x(), subSuspectPos_.y()}}, {"until", subSuspectUntil_},
+				{"why", "damage from nowhere near water: a submarine we do not see — corvettes (only they see it)"}});
+		}
+	}
+	else if (turn_ > subSuspectUntil_)
+		subSuspectNoted_ = false;
 
 	// где искать врага (разведка подлодок): середина виденных зданий врага; не видели — точка напротив нашей базы
 	// (карты 1 на 1 симметричны — догадка, пишется в журнал при смене)

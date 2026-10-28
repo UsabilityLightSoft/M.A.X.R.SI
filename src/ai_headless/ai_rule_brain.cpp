@@ -1548,6 +1548,14 @@ std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 		const auto* tank = player->getLastUnitData (kIdTank);
 		const auto* fighter = player->getLastUnitData (kIdFighter);
 		world_.buildThreat (*model.getMap(), tank ? tank->getArmor() : 0, fighter ? fighter->getArmor() : 0);
+		// Р17 (П22): урон из ниоткуда — у воды подлодка (флоту корвет), у базы на суше диверсант (тревога, пехота ищет); свои
+		// выключенные с прошлого хода — места огня наугад
+		tactics_.update (model, *player, world_, defense_, turn);
+		for (const auto& h : tactics_.hiddenHits())
+		{
+			if (h.water) navy_.noteSuspectedSub (h.pos, turn);
+			else if (h.base) defense_.noteHiddenHit (h.pos);
+		}
 		// роли машин и состав армии (шаг 9) — до оперативки (производство) и микро (бой)
 		roles_.build (model, *player);
 		comp_.update (model, *player, roles_, world_, turn);
@@ -1662,6 +1670,7 @@ std::vector<nlohmann::json> cRuleBrain::takeJournalEvents()
 	for (auto& e : air_.takeEvents()) events.push_back (std::move (e)); // шаг 13, часть 3: авиация
 	for (auto& e : eco_.takeEvents()) events.push_back (std::move (e)); // Р7: эко-сферы
 	for (auto& e : survey_.takeEvents()) events.push_back (std::move (e)); // Р7: геолог
+	for (auto& e : tactics_.takeEvents()) events.push_back (std::move (e)); // Р17: тактика заходов
 	for (auto& e : extraEvents_) events.push_back (std::move (e));
 	extraEvents_.clear();
 	return events;
@@ -1744,11 +1753,6 @@ std::vector<cOrder> cRuleBrain::decidePass (int playerId, const cModel& model, i
 	const bool modulesWant = air_.wantsPass() || commando_.wantsPass();
 	std::vector<sEnemy> enemies;
 	collectVisibleEnemies (*player, model, view, enemies);
-	if (enemies.empty())
-	{
-		wantPass_ = modulesWant;
-		return out;
-	}
 
 	// стрелки: свободные боевые машины с выстрелом и боезапасом (разведчики не стреляют — разведка)
 	std::vector<const cVehicle*> shooters;
@@ -1758,9 +1762,41 @@ std::vector<cOrder> cRuleBrain::decidePass (int playerId, const cModel& model, i
 			&& !air_.claimed (v->getId()) && !commando_.claimed (v->getId()) // шаг 13, ч. 3: самолёты и коммандос — свои модули
 			&& !isAirRole (roles_.roleOf (*v)) && roles_.roleOf (*v) != eRole::Commando)
 			shooters.push_back (v.get());
+	// Р17 (П19, П20, огонь наугад): после выстрелов этого захода — раненая, что стреляла, отъезжает из «удара с подъезда» врага;
+	// свободные стрелки (видимой цели в дальности нет) бьют наугад по клеткам у своих выключенных (диверсант рядом)
+	const auto tacticsTail = [&] (const std::vector<bool>* usedShooters) {
+		std::set<unsigned int> ordered;
+		for (const auto& o : out) ordered.insert (o.unitId);
+		for (auto& o : tactics_.hitAndRun (model, *player, view, world_, roles_, ops_, ordered, pass))
+		{
+			ordered.insert (o.unitId);
+			out.push_back (std::move (o));
+		}
+		std::vector<const cVehicle*> free;
+		for (size_t a = 0; a < shooters.size(); ++a)
+		{
+			if ((usedShooters != nullptr && (*usedShooters)[a]) || ordered.count (shooters[a]->getId()) != 0) continue;
+			bool target = false;
+			for (const auto& e : enemies)
+				if (shooters[a]->canAttackObjectAt (e.pos, view, false))
+				{
+					target = true;
+					break;
+				}
+			if (!target) free.push_back (shooters[a]);
+		}
+		for (auto& o : tactics_.blindFire (model, *player, view, world_, free, pass)) out.push_back (std::move (o));
+	};
+	if (enemies.empty())
+	{
+		tacticsTail (nullptr);
+		wantPass_ = modulesWant || !out.empty();
+		return out;
+	}
 	if (shooters.empty())
 	{
-		wantPass_ = modulesWant; // как прежде: стрелков нет — заход только ради модулей части 3
+		tacticsTail (nullptr);
+		wantPass_ = modulesWant || !out.empty(); // как прежде: стрелков нет — заход только ради модулей части 3 (и Р17: отход)
 		return out;
 	}
 	std::vector<bool> used (shooters.size(), false);
@@ -1837,6 +1873,7 @@ std::vector<cOrder> cRuleBrain::decidePass (int playerId, const cModel& model, i
 			fire (std::get<3> (c[k]), e, "finish off (sure kill)");
 		++kills;
 	}
+	tacticsTail (&used); // Р17: «выстрелил — отъехал», огонь наугад
 
 	// ещё заход — если стреляли: у стрелков могли остаться выстрелы, а поле изменилось
 	wantPass_ = !out.empty() || modulesWant;
@@ -3900,6 +3937,8 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 		return false;
 	};
 	auto chebDist = [] (const cPosition& a, const cPosition& b) { return std::max (std::abs (a.x() - b.x()), std::abs (a.y() - b.y())); };
+	const char* outrangedEnv = std::getenv ("MAXR_OUTRANGED"); // Р17 (П21): опыт «вариант против варианта» — =0 выключает
+	const bool outrangedOff = outrangedEnv != nullptr && outrangedEnv[0] == '0';
 	// шаг 13 (П4): база ослепла (радары нужны, а работающих нет; мобильного радара нет) — первый по id
 	// разведчик (обзор 9) встаёт у центра базы, пока радары не вернутся
 	unsigned int radarBackupScout = kNoUnit;
@@ -4396,6 +4435,58 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 				// шаг 9: поддержка — встать вне «удара с подъезда» и бить с предельной дальности
 				if (isSupportRole (role) && supportStandoff (*vehicle, n->pos, vehicle->data.getRange() + 10, "support: standoff"))
 					continue;
+				// Р17 (П21): выстрел бережём на ответный огонь — ждём у края зоны огня врага (ниже); исключение — враг бьёт дальше нас:
+				// у края его огня мы вне своей дальности, он подъедет и выстрелит первым, ответа не будет. Тогда — доехать и выстрелить
+				// в этот ход, иначе — уйти из его «удара с подъезда»
+				if (!isSupportRole (role) && n->unit != nullptr && n->unit->isAVehicle() && n->range > vehicle->data.getRange()
+					&& vehicle->data.getShots() > 0 && !outrangedOff)
+				{
+					cPathCalculator pc (*vehicle, view, n->pos, true);
+					auto path = pathToVector (pc.calcPath());
+					cutToTurn (*vehicle, view, path);
+					const unsigned int shot = path.empty() ? kNoUnit : moveFireTarget (*vehicle, path);
+					if (shot != kNoUnit)
+					{
+						tactics_.noteOutranged (vehicle->getId(), true, vehicle->getPosition(), path.back(), n->range, vehicle->data.getRange());
+						cOrder o;
+						o.type = eOrderType::Move;
+						o.playerId = playerId;
+						o.unitId = vehicle->getId();
+						o.unitId2 = shot;
+						o.path = std::move (path);
+						o.position = o.path.back();
+						o.level = "micro";
+						o.reason = "outranged: close in and fire first (П21)";
+						out.push_back (std::move (o));
+						++stats_.moveFire;
+						continue;
+					}
+					if (world_.groundStrike (vehicle->getPosition()) > 0)
+					{
+						cPosition safe;
+						if (world_.nearestSafeCell (*vehicle, view, vehicle->getPosition(), 8, player->getLandingPos(), safe, eThreatLayer::Strike)
+							&& safe != vehicle->getPosition())
+						{
+							auto away = threatAwarePath (*vehicle, view, safe, world_, eThreatLayer::Strike);
+							cutToTurn (*vehicle, view, away);
+							if (!away.empty())
+							{
+								tactics_.noteOutranged (vehicle->getId(), false, vehicle->getPosition(), away.back(), n->range, vehicle->data.getRange());
+								cOrder o;
+								o.type = eOrderType::Move;
+								o.playerId = playerId;
+								o.unitId = vehicle->getId();
+								o.path = std::move (away);
+								o.position = o.path.back();
+								o.level = "micro";
+								o.reason = "outranged: out of its reach (П21)";
+								out.push_back (std::move (o));
+								continue;
+							}
+						}
+					}
+					// вне его досягаемости (или уйти некуда) — прежнее сближение до края зоны огня
+				}
 				if (world_.groundFire (vehicle->getPosition()) == 0)
 				{
 					cPathCalculator pc (*vehicle, view, n->pos, true);
