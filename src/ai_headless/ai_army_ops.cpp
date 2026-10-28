@@ -525,6 +525,7 @@ nlohmann::json cArmyOps::toJson() const
 	j["reserve"] = reserve_;
 	j["cooldownUntil"] = cooldownUntil_;
 	j["enemyArmy"] = {{"count", totalDef_.count}, {"force", needOf (totalDef_)}};
+	j["columnSteps"] = columnSteps_; // Р17: шагов лидера, разрешённых только узостью
 	return j;
 }
 
@@ -1715,6 +1716,24 @@ std::vector<cPosition> cArmyOps::localPath (const sContext& ctx, const cVehicle&
 }
 
 //------------------------------------------------------------------------------
+// Р17 (колонна в узостях, отчёт части 1 §11: на Gen_Straits 252 машины не прошли перешеек за 500 ходов): сколько машин нужно рядом с
+// лидером, — не больше половины проходимых для лидера клеток (той же области, без учёта машин) в радиусе r: в узость (перешеек, мост)
+// столько машин не встанет, и лидер ждал группу вечно. На открытой местности — как прежде (N). MAXR_COLUMN=0 — как до Р17
+int cArmyOps::columnNeed (const sContext& ctx, const cVehicle& leader, const cPosition& at, int r, int N) const
+{
+	static const char* const env = std::getenv ("MAXR_COLUMN");
+	static const bool off = env != nullptr && env[0] == '0';
+	if (off || N <= 3) return N;
+	const int region = ctx.world->regionOf (leader, at);
+	if (region < 0) return N;
+	int room = 0;
+	for (int dy = -r; dy <= r; ++dy)
+		for (int dx = -r; dx <= r; ++dx)
+			if (ctx.world->regionOf (leader, at + cPosition (dx, dy)) == region) ++room;
+	return std::clamp (room / 2, 3, N);
+}
+
+//------------------------------------------------------------------------------
 void cArmyOps::planAdvance (const sContext& ctx, sOperation& op, const std::vector<unsigned int>& busy,
 	std::vector<cPosition>& reserved, std::map<unsigned int, sOpTask>& tasks)
 {
@@ -1729,7 +1748,11 @@ void cArmyOps::planAdvance (const sContext& ctx, sOperation& op, const std::vect
 	int near = 0;
 	for (unsigned int id : op.members)
 		if (const auto it = fighterById_.find (id); it != fighterById_.end() && cheb (it->second->getPosition(), L0) <= Rcoh) ++near;
-	const bool cohesive = near * 100 >= kCohesionPct * N;
+	// Р17 (колонна в узостях): сплочённость — от вместимости округи лидера (узость, мост, перешеек — столько машин рядом не встанет)
+	const int Neff = columnNeed (ctx, leader, L0, Rcoh, N);
+	const bool cohesive = near * 100 >= kCohesionPct * Neff;
+	if (Neff < N && cohesive && near * 100 < kCohesionPct * N)
+		++columnSteps_;
 	const std::string tag = "op " + std::to_string (op.id) + " " + opStateName (op.state);
 	cPosition L = L0;
 	if (!contains (busy, leader.getId()))
@@ -1795,7 +1818,9 @@ void cArmyOps::planAttack (const sContext& ctx, sOperation& op, const std::vecto
 	int near = 0;
 	for (unsigned int id : op.members)
 		if (const auto it = fighterById_.find (id); it != fighterById_.end() && cheb (it->second->getPosition(), L0) <= Rcoh) ++near;
-	const bool cohesive = near * 100 >= kCohesionPct * N;
+	// Р17 (колонна в узостях): как в походе — от вместимости округи лидера
+	const int Neff = lit != fighterById_.end() ? columnNeed (ctx, *lit->second, L0, Rcoh, N) : N;
+	const bool cohesive = near * 100 >= kCohesionPct * Neff;
 	// слаженный вход: сил хватает и группа рядом — все входят в зону огня в один ход
 	const bool enter = op.force >= op.need && cohesive;
 	std::vector<const sEnemyMemory*> foes; // видимые вооружённые враги у группы

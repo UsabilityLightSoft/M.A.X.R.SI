@@ -425,6 +425,10 @@ constexpr int kSmallFactoryIncome = 10;
 constexpr int kMaxSmallFactories = 1;
 // Р7 (п. 114): пути по суше к врагу нет — сухопутной армии сверх этого (с очередью) — только из лишнего металла
 constexpr int kLandArmyCap = 16;
+// Р17 (п. 142): и больших фабрик не больше (две — центрам исследований нужны две фабрики, kResearchMinFactories)
+constexpr int kLandLockFactories = 2;
+// Р17 (п. 55): «танк-защитник раньше конструкторов» — только до этого хода (ранний раш)
+constexpr int kEarlyDefenderTurn = 120;
 // Р7 (п. 94): план эко-сферы не начался за столько ходов — снять, площадку не брать kEcoBadSiteTurns ходов
 constexpr int kEcoPlanStale = 12;
 constexpr int kEcoBadSiteTurns = 40;
@@ -1522,6 +1526,111 @@ const cBuilding* refillSource (const cPlayer& player, const cSubBase* main, cons
 } // namespace
 
 //------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+// Р17 (п. 86, П26): клан по карте и своей высадке (см. ai_rule_brain.h)
+sClanChoice ruleChooseClan (const cStaticMap& map, const cPosition& landing)
+{
+	sClanChoice out;
+	const char* clanEnv = std::getenv ("MAXR_CLAN");
+	if (clanEnv != nullptr && clanEnv[0] == '0')
+	{
+		out.why = "MAXR_CLAN=0: the clan by seat";
+		return out;
+	}
+	if (clanEnv != nullptr && clanEnv[0] == 'c' && clanEnv[1] >= '0' && clanEnv[1] <= '6') // опыт: MAXR_CLAN=cN — клан N
+	{
+		out.clan = clanEnv[1] - '0';
+		out.why = std::string ("MAXR_CLAN=") + clanEnv + ": the clan is forced (experiment)";
+		return out;
+	}
+	constexpr int kChosen = 0, kMusashi = 4; // The Chosen, Musashi (data/clans.json)
+	const int W = map.getSize().x(), H = map.getSize().y();
+	const size_t N = static_cast<size_t> (W) * H;
+	auto tankGround = [&] (const cPosition& p) { return map.isValidPosition (p) && !map.isWater (p) && !map.isCoast (p) && !map.isBlocked (p); };
+	// области суши танка и водоёмы (8-связность)
+	std::vector<int> land (N, -1), sea (N, -1);
+	std::vector<int> landSizes, seaSizes, queue;
+	for (size_t s = 0; s < N; ++s)
+	{
+		const cPosition sp (static_cast<int> (s % W), static_cast<int> (s / W));
+		const bool isLand = tankGround (sp), isSea = map.isWater (sp);
+		if ((!isLand || land[s] >= 0) && (!isSea || sea[s] >= 0)) continue;
+		std::vector<int>& lab = isLand ? land : sea;
+		std::vector<int>& sizes = isLand ? landSizes : seaSizes;
+		const int id = static_cast<int> (sizes.size());
+		lab[s] = id;
+		queue.assign (1, static_cast<int> (s));
+		for (size_t qi = 0; qi < queue.size(); ++qi)
+		{
+			const int cx = queue[qi] % W, cy = queue[qi] / W;
+			for (int dy = -1; dy <= 1; ++dy)
+				for (int dx = -1; dx <= 1; ++dx)
+				{
+					const cPosition n (cx + dx, cy + dy);
+					if (n.x() < 0 || n.y() < 0 || n.x() >= W || n.y() >= H) continue;
+					const size_t o = static_cast<size_t> (n.y()) * W + n.x();
+					if (lab[o] >= 0 || (isLand ? !tankGround (n) : !map.isWater (n))) continue;
+					lab[o] = id;
+					queue.push_back (static_cast<int> (o));
+				}
+		}
+		sizes.push_back (static_cast<int> (queue.size()));
+	}
+	auto regionNear = [&] (const cPosition& p) {
+		for (int r = 0; r <= 4; ++r)
+			for (int dy = -r; dy <= r; ++dy)
+				for (int dx = -r; dx <= r; ++dx)
+				{
+					if (std::max (std::abs (dx), std::abs (dy)) != r) continue;
+					const cPosition c = p + cPosition (dx, dy);
+					if (c.x() < 0 || c.y() < 0 || c.x() >= W || c.y() >= H) continue;
+					const int g = land[static_cast<size_t> (c.y()) * W + c.x()];
+					if (g >= 0) return g;
+				}
+		return -1;
+	};
+	const int home = regionNear (landing);
+	long long landTotal = 0;
+	for (int s : landSizes)
+		if (s >= 20) landTotal += s;
+	const int share = home >= 0 && landTotal > 0 ? static_cast<int> (static_cast<long long> (landSizes[home]) * 100 / landTotal) : 100;
+	// до моря (водоём от 400 клеток) от высадки, Чебышёв до 20
+	int seaDist = -1;
+	for (int r = 0; r <= 20 && seaDist < 0; ++r)
+		for (int dy = -r; dy <= r && seaDist < 0; ++dy)
+			for (int dx = -r; dx <= r && seaDist < 0; ++dx)
+			{
+				if (std::max (std::abs (dx), std::abs (dy)) != r) continue;
+				const cPosition c = landing + cPosition (dx, dy);
+				if (c.x() < 0 || c.y() < 0 || c.x() >= W || c.y() >= H) continue;
+				const int w = sea[static_cast<size_t> (c.y()) * W + c.x()];
+				if (w >= 0 && seaSizes[w] >= 400) seaDist = r;
+			}
+	// как у стратегии (ai_defense, П3 и Р17): наша суша — больше 60% всей — «суша»; остров (меньше 40%) — враг за водой; между —
+	// догадка «точка напротив на другой суше», если она далеко (≥ 40 клеток)
+	const cPosition opp (W - 1 - landing.x(), H - 1 - landing.y());
+	const int oppRegion = regionNear (opp);
+	const int oppDist = std::max (std::abs (opp.x() - landing.x()), std::abs (opp.y() - landing.y()));
+	const bool noLandPath = home >= 0 && share < 60
+		&& (share < 40 || (oppRegion >= 0 && oppRegion != home && oppDist >= 40));
+	// по плану: танки — основа армии и обороны на всех картах, где у базы есть море или путь по суше (там и флот, и высадки; Р17,
+	// замеры против base4: Musashi лучше Crimson Path на Three Isles 0.530 против 0.474, Gen_Continents 0.743 против 0.621,
+	// Gen_Archipelago 0.667 против 0.627, Gen_Coast 0.646 против 0.570); только враг за водой и моря у базы нет — до него долетают
+	// одни самолёты (упор «воздух»), там The Chosen
+	if (noLandPath && seaDist < 0)
+	{
+		out.clan = kChosen;
+		out.why = "the enemy is most likely beyond water and no sea near our landing: only planes reach him — The Chosen (air force)";
+	}
+	else
+	{
+		out.clan = kMusashi;
+		out.why = std::string (noLandPath ? "the enemy is most likely beyond water, the sea is near" : "a land path to the enemy")
+			+ " (our land is " + std::to_string (share) + "% of the land): tanks are the core of our army and defence — Musashi (damage 20, armor 12, hp 28)";
+	}
+	return out;
+}
+
 std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 {
 	std::vector<cOrder> orders;
@@ -1544,6 +1653,14 @@ std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 		const auto* tank = player->getLastUnitData (kIdTank);
 		const auto* fighter = player->getLastUnitData (kIdFighter);
 		world_.buildThreat (*model.getMap(), tank ? tank->getArmor() : 0, fighter ? fighter->getArmor() : 0);
+		// Р17 (П22): урон из ниоткуда — у воды подлодка (флоту корвет), у базы на суше диверсант (тревога, пехота ищет); свои
+		// выключенные с прошлого хода — места огня наугад
+		tactics_.update (model, *player, world_, defense_, turn);
+		for (const auto& h : tactics_.hiddenHits())
+		{
+			if (h.water) navy_.noteSuspectedSub (h.pos, turn);
+			else if (h.base) defense_.noteHiddenHit (h.pos);
+		}
 		// роли машин и состав армии (шаг 9) — до оперативки (производство) и микро (бой)
 		roles_.build (model, *player);
 		comp_.update (model, *player, roles_, world_, turn);
@@ -1658,6 +1775,7 @@ std::vector<nlohmann::json> cRuleBrain::takeJournalEvents()
 	for (auto& e : air_.takeEvents()) events.push_back (std::move (e)); // шаг 13, часть 3: авиация
 	for (auto& e : eco_.takeEvents()) events.push_back (std::move (e)); // Р7: эко-сферы
 	for (auto& e : survey_.takeEvents()) events.push_back (std::move (e)); // Р7: геолог
+	for (auto& e : tactics_.takeEvents()) events.push_back (std::move (e)); // Р17: тактика заходов
 	for (auto& e : extraEvents_) events.push_back (std::move (e));
 	extraEvents_.clear();
 	return events;
@@ -1740,11 +1858,6 @@ std::vector<cOrder> cRuleBrain::decidePass (int playerId, const cModel& model, i
 	const bool modulesWant = air_.wantsPass() || commando_.wantsPass();
 	std::vector<sEnemy> enemies;
 	collectVisibleEnemies (*player, model, view, enemies);
-	if (enemies.empty())
-	{
-		wantPass_ = modulesWant;
-		return out;
-	}
 
 	// стрелки: свободные боевые машины с выстрелом и боезапасом (разведчики не стреляют — разведка)
 	std::vector<const cVehicle*> shooters;
@@ -1754,9 +1867,41 @@ std::vector<cOrder> cRuleBrain::decidePass (int playerId, const cModel& model, i
 			&& !air_.claimed (v->getId()) && !commando_.claimed (v->getId()) // шаг 13, ч. 3: самолёты и коммандос — свои модули
 			&& !isAirRole (roles_.roleOf (*v)) && roles_.roleOf (*v) != eRole::Commando)
 			shooters.push_back (v.get());
+	// Р17 (П19, П20, огонь наугад): после выстрелов этого захода — раненая, что стреляла, отъезжает из «удара с подъезда» врага;
+	// свободные стрелки (видимой цели в дальности нет) бьют наугад по клеткам у своих выключенных (диверсант рядом)
+	const auto tacticsTail = [&] (const std::vector<bool>* usedShooters) {
+		std::set<unsigned int> ordered;
+		for (const auto& o : out) ordered.insert (o.unitId);
+		for (auto& o : tactics_.hitAndRun (model, *player, view, world_, roles_, ops_, ordered, pass))
+		{
+			ordered.insert (o.unitId);
+			out.push_back (std::move (o));
+		}
+		std::vector<const cVehicle*> free;
+		for (size_t a = 0; a < shooters.size(); ++a)
+		{
+			if ((usedShooters != nullptr && (*usedShooters)[a]) || ordered.count (shooters[a]->getId()) != 0) continue;
+			bool target = false;
+			for (const auto& e : enemies)
+				if (shooters[a]->canAttackObjectAt (e.pos, view, false))
+				{
+					target = true;
+					break;
+				}
+			if (!target) free.push_back (shooters[a]);
+		}
+		for (auto& o : tactics_.blindFire (model, *player, view, world_, free, pass)) out.push_back (std::move (o));
+	};
+	if (enemies.empty())
+	{
+		tacticsTail (nullptr);
+		wantPass_ = modulesWant || !out.empty();
+		return out;
+	}
 	if (shooters.empty())
 	{
-		wantPass_ = modulesWant; // как прежде: стрелков нет — заход только ради модулей части 3
+		tacticsTail (nullptr);
+		wantPass_ = modulesWant || !out.empty(); // как прежде: стрелков нет — заход только ради модулей части 3 (и Р17: отход)
 		return out;
 	}
 	std::vector<bool> used (shooters.size(), false);
@@ -1833,6 +1978,7 @@ std::vector<cOrder> cRuleBrain::decidePass (int playerId, const cModel& model, i
 			fire (std::get<3> (c[k]), e, "finish off (sure kill)");
 		++kills;
 	}
+	tacticsTail (&used); // Р17: «выстрелил — отъехал», огонь наугад
 
 	// ещё заход — если стреляли: у стрелков могли остаться выстрелы, а поле изменилось
 	wantPass_ = !out.empty() || modulesWant;
@@ -2081,8 +2227,33 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 	};
 
 	const bool rich = econ.metalMaxStored > 0 && econ.metalStored * 5 >= econ.metalMaxStored * 4; // склад ≥ 80%
+	// Р7 (п. 114): враг на нашей суше (вооружённые машины, виденные недавно) — для «пути по суше нет»
+	bool enemyOnOurLand = false;
+	if (navy_.landLocked())
+		for (const auto& kv : world_.enemies())
+			if (!kv.second.building && kv.second.armed() && world_.age (kv.second) <= 10
+				&& world_.tankRegionOf (kv.second.pos) == defense_.map().landRegion)
+			{
+				enemyOnOurLand = true;
+				break;
+			}
 	// фабрик — по добыче металла; склад полон — ещё одна (металл есть, мощностей нет)
-	const int factoryTarget = std::clamp ((econ.metalMaxProd + 5) / 8 + (rich ? 1 : 0), 1, kMaxFactories);
+	int factoryTarget = std::clamp ((econ.metalMaxProd + 5) / 8 + (rich ? 1 : 0), 1, kMaxFactories);
+	const char* landLockFactoriesEnv = std::getenv ("MAXR_LANDLOCK_FACTORIES");
+	const bool envOffLandLockFactories = landLockFactoriesEnv != nullptr && landLockFactoriesEnv[0] == '0';
+	// Р17 (п. 142): пути по суше к врагу нет — больших фабрик не больше kLandLockFactories: армия своей суши под потолком, третья
+	// фабрика стояла (Gen_Coast 44: потолок с 69-го хода, фабрика — 79-й), а металл — флоту, авиации и сферам
+	if (navy_.landLocked() && !enemyOnOurLand && factoryTarget > kLandLockFactories
+		&& !envOffLandLockFactories) // опыт: MAXR_LANDLOCK_FACTORIES=0 — без потолка
+	{
+		factoryTarget = kLandLockFactories;
+		if (!landFactoryCapNoted_)
+		{
+			landFactoryCapNoted_ = true;
+			extraEvents_.push_back ({{"event", "navy"}, {"level", "operational"}, {"what", "land factory cap"}, {"cap", kLandLockFactories},
+				{"why", "no land path to the enemy: two big factories feed the capped land army, the rest goes to the fleet and air"}});
+		}
+	}
 
 	struct sRefill
 	{
@@ -2343,10 +2514,15 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 				for (const auto& kv : plans_) addHumans (planType (kv.second));
 				ecoHabitat = cap - use < unitsData->getStaticUnitData (cEcoPlan::kIdEcoSphere).needsHumans;
 			}
+			// Р17 (п. 144): сфере нужен человек — пока жилья на неё нет (ни построено, ни в стройке, ни в планах), сферу не закладывать:
+			// жильё раньше (Р7, Three Isles против себя: сфера с 177-го хода без очков до конца). План жилья — в счёт: «ждать построенного
+			// или строящегося» (r17s) — сферы позже, D против base4 на больших картах хуже (0.613 против 0.674)
+			const char* ecoHomeEnv = std::getenv ("MAXR_ECO_HOME");
+			const bool sphereWaitsHome = ecoHabitat && !(ecoHomeEnv != nullptr && ecoHomeEnv[0] == '0');
 			if (ecoOk && eco_.urgent())
 			{
 				if (ecoHabitat) wants.push_back (kIdHabitat);
-				wants.push_back (cEcoPlan::kIdEcoSphere);
+				if (!sphereWaitsHome) wants.push_back (cEcoPlan::kIdEcoSphere);
 			}
 			// шаг 13 (П7): учебный центр — пехота видит коммандос; ему нужен человек (жилой блок даёт 3)
 			const bool trainingWanted = (defense_.wantTrainingHall() || commando_.wantTrainingHall()) && consumersOk && totalOf (kIdTraining) < 1
@@ -2389,7 +2565,7 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			if (ecoOk && !eco_.urgent())
 			{
 				if (ecoHabitat) wants.push_back (kIdHabitat);
-				wants.push_back (cEcoPlan::kIdEcoSphere);
+				if (!sphereWaitsHome) wants.push_back (cEcoPlan::kIdEcoSphere); // Р17 (п. 144): жильё раньше сферы
 			}
 			// шаг 13, часть 3 (П15–П17, П10): авиазавод и ангар — после фабрик (экономика сначала: программа авиации
 			// включается по доходу и ходу, урок флота части 2)
@@ -2459,6 +2635,18 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 				// соединителей, как у шахты (Gen_Coast 44: станции негде встать — с хода 100 ни сфер, ни новых потребителей)
 				if (pos.x() < 0 && (w == kIdEnergy || (w == kIdHabitat && ecoHabitat)))
 					pos = findLinkedSpot (model, *player, grid, unitsData->getStaticUnitData (w), reserved, world_, bl, defense_.map().landRegion);
+				// Р17 (п. 142): авиазаводу, ангару и учебному центру у тесной базы места нет — площадка с цепочкой соединителей, как у шахты
+				// (Gen_Coast 42 против base2: программа «удар» с 90-го хода, а авиазавода за 300 ходов нет — стройщики стояли без дела со
+				// 132-го по 260-й ход). Центрам исследований, переработке и депо — нет: r17i ставил их так на больших картах (Gen_Lakes — 56
+				// центров), металл уходил от армии
+				if (pos.x() < 0 && (w == kIdAirFactory || w == kIdHangar || w == kIdTraining))
+				{
+					pos = findLinkedSpot (model, *player, grid, unitsData->getStaticUnitData (w), reserved, world_, bl, defense_.map().landRegion);
+					if (pos.x() >= 0)
+						extraEvents_.push_back ({{"event", "build"}, {"level", "operational"}, {"what", "linked site"}, {"unitId", v.getId()},
+							{"type", unitsData->getStaticUnitData (w).getDefaultName()}, {"pos", {{"x", pos.x()}, {"y", pos.y()}}},
+							{"why", "no room next to the base: a site linked by a chain of connectors"}});
+				}
 				if (pos.x() >= 0)
 				{
 					what = w;
@@ -2749,22 +2937,70 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 	const bool speedUp = richNow && allWorking && !buildersStarved;
 	const int nKonstrukt = countVehicles (*player, kIdKonstrukt);
 	const int konstruktTarget = econ.metalMaxProd >= 20 ? 3 : 2;
-	// Р7 (п. 114): армия своей суши и враг на ней (вооружённые машины, виденные недавно) — для «пути по суше нет»
+	// Р7 (п. 114): армия своей суши (враг на ней — enemyOnOurLand выше) — для «пути по суше нет»
 	const int armyNow = comp_.count (eRole::Tank) + comp_.count (eRole::Assault) + comp_.count (eRole::Artillery) + comp_.count (eRole::Missile);
-	bool enemyOnOurLand = false;
-	if (navy_.landLocked())
-		for (const auto& kv : world_.enemies())
-			if (!kv.second.building && kv.second.armed() && world_.age (kv.second) <= 10
-				&& world_.tankRegionOf (kv.second.pos) == defense_.map().landRegion)
-			{
-				enemyOnOurLand = true;
-				break;
-			}
 	int konstruktQueued = 0;
 	for (const auto& b : player->getBuildings())
 		if (groundFactory (*b))
 			for (size_t i = 0; i < b->getBuildListSize(); ++i)
 				if (b->getBuildListItem (i).getType() == kIdKonstrukt) ++konstruktQueued;
+	// Р17 (п. 55, П24, ранний раш): вооружённая машина врага у ключевого здания (фабрика, шахта, электростанция; видна сейчас или
+	// прошлым ходом), а своих боевых машин рядом нет — большая фабрика выпускает танк раньше конструкторов, срочно (Mushroom 43:
+	// одинокий танк-разведчик врага с 38-го хода стоял у базы и к 44-му снёс единственную фабрику, у нас — ни одной боевой машины)
+	int defendersWanted = 0;
+	bool defenderUrgent = false; // танк-защитник поставлен в очередь в этот ход — быстрая скорость
+	bool defenderAlert = false;  // враг у ключевого здания, своих боевых машин рядом нет
+	{
+		const char* off = std::getenv ("MAXR_EARLY_DEFENDER"); // опыт «вариант против варианта»: MAXR_EARLY_DEFENDER=0 — как до Р17
+		std::vector<cPosition> keys;
+		if (!(off != nullptr && off[0] == '0'))
+			for (const auto& b : player->getBuildings())
+			{
+				const auto& bsd = b->getStaticUnitData();
+				if (bsd.buildingData.canMineMaxRes > 0 || !bsd.canBuild.empty() || bsd.produceEnergy > 0)
+					for (const auto& c : footprintCells (b->getPosition(), b->getIsBig())) keys.push_back (c);
+			}
+		cPosition intruder (-1, -1);
+		// только в начале партии (до kEarlyDefenderTurn) и у ядра базы: на больших картах «враг у шахты» — обычное дело, а скорость 2
+		// стоит фабрике ×12 металла (r17i: Gen_Lakes — 242 хода тревоги, 98 разгонов)
+		const cPosition core = defense_.baseCenter();
+		const int coreR = defense_.baseRadius() + 4;
+		if (turn > kEarlyDefenderTurn) keys.clear();
+		for (const auto& kv : world_.enemies())
+		{
+			const sEnemyMemory& m = kv.second;
+			if (m.building || m.plane || m.ship || !m.hitsGround() || world_.age (m) > 1) continue;
+			if (core.x() >= 0 && std::max (std::abs (m.pos.x() - core.x()), std::abs (m.pos.y() - core.y())) > coreR) continue;
+			bool near = false;
+			for (const auto& k : keys)
+				if ((k - m.pos).l2NormSquared() <= (kAlarmRadius + 2) * (kAlarmRadius + 2))
+				{
+					near = true;
+					break;
+				}
+			if (!near) continue;
+			bool covered = false;
+			for (const auto& v : player->getVehicles())
+				if (isArmyRole (roles_.roleOf (*v)) && !v->isUnitLoaded() && (v->getPosition() - m.pos).l2NormSquared() <= 12 * 12)
+				{
+					covered = true;
+					break;
+				}
+			if (!covered)
+			{
+				defendersWanted = 1;
+				intruder = m.pos;
+				break;
+			}
+		}
+		defenderAlert = defendersWanted > 0;
+		if (defendersWanted > 0 && earlyDefenderNoted_ != turn)
+		{
+			earlyDefenderNoted_ = turn;
+			extraEvents_.push_back ({{"event", "early defender"}, {"level", "operational"}, {"intruder", {{"x", intruder.x()}, {"y", intruder.y()}}},
+				{"army", armyNow}, {"why", "an armed enemy at our key building and no own combat unit near: a tank before constructors, urgently"}});
+		}
+	}
 	// следующая машина фабрики: конструктор, пока их меньше нужного (большая фабрика),
 	// иначе — по ролям (ai_roles); sID() — малой фабрике сейчас ничего не нужно
 	auto nextFor = [&] (const cBuilding& b) -> sID {
@@ -2796,6 +3032,15 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			comp_.noteQueued (roles_, inf);
 			return inf;
 		}
+		// Р17 (п. 55): враг у ключевого здания, своих рядом нет — танк раньше конструкторов
+		if (kind == "BigGroundVehicle" && defendersWanted > 0)
+			if (const sID t = roles_.typeFor (eRole::Tank, kind); t != sID())
+			{
+				--defendersWanted;
+				defenderUrgent = true;
+				comp_.noteQueued (roles_, t);
+				return t;
+			}
 		if (unitsData->getStaticUnitData (kIdKonstrukt).buildAs == kind && nKonstrukt + konstruktQueued < konstruktTarget)
 		{
 			++konstruktQueued;
@@ -2858,7 +3103,8 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			const bool urgent = roles_.roleOfType (first) == eRole::AntiAir
 				|| (roles_.roleOfType (first) == eRole::Guard && defense_.commandoAlarm()) // шаг 13: диверсант — охрана срочно
 				|| (roles_.roleOfType (first) == eRole::Corvette && navy_.counts().corvettes == 0) // шаг 13, ч. 2: первый корвет — охрана верфи
-				|| ((roles_.roleOfType (first) == eRole::Fighter || roles_.roleOfType (first) == eRole::Bomber) && air_.urgent()); // шаг 13, ч. 3
+				|| ((roles_.roleOfType (first) == eRole::Fighter || roles_.roleOfType (first) == eRole::Bomber) && air_.urgent()) // шаг 13, ч. 3
+				|| (defenderUrgent && roles_.roleOfType (first) == eRole::Tank); // Р17 (п. 55): враг у ключевого здания
 			const int speed = ((speedUp || urgent) && budget >= factoryMetalPerRound (b, 1)) ? 1 : 0;
 			cOrder o;
 			o.type = eOrderType::ChangeBuildList;
@@ -2942,6 +3188,21 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 				speed = 0;
 				slowForBuilders = true;
 			}
+			// Р17 (п. 55): враг у ключевого здания, своих рядом нет, а фабрика строит боевую машину — скорость 2, если металл хода
+			// есть (танк выйдет за ход; Mushroom 43: танк вышел на 42-м, а фабрику снесли на 44-м)
+			bool defendRush = false;
+			if (defenderAlert && b.getStaticUnitData().canBuild == "BigGroundVehicle" && b.getBuildSpeed() < 2
+				&& isArmyRole (roles_.roleOfType (b.getBuildListItem (0).getType())))
+			{
+				const int extra = factoryMetalPerRound (b, 2) - b.getMetalPerRound();
+				if (budget >= extra && storedLeft >= extra)
+				{
+					speed = 2;
+					budget -= extra;
+					defendRush = true;
+					slowForBuilders = false;
+				}
+			}
 			if (changed || speed != b.getBuildSpeed())
 			{
 				cOrder o;
@@ -2952,7 +3213,8 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 				o.buildSpeed = speed;
 				o.repeat = b.getRepeatBuild();
 				o.level = "op";
-				o.reason = slowForBuilders ? "slow down factory (builders need metal)"
+				o.reason = defendRush ? "speed up factory (enemy at our base, no defenders)"
+					: slowForBuilders ? "slow down factory (builders need metal)"
 					: (speed != b.getBuildSpeed() ? "speed up factory (metal piles up)" : produceReason (o.buildList));
 				prodOrders.push_back (std::move (o));
 			}
@@ -3056,6 +3318,29 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			goldFree += b.getStaticData().convertsGold;
 			energyNeed -= b.getStaticUnitData().needsEnergy;
 		}
+		// Р17 (п. 55, ранний раш): энергия — сначала большой фабрике. Ни одна большая фабрика главной базы не работает, а у первой
+		// есть задание и металл на ход — её энергию шахте, исследованиям и переработке не отдавать (base4 против себя: ранние
+		// разгромы на Mushroom и Lava — 9 и 10 партий из 25; Mushroom 49: вторая шахта, запущенная, пока фабрика выпускала машину,
+		// забрала последнюю единицу энергии — фабрика стояла с хода 30 по 45, к ходу 50 у нас 4 машины, а база врага вывела танки)
+		int factoryEnergy = 0;
+		{
+			const char* off = std::getenv ("MAXR_FACTORY_ENERGY"); // опыт «вариант против варианта»: MAXR_FACTORY_ENERGY=0 — как до Р17
+			if (!(off != nullptr && off[0] == '0'))
+			{
+				bool working = false;
+				const cBuilding* idle = nullptr;
+				for (const auto& bp : player->getBuildings())
+				{
+					const cBuilding& b = *bp;
+					if (b.subBase != main || b.isDisabled() || b.getStaticUnitData().canBuild != "BigGroundVehicle") continue;
+					if (b.isUnitWorking()) working = true;
+					else if (idle == nullptr && !b.isBuildListEmpty() && b.buildingCanBeStarted()
+						&& econ.metalStored >= factoryMetalPerRound (b, b.getBuildSpeed()))
+						idle = &b;
+				}
+				if (!working && idle != nullptr) factoryEnergy = idle->getStaticUnitData().needsEnergy;
+			}
+		}
 		// Р7: эко-сферы — первыми (очко за ход; энергия и человек — раньше исследований). Не хватает энергии или людей (тесная
 		// база без нефти — Three Isles, Donuts: сфера стояла построенной без очков) — остановить исследования, учебный центр,
 		// переработку золота: очко за ход дороже, а их остановка обратима
@@ -3128,7 +3413,7 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			if (!isMine && !isResearch && !isRefinery) continue;
 			if (isRefinery && goldFree < sd.buildingData.convertsGold) continue;
 			if (sd.needsHumans > humanFree) continue;
-			if (!energyFeasible (energyNeed + sd.needsEnergy, econ.stations, econ.generators, econ.oil)) continue;
+			if (!energyFeasible (energyNeed + factoryEnergy + sd.needsEnergy, econ.stations, econ.generators, econ.oil)) continue; // Р17: фабрике — раньше
 			cOrder o;
 			o.type = eOrderType::StartWork;
 			o.playerId = playerId;
@@ -3698,6 +3983,13 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 	// шаг 13, часть 3: коммандос (П2, П18) — чужие, диверсия, налёт; авиация (П15–П17, П10) — AWAC, бомбардировщики,
 	// истребители, авиатранспорт, налёт «AWAC + коммандос + бомбардировщики»
 	commando_.plan (model, *player, view, world_, roles_, defense_, out);
+	{
+		// Р17 (п. 116): цели операций армии в походе или бою — налёт их не берёт (их снесёт армия)
+		std::vector<cPosition> armyTargets;
+		for (const auto& op : ops_.operations())
+			if ((op.state == eOpState::Advance || op.state == eOpState::Attack) && op.target.x() >= 0) armyTargets.push_back (op.target);
+		air_.setArmyTargets (std::move (armyTargets));
+	}
 	air_.plan (model, *player, view, world_, roles_, defense_, commando_, out);
 	// задания операций армии (шаг 8) — машинам без приказа: огонь, отход, тревога и оперативка — раньше
 	std::map<unsigned int, sOpTask> opTasks;
@@ -3755,6 +4047,8 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 		return false;
 	};
 	auto chebDist = [] (const cPosition& a, const cPosition& b) { return std::max (std::abs (a.x() - b.x()), std::abs (a.y() - b.y())); };
+	const char* outrangedEnv = std::getenv ("MAXR_OUTRANGED"); // Р17 (П21): опыт «вариант против варианта» — =0 выключает
+	const bool outrangedOff = outrangedEnv != nullptr && outrangedEnv[0] == '0';
 	// шаг 13 (П4): база ослепла (радары нужны, а работающих нет; мобильного радара нет) — первый по id
 	// разведчик (обзор 9) встаёт у центра базы, пока радары не вернутся
 	unsigned int radarBackupScout = kNoUnit;
@@ -4251,6 +4545,58 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 				// шаг 9: поддержка — встать вне «удара с подъезда» и бить с предельной дальности
 				if (isSupportRole (role) && supportStandoff (*vehicle, n->pos, vehicle->data.getRange() + 10, "support: standoff"))
 					continue;
+				// Р17 (П21): выстрел бережём на ответный огонь — ждём у края зоны огня врага (ниже); исключение — враг бьёт дальше нас:
+				// у края его огня мы вне своей дальности, он подъедет и выстрелит первым, ответа не будет. Тогда — доехать и выстрелить
+				// в этот ход, иначе — уйти из его «удара с подъезда»
+				if (!isSupportRole (role) && n->unit != nullptr && n->unit->isAVehicle() && n->range > vehicle->data.getRange()
+					&& vehicle->data.getShots() > 0 && !outrangedOff)
+				{
+					cPathCalculator pc (*vehicle, view, n->pos, true);
+					auto path = pathToVector (pc.calcPath());
+					cutToTurn (*vehicle, view, path);
+					const unsigned int shot = path.empty() ? kNoUnit : moveFireTarget (*vehicle, path);
+					if (shot != kNoUnit)
+					{
+						tactics_.noteOutranged (vehicle->getId(), true, vehicle->getPosition(), path.back(), n->range, vehicle->data.getRange());
+						cOrder o;
+						o.type = eOrderType::Move;
+						o.playerId = playerId;
+						o.unitId = vehicle->getId();
+						o.unitId2 = shot;
+						o.path = std::move (path);
+						o.position = o.path.back();
+						o.level = "micro";
+						o.reason = "outranged: close in and fire first (П21)";
+						out.push_back (std::move (o));
+						++stats_.moveFire;
+						continue;
+					}
+					if (world_.groundStrike (vehicle->getPosition()) > 0)
+					{
+						cPosition safe;
+						if (world_.nearestSafeCell (*vehicle, view, vehicle->getPosition(), 8, player->getLandingPos(), safe, eThreatLayer::Strike)
+							&& safe != vehicle->getPosition())
+						{
+							auto away = threatAwarePath (*vehicle, view, safe, world_, eThreatLayer::Strike);
+							cutToTurn (*vehicle, view, away);
+							if (!away.empty())
+							{
+								tactics_.noteOutranged (vehicle->getId(), false, vehicle->getPosition(), away.back(), n->range, vehicle->data.getRange());
+								cOrder o;
+								o.type = eOrderType::Move;
+								o.playerId = playerId;
+								o.unitId = vehicle->getId();
+								o.path = std::move (away);
+								o.position = o.path.back();
+								o.level = "micro";
+								o.reason = "outranged: out of its reach (П21)";
+								out.push_back (std::move (o));
+								continue;
+							}
+						}
+					}
+					// вне его досягаемости (или уйти некуда) — прежнее сближение до края зоны огня
+				}
 				if (world_.groundFire (vehicle->getPosition()) == 0)
 				{
 					cPathCalculator pc (*vehicle, view, n->pos, true);

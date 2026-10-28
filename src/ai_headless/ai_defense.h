@@ -76,6 +76,12 @@ struct sMapPicture
 	// Р7 (п. 114): пути по суше к врагу нет — его здания видны только за водой, а не видны — точка напротив нашей базы (карты
 	// 1 на 1 симметричны, догадка, как у флота) на другой суше
 	bool noLandPath = false;
+	// Р17 (п. 142): здания врага хоть раз видели на нашей суше — путь по суше есть, догадке больше не верим (Donuts: память о
+	// зданиях врага опустела — режим включался снова); догадка годна только для острова (наша суша < 40% всей) или когда точка
+	// напротив далеко (≥ 40 клеток): на тесной карте враг рядом, и разведка найдёт его раньше, чем понадобится верфь
+	bool landPathProven = false;
+	int oppDistance = -1;     // до точки напротив нашей базы (Чебышёв), −1 — не считали
+	bool guessCredible = false;
 	const char* emphasis = "land"; // "land" / "sea" / "air"
 	std::string why;
 
@@ -103,6 +109,8 @@ public:
 
 	// свои юниты, выключенные коммандос врага с прошлого хода (движок ИИИ, сигнал модели) — тревога
 	void noteDisabled (const std::vector<unsigned int>& ids) { reportedDisabled_.insert (reportedDisabled_.end(), ids.begin(), ids.end()); }
+	// Р17 (П22): урон из ниоткуда у базы на суше (ai_tactics) — диверсант или пушка из тумана: тревога «диверсант», пехота обходит клетки
+	void noteHiddenHit (const cPosition& p) { hiddenHits_.push_back (p); }
 	// раз в ход, до оперативки: картина карты, уровни, что построить, посты охраны
 	void update (const cModel& model, const cPlayer& player, const cWorldModel& world, const cRoleBook& roles,
 		const cComposition& comp, const cSubBase* main, int income, int turn);
@@ -185,6 +193,7 @@ private:
 	int commandoAlarmUntil_ = 0;
 	std::vector<unsigned int> disabledSeen_;    // свои выключенные юниты, по которым уже подняли тревогу
 	std::vector<unsigned int> reportedDisabled_; // выключены с прошлого хода (noteDisabled)
+	std::vector<cPosition> hiddenHits_;          // Р17 (П22): урон из ниоткуда у базы с прошлого хода (noteHiddenHit)
 	std::vector<std::pair<cPosition, int>> recentDisables_; // клетка выключенного здания, ход — пост рядом ищет каждый ход
 	std::vector<cPosition> alarmSites_;          // клетки (левый верхний угол) выключенных зданий — стены туда сначала
 	cPosition center_ {-1, -1};
@@ -192,6 +201,7 @@ private:
 	sMapPicture map_;
 	std::string lastEmphasis_;
 	bool lastSure_ = false;
+	bool landPathProven_ = false; // Р17 (п. 142): здания врага видели на нашей суше — навсегда
 	// статичное: вода карты (считается раз)
 	bool waterDone_ = false;
 	int waterPct_ = 0;

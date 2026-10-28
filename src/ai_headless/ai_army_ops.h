@@ -227,6 +227,12 @@ private:
 		const cPosition& center, int window) const;
 	void planAdvance (const sContext& ctx, sOperation& op, const std::vector<unsigned int>& busy,
 		std::vector<cPosition>& reserved, std::map<unsigned int, sOpTask>& tasks);
+	// Р17 (колонна в узостях): сколько машин группы нужно рядом с лидером (радиус r) — от вместимости его округи, не больше N
+	int columnNeed (const sContext& ctx, const cVehicle& leader, const cPosition& at, int r, int N) const;
+	int columnSteps_ = 0; // шагов лидера, разрешённых только узостью (за партию; в снимок операций)
+public:
+	int columnSteps() const { return columnSteps_; }
+private:
 	void planAttack (const sContext& ctx, sOperation& op, const std::vector<unsigned int>& busy,
 		std::vector<cPosition>& reserved, std::map<unsigned int, sOpTask>& tasks);
 	void planScouts (const sContext& ctx, const std::vector<unsigned int>& busy, std::vector<cPosition>& reserved,

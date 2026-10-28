@@ -345,6 +345,20 @@ void cNavy::update (const cModel& model, const cPlayer& player, const cWorldMode
 				if (defense.seaLabelOf (m.pos + cPosition (dx, dy)) == homeSea_) reach = true;
 		if (reach) ++coastTargets_;
 	}
+	// Р17 (П22): урон из ниоткуда у воды (ai_tactics) — подлодка, которой мы не видели: как виденная — корвет (только он её видит)
+	// и мины у верфи, 20 ходов
+	if (turn_ <= subSuspectUntil_ && enemySubs_ == 0)
+	{
+		enemySubs_ = 1;
+		if (!subSuspectNoted_)
+		{
+			subSuspectNoted_ = true;
+			event ("sub suspected", {{"pos", {subSuspectPos_.x(), subSuspectPos_.y()}}, {"until", subSuspectUntil_},
+				{"why", "damage from nowhere near water: a submarine we do not see — corvettes (only they see it)"}});
+		}
+	}
+	else if (turn_ > subSuspectUntil_)
+		subSuspectNoted_ = false;
 
 	// где искать врага (разведка подлодок): середина виденных зданий врага; не видели — точка напротив нашей базы
 	// (карты 1 на 1 симметричны — догадка, пишется в журнал при смене)
@@ -467,7 +481,9 @@ void cNavy::update (const cModel& model, const cPlayer& player, const cWorldMode
 			std::sort (cells.begin(), cells.end(), [] (const auto& a, const auto& b) { return a.first < b.first; });
 			for (const auto& c : cells)
 				if (laid + static_cast<int> (seaMineField_.size()) < kSeaMines) seaMineField_.push_back (c.second);
+			minesAtYard_ = laid; // Р17 (п. 143)
 		}
+		enemyYardSeen_ = defense.enemyShipyardSeen();
 	}
 	const int armed = counts_.corvettes + counts_.guns + counts_.subs;
 	bool damaged = false;
@@ -506,6 +522,16 @@ sID cNavy::nextShip (const cModel& model, const cPlayer& player, const cRoleBook
 		const char* why;
 	};
 	std::vector<sStep> steps;
+	// Р17 (п. 143): свежая верфь — подлодки врага видны (или подозреваются: урон из ниоткуда у воды) либо видна его верфь, а мин у нашей
+	// верфи ещё нет — первым минёр (раньше корвета): мина бьёт подлодку без спроса, а корвет сам под торпедами (Р7, честный налёт
+	// подлодок, Gen_Archipelago 42: верфь потоплена трижды — на ~83, ~110, ~140-м ходу — до первой мины на ~175-м: минёр строился
+	// после корвета, на самой верфи)
+	{
+		const char* off = std::getenv ("MAXR_YARD_MINES_FIRST"); // опыт «вариант против варианта»: =0 — как в Р7
+		if (!(off != nullptr && off[0] == '0') && wantSeaMines_ && !seaMineField_.empty() && minesAtYard_ < 4
+			&& (enemySubs_ > 0 || enemyYardSeen_))
+			steps.push_back ({eRole::SeaMineLayer, 1, "fresh shipyard under the threat of subs: a minelayer before the corvette (a mine hits a sub by itself)"});
+	}
 	// ответ на угрозу с моря — раньше программы
 	if (enemySubs_ > 0) steps.push_back ({eRole::Corvette, std::min (4, 1 + enemySubs_), "enemy subs seen: only corvettes see them"});
 	if (enemyShipMetal_ > 0) steps.push_back ({eRole::NavalGun, std::min (6, 2 + enemyShipMetal_ / 36), "enemy warships seen"});

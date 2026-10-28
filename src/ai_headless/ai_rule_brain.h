@@ -33,6 +33,7 @@
 #include "ai_navy.h"
 #include "ai_roles.h"
 #include "ai_survey.h"
+#include "ai_tactics.h"
 #include "ai_tech.h"
 #include "ai_world_model.h"
 
@@ -43,11 +44,24 @@
 #include <vector>
 
 class cModel;
+class cStaticMap;
 
 namespace ai
 {
 
 struct cOrder;
+
+// Р17 (п. 86, П26): клан, как человек в лобби, — по карте (её видно до игры), своей точке высадки и плану: враг по догадке за водой,
+// а моря у базы нет — до него долетают одни самолёты: The Chosen (авиация); иначе — Musashi (танки: урон 20, броня 12, прочность 28
+// против 16/10/24 — основа армии и обороны правил на любой карте с морем или путём по суше: по замерам Р17 Musashi лучше Crimson Path и
+// на морских картах). Клан врага в лобби не виден — не учитывается. Axis Inc. (7) не берём: у него другой бесплатный набор высадки.
+// MAXR_CLAN=0 — клан по месту, как до Р17 (игрок 0 — 0, игрок 1 — 1); MAXR_CLAN=cN — клан N (опыт)
+struct sClanChoice
+{
+	int clan = -1; // −1 — по месту
+	std::string why;
+};
+sClanChoice ruleChooseClan (const cStaticMap& map, const cPosition& landing);
 
 class cRuleBrain : public cAiBrain
 {
@@ -121,10 +135,14 @@ private:
 	cEcoPlan eco_;
 	// Р7 (п. 104, схема Владыки): умный геолог (ai_survey)
 	cSurvey survey_;
+	// Р17 (П19–П22, огонь наугад): тактика заходов (ai_tactics)
+	cTactics tactics_;
 	// шаг 13: минёр уже включил закладку в этом ходу — в следующем заходе выключить
 	std::vector<unsigned int> minesToggled_;
 	// Р7 (п. 114): потолок сухопутной армии «пути по суше нет» уже записан в журнал
 	bool landCapNoted_ = false;
+	bool landFactoryCapNoted_ = false; // Р17 (п. 142): потолок больших фабрик «пути по суше нет» записан в журнал
+	int earlyDefenderNoted_ = -1;      // Р17 (п. 55): ход, когда «танк-защитник раньше конструкторов» записан в журнал
 	// Р7 (п. 94): площадки эко-сфер, где стройка не началась за kEcoPlanStale ходов (занята, не подойти), — (клетка, ход)
 	std::vector<std::pair<cPosition, int>> badEcoSites_;
 	// шаг 11: нужен ли ещё заход в этом ходу (после decideTurn / decidePass)

@@ -132,6 +132,18 @@ sValidationResult validateOrder (const cModel& model, const cOrder& o)
 			if (!map->isValidPosition (o.position))
 				return fail (r, "Attack: клетка вне карты");
 			cMapView view (map, sharedPlayer (model, o.playerId));
+			// Р17: огонь наугад — принудительная атака клетки без видимой цели (как у человека); по своим — нельзя
+			if (o.blindFire)
+			{
+				if (!unit->canAttackObjectAt (o.position, view, true))
+					return fail (r, "Attack (blind): клетка вне досягаемости или стрелять нечем");
+				const auto& field = map->getField (o.position);
+				if (const cVehicle* fv = field.getVehicle(); fv != nullptr && fv->getOwner() == unit->getOwner())
+					return fail (r, "Attack (blind): на клетке своя машина");
+				for (const cBuilding* fb : field.getBuildings())
+					if (fb->getOwner() == unit->getOwner()) return fail (r, "Attack (blind): на клетке своё здание");
+				return r;
+			}
 			if (!unit->canAttackObjectAt (o.position, view, false))
 				return fail (r, "Attack: цель вне досягаемости");
 			return r;

@@ -25,18 +25,31 @@ struct sExperimentKnob
 };
 constexpr sExperimentKnob kExperimentKnobs[] = {
 	{"MAXR_AIR", true},
+	{"MAXR_ARMADA", true}, // Р17 (п. 125)
 	{"MAXR_AWAC_HIDE", true},
+	{"MAXR_BLIND", true}, // Р17: огонь наугад
 	{"MAXR_CMD_TRAIN", false},
 	{"MAXR_CMD_TRAIN_RANK", false},
 	{"MAXR_CMD_TURN", false},
+	{"MAXR_CLAN", true}, // Р17 (п. 86)
+	{"MAXR_COLUMN", true}, // Р17: колонна в узостях
 	{"MAXR_COMMANDO", true},
+	{"MAXR_EARLY_DEFENDER", true}, // Р17 (п. 55)
 	{"MAXR_ECO", true},
+	{"MAXR_ECO_HOME", true}, // Р17 (п. 144)
+	{"MAXR_FACTORY_ENERGY", true}, // Р17 (п. 55)
+	{"MAXR_FAR_MINE_AA", true}, // Р17 (п. 140)
+	{"MAXR_HITRUN", true}, // Р17 (П19, П20)
 	{"MAXR_LANDLOCK", true},
+	{"MAXR_LANDLOCK_FACTORIES", true}, // Р17 (п. 142)
 	{"MAXR_NAVY", true},
+	{"MAXR_OUTRANGED", true}, // Р17 (П21)
 	{"MAXR_SCOUT", true},
 	{"MAXR_SEAMINES", true},
 	{"MAXR_SEASUPPLY", true},
 	{"MAXR_SURVEY", true},
+	{"MAXR_SURVEY_ROAM", true}, // Р17 (п. 140)
+	{"MAXR_YARD_MINES_FIRST", true}, // Р17 (п. 143)
 };
 
 nlohmann::json experimentSettings()
@@ -131,7 +144,7 @@ sAiVersion aiVersion (const std::string& brain)
 		if (!v.settings.empty()) v.name += "~x";
 		return v;
 	}
-	// замороженные чемпионы: base — первое поколение (24.10.2026), base2 — 26.10, base3 — 26.10, base4 — 27.10.2026
+	// замороженные чемпионы: base — первое поколение (24.10.2026), base2 — 26.10, base3 — 26.10, base4 — 27.10, base5 — 28.10.2026
 	const std::string prefix = "base";
 	if (brain.rfind (prefix, 0) == 0)
 	{

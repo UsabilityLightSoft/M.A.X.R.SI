@@ -78,6 +78,10 @@ public:
 
 	eProgram program() const { return program_; }
 	const char* programName() const;
+	// Р17 (п. 125): армада без переправы — враг копит наземную армию за водой, пути по суше нет
+	bool armada() const { return armada_; }
+	// Р17 (п. 116): цели своих операций армии в походе или бою (налёт не берёт цели рядом — их снесёт армия)
+	void setArmyTargets (std::vector<cPosition> t) { armyTargets_ = std::move (t); }
 	bool wantAirFactory() const { return wantFactory_; }
 	bool wantHangar() const { return wantHangar_; }
 	// производство авиазавода: следующий самолёт (sID() — ничего); пишет в журнал, из чего выбирали
@@ -198,6 +202,11 @@ private:
 		cPosition& fire, int& value, unsigned int ignoreAa, bool onlyNaval) const;
 	bool strike (const cModel& model, const cMapView& view, const cWorldModel& world, const cVehicle& b, std::vector<cOrder>& out,
 		int pass, unsigned int ignoreAa, bool onlyNaval, const char* why);
+	// Р17 (п. 125, 116): цели в досягаемости хода нет — подлёт: лучшая цель (здание или корабль) с клеткой удара вне ПВО, к ней —
+	// точка подлёта в kApproachR клетках от клетки удара (вне ПВО, армии, мест гибели и истребителей врага), откуда удар и уход
+	// уложатся в следующий ход (стоянка в 20 клетках от зданий врага была дальше досягаемости бомбардировщика — 12 + 4 клетки:
+	// Gen_Coast 42 против армады base2 без ПВО — 300 ходов без единого удара)
+	bool approach (const cModel& model, const cMapView& view, const cWorldModel& world, const cVehicle& b, std::vector<cOrder>& out);
 	bool fireNow (const cModel& model, const cMapView& view, const cVehicle& v, unsigned int target, std::vector<cOrder>& out,
 		const char* why);
 	bool retreat (const cModel& model, const cMapView& view, const cVehicle& v, std::vector<cOrder>& out, const char* why);
@@ -298,6 +307,23 @@ private:
 	int visibleRefreshTurn_ = -1;
 	int visibleRefreshPass_ = -1;
 	bool scout_ = false; // Р7 (п. 119): враг не найден к kFindTurn — AWAC ищет его, авиазавод раньше шахт
+	// Р17 (п. 125, схема Владыки): армада без переправы — враг копит наземную армию за водой, а пути по суше нет: ответ —
+	// авиация (больше бомбардировщиков), бомбардировщики топят его морские транспорты (армаде не переплыть) и «режут» базу —
+	// соединители у электростанций, шахт и заводов. Армия врага в памяти живёт 8 ходов — пик с таянием, как у операций
+	double armadaPeak_ = 0;
+	bool armada_ = false;
+	int armadaNow_ = 0;
+	std::set<unsigned int> cutTargets_; // соединители врага у его электростанций, шахт и заводов (цели при армаде)
+	std::map<unsigned int, unsigned int> approachOf_; // бомбардировщик → цель подлёта (в журнал — при смене)
+	std::vector<cPosition> armyTargets_;               // Р17: цели своих операций армии в походе или бою
+	// Р17 (п. 125): «пути по суше нет» — наземная ПВО врага (мобильная зенитка: ход 7 + дальность 7) через воду не пройдёт:
+	// стоянка, точка подлёта и отход — не ближе kGroundAaSafe клеток к суше врага (Gen_Coast 42 против армады base2: 5
+	// бомбардировщиков погибли разом на стоянке у его базы). До суши врага — по клеткам (Чебышёв, до kGroundAaSafe)
+	std::vector<unsigned char> enemyLandDist_;
+	long long enemyLandSign_ = -1;
+	bool landEnvelope_ = false;
+	bool groundSafe (const cPosition& p) const;
+	cPosition groundSafeNear (const cMapView& view, const cVehicle& v, const cPosition& anchor, int r) const;
 	std::vector<cPosition> workers_; // Р7: свои геологи и стройщики — скаут врага у них цель бомбардировщиков
 	// цель из памяти ещё годна: не уничтожена нашим огнём; клетка видна — и она там видна
 	bool targetAlive (const cModel& model, const cPlayer& player, const sEnemyMemory& m) const;

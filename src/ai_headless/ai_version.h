@@ -9,8 +9,8 @@
  *   обучение   T — настроен турнирами (сам не учился); дальше — I…, S…, P…, F (сети, LLM);
  *   советник   +L<модель> (LM Studio на ПК) / +C<модель> (онлайн).
  *
- * Примеры: rule — SI-R4.0-T; замороженные чемпионы base4 … base — SI-R4 … SI-R1;
- * llm — SI-R4.0-T+Lgemma4-12b (модель из MAXR_LLM_MODEL). Выключатели опытов правил
+ * Примеры: rule — SI-R5.0-T; замороженные чемпионы base5 … base — SI-R5 … SI-R1;
+ * llm — SI-R5.0-T+Lgemma4-12b (модель из MAXR_LLM_MODEL). Выключатели опытов правил
  * (MAXR_NAVY=0 и другие) дают «~x» в конце: это уже не та версия, что в паспорте.
  * Расшифровка — si/AI_PASSPORT.md. Одна функция для ai_headless и клиента ИИИ:
  * имя в лобби, приветствие в чате, журнал (событие aiVersion) и metrics.json.
@@ -26,9 +26,9 @@
 namespace ai
 {
 
-// Поколение и сборка мозга rule. rule = base4 побайтно (Р7, 27.10.2026) — SI-R4.0-T.
-// Изменил поведение rule — kRuleBuild + 1; заморозил новым чемпионом (base5) — kRuleGeneration = 5, kRuleBuild = 0.
-constexpr int kRuleGeneration = 4;
+// Поколение и сборка мозга rule. rule = base5 побайтно (Р17, 28.10.2026) — SI-R5.0-T.
+// Изменил поведение rule — kRuleBuild + 1; заморозил новым чемпионом (base6) — kRuleGeneration = 6, kRuleBuild = 0.
+constexpr int kRuleGeneration = 5;
 constexpr int kRuleBuild = 0;
 
 // паспорт ИИИ в открытом форке
