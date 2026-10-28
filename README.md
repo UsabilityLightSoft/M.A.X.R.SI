@@ -1,4 +1,5 @@
-![maxr_icon](data/maxr.ico)
+<p align="center"><img src="si/emblem.png" width="256" alt="M.A.X.R.SI"></p>
+
 # M.A.X.R.SI
 
 **SI** stands for **Super Intelligence**.
@@ -7,6 +8,7 @@ A fork of [M.A.X.R.](https://github.com/maxr-dot-org/maxr) (Mechanized Assault &
 **computer opponent** — the AI player — and engine fixes. All credit for the game goes to the M.A.X.R. authors
 ([data/AUTHORS](data/AUTHORS)); the fork is made by Alexey Tkachev together with Claude (Anthropic). License — GPLv2,
 as upstream ([License.md](License.md)).
+The emblem ([si/emblem.png](si/emblem.png)) — CC BY 4.0, author Alexey Tkachev.
 
 ## What is new
 
@@ -49,6 +51,7 @@ M.A.X.R.SI — форк ремейка M.A.X.R. с **компьютерным п
 партию сквозь туман войны и входит в обычную сетевую игру как ещё один игрок — можно играть против него одному или с
 друзьями (пока только режим «Turn based»). Скачать — [Releases](../../releases), распаковать в папку **без русских букв
 в пути**, запустить «Играть против ИИИ.cmd». Что умеет ИИИ — [паспорт](si/AI_PASSPORT.md).
+Эмблема ([si/emblem.png](si/emblem.png)) — CC BY 4.0, автор — Алексей Ткачев.
 
 В ветке `main` сейчас — ИИИ-3.2: к хозяйству, армии, обороне и флоту добавлены авиация (AWAC, бомбардировщики,
 истребители, авиатранспорт) и коммандос; чемпион по-прежнему поколение 3. Движок — правки 01–16 и вторая пачка 17–32:
