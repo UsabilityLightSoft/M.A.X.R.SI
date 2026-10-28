@@ -528,6 +528,13 @@ void cLobbyClient::handleNetMessage_MU_MSG_LANDING_STATE (const cMuMsgLandingSta
 void cLobbyClient::handleNetMessage_MU_MSG_START_GAME (const cMuMsgStartGame&)
 {
 	client = std::make_shared<cClient> (connectionManager);
+	if (saveGameInfo.number == -1)
+	{
+		// unit data before the players, as on the server (cServer::setPreparationData, then setPlayers):
+		// the players get the default unit data. Created without it, they differ from the server players
+		// and the client is out of sync, until the last player has landed (cActionInitNewGame sets the clan)
+		client->setPreparationData (lobbyPreparationData);
+	}
 	client->setPlayers (players, localPlayer.getNr());
 
 	connectionManager->setLocalClient (client.get(), localPlayer.getNr());
@@ -538,7 +545,6 @@ void cLobbyClient::handleNetMessage_MU_MSG_START_GAME (const cMuMsgStartGame&)
 	}
 	else
 	{
-		client->setPreparationData (lobbyPreparationData);
 		//client->initNewGame (initPlayerData));
 		onStartNewGame (client);
 	}
