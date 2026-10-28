@@ -10,15 +10,16 @@ as upstream ([License.md](License.md)).
 
 ## What is new
 
-- **AI player** `SI-R5.0-T` ([passport](si/AI_PASSPORT.md)): plays a whole game through fog of war — chooses its clan
-  by the map, economy with eco-spheres (a draw at the turn limit becomes a win on points), a smart surveyor, research,
+- **AI player** `SI-R5.1-T` ([passport](si/AI_PASSPORT.md)): plays a whole game through fog of war — chooses its clan
+  by the map, re-examines all its orders every turn (after loading a saved game it decides anew at once), economy with
+  eco-spheres (a draw at the turn limit becomes a win on points), a smart surveyor, research,
   army operations with hit-and-run tactics, base defence against early rushes and raids, navy with resupply at sea and
   sea mines, aircraft (AWAC, bombers, fighters, air transport) and infiltrators.
   It joins a normal network game as one more player (`maxr_ai_client`), so you can play against it alone or with
   friends. "Turn based" mode only for now; in the lobby it says in the chat why it is not ready and what to press.
-- **Speaking names of AI versions:** `SI-<type><generation>.<build>-<training>[+<advisor>]` — `SI-R5.0-T` is rules (R),
-  generation 5 (the 5th champion), build 0, tuned by tournaments (T); the frozen champions are `SI-R1` … `SI-R5`, with
-  an LLM advisor — `SI-R5.0-T+Lgemma4-12b`; the former AI-3.1 and AI-3.2 are `SI-R3.1-T` and `SI-R3.2-T`. The name is
+- **Speaking names of AI versions:** `SI-<type><generation>.<build>-<training>[+<advisor>]` — `SI-R5.1-T` is rules (R),
+  generation 5 (the 5th champion), build 1, tuned by tournaments (T); the frozen champions are `SI-R1` … `SI-R5`, with
+  an LLM advisor — `SI-R5.1-T+Lgemma4-12b`; the former AI-3.1 and AI-3.2 are `SI-R3.1-T` and `SI-R3.2-T`. The name is
   the player name in the lobby and the greeting in the game chat (with the link to the passport), and it is written to
   the journal and the metrics of every game. The full key — in the [passport](si/AI_PASSPORT.md).
 - **Engine fixes**, also offered upstream: free metal from factories, use of freed memory when a factory repeats its
@@ -65,15 +66,16 @@ M.A.X.R.SI — форк ремейка M.A.X.R. с **компьютерным п
 [Releases](../../releases), распаковать в папку **без русских букв в пути**, запустить «Играть против ИИИ.cmd». Что
 умеет ИИИ — [паспорт](si/AI_PASSPORT.md).
 
-В ветке `main` — ИИИ `SI-R5.0-T`, поколение 5 (чемпион `base5`): против прежнего чемпиона `SI-R4` D = 0.738 по вердикту
-игры и 0.678 по материалу. Сам выбирает клан по карте (обычно Musashi — танки; враг за водой и моря у базы нет — The
+В ветке `main` — ИИИ `SI-R5.1-T`, поколение 5, сборка 1: пересматривает приказы каждый ход, после загрузки сохранения
+решает заново; по силе — как `SI-R5` (чемпион `base5`: против прежнего чемпиона `SI-R4` D = 0.738 по вердикту игры и
+0.678 по материалу). Сам выбирает клан по карте (обычно Musashi — танки; враг за водой и моря у базы нет — The
 Chosen, авиация); тактика заходов: раненая машина, которой не пережить ход врага, стреляет и отходит, дальнобойного врага
 не ждёт у края его огня, урон «из ниоткуда» — ищет подлодку или диверсанта, по выключенным соседям бьёт наугад; ранний
 раш отбивает танк-защитник; армаду за водой бьют бомбардировщики с подлётом вне досягаемости ПВО; осторожный геолог и
 зенитки у дальних шахт; у свежей верфи — сначала морские мины. С поколения 4 — эко-сферы и победа по очкам, умный геолог,
 снабжение флота в море, AWAC в укрытии. **Имена версий говорящие:**
-`SI-<тип><поколение>.<сборка>-<обучение>[+<советник>]` — `SI-R5.0-T`: правила (R), поколение 5, сборка 0, настроен
-турнирами (T); замороженные чемпионы — `SI-R1` … `SI-R5`, с советником-LLM — `SI-R5.0-T+Lgemma4-12b`; прежние «ИИИ-3.1» и
+`SI-<тип><поколение>.<сборка>-<обучение>[+<советник>]` — `SI-R5.1-T`: правила (R), поколение 5, сборка 1, настроен
+турнирами (T); замороженные чемпионы — `SI-R1` … `SI-R5`, с советником-LLM — `SI-R5.1-T+Lgemma4-12b`; прежние «ИИИ-3.1» и
 «ИИИ-3.2» — `SI-R3.1-T` и `SI-R3.2-T`. Имя видно в лобби (имя игрока), в приветствии в чате партии (со ссылкой на
 паспорт), в журнале и метриках каждой партии; расшифровка — в паспорте. Движок — правки 01–16, вторая пачка 17–32 и
 новые 33–46: выключенный не стреляет и не работает (конструктор ставит стройку на паузу), карты обзора и дозора,

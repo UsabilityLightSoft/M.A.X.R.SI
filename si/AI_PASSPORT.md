@@ -1,4 +1,4 @@
-# AI player passport — SI-R5.0-T (M.A.X.R.SI)
+# AI player passport — SI-R5.1-T (M.A.X.R.SI)
 
 *Русский текст — ниже.*
 
@@ -15,15 +15,15 @@ greeting in the game chat, in the journal (event `aiVersion`) and in `metrics.js
 | Advisor (if any) | `+L<model>` (a local model, LM Studio) / `+C<model>` (online): `+Lgemma4-12b` |
 | `~x` at the end | experiment switches of the rules are set (`MAXR_NAVY=0` and others): not the version of this passport; the journal lists them |
 
-Examples: now `SI-R5.0-T`; with the advisor — `SI-R5.0-T+Lgemma4-12b`; the frozen champions — `SI-R1` … `SI-R5`; a
+Examples: now `SI-R5.1-T`; with the advisor — `SI-R5.1-T+Lgemma4-12b`; the frozen champions — `SI-R1` … `SI-R5`; a
 future tactics network after imitation — `SI-H6.0-I40k`.
 
 | | |
 |---|---|
-| Version | **SI-R5.0-T** — brain `rule`: generation 5 (champion `base5`, frozen 28.10.2026; `rule` plays the same, move for move), build 0, tuned by tournaments |
+| Version | **SI-R5.1-T** — brain `rule`: generation 5 (champion `base5`, frozen 28.10.2026), build 1 — re-examines all its orders every turn (28.10.2026); as strong as `SI-R5`; tuned by tournaments |
 | Made of | hand-written rules only: strategy → operations → micro; deterministic |
 | Neural networks | none yet (planned: own small tactics and strategy nets trained on AI games) |
-| LLM | not used by default; optional advisor brain `llm` (a local model via an OpenAI-compatible API) — `SI-R5.0-T+L<model>` |
+| LLM | not used by default; optional advisor brain `llm` (a local model via an OpenAI-compatible API) — `SI-R5.1-T+L<model>` |
 | Learned from | nothing learned; rules tuned by AI-vs-AI tournaments; 0 human games so far |
 | Plays | through fog of war, by the same rules as a human; "Turn based" mode only; joins a normal network game as a player (`maxr_ai_client`); in the lobby it says in the chat why it is not ready and what to press |
 | Tested on | 5 remake maps (Mushroom, Lava, Delta, Donuts, Three Isles), 5 generated maps up to 250×250 (`Gen_*`) and 2 generated sea maps with bases at the coast (`Gen_Coast`, `Gen_Gulf`) |
@@ -43,7 +43,12 @@ it — close in and shoot this turn or leave its reach; damage "from nowhere" �
 and fires blind at the cells next to its disabled units; an early rush is met by a defender tank, and the factory keeps
 its energy; against an army beyond water with no way across — bombers from an approach point out of reach of the enemy
 anti-air, the enemy sea transport first; the surveyor keeps away from where the enemy may be, anti-air at far mines; a
-fresh shipyard builds a minelayer first; an eco-sphere waits for its housing; a column in narrow passages.
+fresh shipyard builds a minelayer first; an eco-sphere waits for its housing; a column in narrow passages. **New in
+build 5.1:** every turn, the first one after loading a saved game too, it re-examines each unit still driving a path of
+the previous turns: the order is still needed, the path is safe and there is no clearly better task — it drives on;
+otherwise it decides for the unit anew (a new path, a shot, a retreat, getting away from a threat) or stops it. After
+loading, it gives orders at the first turn instead of finishing the old paths. Against `SI-R5` — equal (D 0.510 in the
+full tournament, 0.482 and 0.516 on the large maps), fewer turn-backs and wasted paths, fewer units lost on an old path.
 
 **Cannot yet:** simultaneous turns.
 
@@ -72,7 +77,8 @@ same best score; a stolen vehicle is noticed at the next turn of its owner; disa
 | `SI-R3.1-T` | AI-3.1 (release `si-0.1`) | `rule` | — | against `SI-R3`: D = 0.489 — equal on land, adds a navy |
 | `SI-R3.2-T` | AI-3.2 | `rule` | — | against `SI-R3`: D = 0.505 on 10 maps, 0.514 with the 2 sea maps — adds aircraft and infiltrators |
 | `SI-R4` = `SI-R4.0-T` | — | `base4` | 27.10.2026 | against `SI-R3`: D = 0.736 on 10 maps, 0.752 with the 2 sea maps by the game verdict (points first); by material — 0.610 and 0.616 |
-| `SI-R5` = `SI-R5.0-T` | — | `base5` = `rule` | 28.10.2026 | against `SI-R4`: D = 0.738 on 10 maps, 0.713 with the 2 sea maps by the game verdict; by material — 0.678 and 0.649; mostly from the clan choice (`SI-R4` does not choose a clan) |
+| `SI-R5` = `SI-R5.0-T` | — | `base5` | 28.10.2026 | against `SI-R4`: D = 0.738 on 10 maps, 0.713 with the 2 sea maps by the game verdict; by material — 0.678 and 0.649; mostly from the clan choice (`SI-R4` does not choose a clan) |
+| `SI-R5.1-T` | — | `rule` | — | against `SI-R5`: D = 0.510 in the full tournament, 0.482 and 0.516 on the large maps — equal; re-examines its orders every turn |
 
 D is the share of strength in a tournament on both sides of each map (0.5 — equal; ≥ 0.53 — stronger). `SI-R3` builds
 no eco-spheres, so against it the verdict by points is too generous; the verdict by material (as before generation 4) is
@@ -80,7 +86,7 @@ the strict measure.
 
 ---
 
-# Паспорт ИИИ — SI-R5.0-T (M.A.X.R.SI)
+# Паспорт ИИИ — SI-R5.1-T (M.A.X.R.SI)
 
 ИИИ (ИИ Игрока) носит **говорящее имя**: `SI-<тип><поколение>.<сборка>-<обучение>[+<советник>]`, латиницей (лобби
 игры, имена файлов, GitHub). Поколение N — N-й «чемпион», замороженная версия, которая обыграла прежнего чемпиона в
@@ -95,15 +101,15 @@ the strict measure.
 | Советник (если есть) | `+L<модель>` (модель на ПК, LM Studio) / `+C<модель>` (онлайн): `+Lgemma4-12b` |
 | `~x` в конце | заданы выключатели опытов правил (`MAXR_NAVY=0` и другие): это не версия из паспорта; какие — в журнале |
 
-Примеры: сейчас `SI-R5.0-T`; с советником — `SI-R5.0-T+Lgemma4-12b`; замороженные чемпионы — `SI-R1` … `SI-R5`; будущая
+Примеры: сейчас `SI-R5.1-T`; с советником — `SI-R5.1-T+Lgemma4-12b`; замороженные чемпионы — `SI-R1` … `SI-R5`; будущая
 сеть-тактик после подражания — `SI-H6.0-I40k`.
 
 | | |
 |---|---|
-| Версия | **SI-R5.0-T** — мозг `rule`: поколение 5 (чемпион `base5`, заморожен 28.10.2026; `rule` играет так же, ход в ход), сборка 0, настроен турнирами |
+| Версия | **SI-R5.1-T** — мозг `rule`: поколение 5 (чемпион `base5`, заморожен 28.10.2026), сборка 1 — пересматривает приказы каждый ход (28.10.2026); по силе — как `SI-R5`; настроен турнирами |
 | Из чего | только правила, написанные вручную: стратегия → операции → микро; детерминирован |
 | Нейросети | пока нет (в плане — свои маленькие сети тактики и стратегии, обученные на партиях ИИИ) |
-| LLM | по умолчанию нет; по желанию — мозг-советник `llm` (локальная модель через API, совместимый с OpenAI) — `SI-R5.0-T+L<модель>` |
+| LLM | по умолчанию нет; по желанию — мозг-советник `llm` (локальная модель через API, совместимый с OpenAI) — `SI-R5.1-T+L<модель>` |
 | На чём учился | ничему не учился; правила настроены турнирами ИИИ против ИИИ; партий с человеком — 0 |
 | Как играет | сквозь туман войны, по тем же правилам, что человек; только режим «По очереди»; входит в обычную сетевую игру как игрок (`maxr_ai_client`); в лобби говорит в чат, почему не готов и что нажать |
 | Где проверен | 5 карт ремейка (Mushroom, Lava, Delta, Donuts, Three Isles), 5 сгенерированных карт до 250×250 (`Gen_*`) и 2 сгенерированные морские карты с базами у берега (`Gen_Coast`, `Gen_Gulf`) |
@@ -123,6 +129,11 @@ the strict measure.
 юнитами; ранний раш встречает танк-защитник, фабрика не отдаёт свою энергию; против армии за водой без переправы —
 бомбардировщики с точки подлёта вне досягаемости ПВО врага, первая цель — его морской транспорт; геолог обходит места, где
 может быть враг, зенитки у дальних шахт; у свежей верфи — сначала минёр; эко-сфера ждёт своё жильё; колонна в узостях.
+**Новое в сборке 5.1:** каждый ход, в том числе первый после загрузки сохранения, пересматривает каждую машину, что едет
+по пути из прошлых ходов: приказ ещё нужен, путь безопасен, лучшего дела нет — едет дальше; иначе решает за неё заново
+(новый путь, выстрел, отход, уход от угрозы) или останавливает. После загрузки даёт приказы в первый же ход, а не
+досиживает старые пути. Против `SI-R5` — на равных (D 0.510 в полном турнире, 0.482 и 0.516 на больших картах);
+разворотов и пути впустую меньше, на старом пути гибнет меньше машин.
 
 **Пока не умеет:** одновременные ходы.
 
@@ -144,8 +155,9 @@ the strict measure.
 (`base3`, D = 0.565 над вторым) → `SI-R3.1-T` (прежнее имя «ИИИ-3.1», выпуск `si-0.1`: на равных с третьим на суше, плюс
 флот) → `SI-R3.2-T` (прежнее «ИИИ-3.2»: D = 0.505 против третьего на 10 картах и 0.514 с двумя морскими, плюс авиация и
 коммандос) → `SI-R4` = `SI-R4.0-T` (`base4`, 27.10.2026: против третьего D = 0.736 на 10 картах и 0.752 с двумя
-морскими по вердикту игры — сначала очки; по материалу — 0.610 и 0.616) → `SI-R5` = `SI-R5.0-T` (`base5` = `rule`,
+морскими по вердикту игры — сначала очки; по материалу — 0.610 и 0.616) → `SI-R5` = `SI-R5.0-T` (`base5`,
 28.10.2026: против четвёртого D = 0.738 на 10 картах и 0.713 с двумя морскими по вердикту игры, 0.678 и 0.649 по
-материалу; прирост — в основном от выбора клана: `SI-R4` клан не выбирает). D — доля силы в турнире за обе стороны каждой
-карты (0.5 — поровну; от 0.53 — сильнее). `SI-R3` эко-сфер не строит, поэтому против него вердикт по очкам щедрее;
-строгое мерило — вердикт по материалу, как до поколения 4.
+материалу; прирост — в основном от выбора клана: `SI-R4` клан не выбирает) → `SI-R5.1-T` (`rule`, 28.10.2026: пересмотр
+приказов каждый ход; против пятого D = 0.510 в полном турнире, 0.482 и 0.516 на больших картах — на равных). D — доля
+силы в турнире за обе стороны каждой карты (0.5 — поровну; от 0.53 — сильнее). `SI-R3` эко-сфер не строит, поэтому
+против него вердикт по очкам щедрее; строгое мерило — вердикт по материалу, как до поколения 4.
