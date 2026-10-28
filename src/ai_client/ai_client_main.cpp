@@ -20,6 +20,8 @@
 // maxr_ai_client — клиент ИИИ (шаг 15 PLAN.md): входит в сетевую игру MAXR как обычный
 // игрок (TCP/IP), сам проходит лобби, клан и высадку и играет мозгом ИИИ (rule, base2, llm)
 // в режиме «Turn based». Хост — окно игры («TCP/IP Host») или выделенный сервер.
+// Клан мозги rule и llm выбирают сами — тем же правилом, что ai_headless (ruleChooseClan: по карте и своей точке
+// высадки; Р17, п. 86 и 158 PLAN.md), base и base2 — The Chosen, как прежде; --clan задаёт клан вручную.
 // Имя в лобби — имя версии ИИИ (ai_version.h: rule — SI-R4.0-T), в чате — приветствие и где паспорт.
 // Ход — в несколько заходов (шаг 11), если хост их понимает (проба в первом ходу), иначе один.
 // Пишет в каталог партии: journal.jsonl, digest/, metrics.json, metrics_turns.jsonl (как
@@ -46,6 +48,7 @@
 #include "game/data/gamesettings.h"
 #include "game/data/map/map.h"
 #include "game/data/model.h"
+#include "game/data/player/clans.h"
 #include "game/data/player/player.h"
 #include "game/data/player/playerbasicdata.h"
 #include "game/data/report/savedreportchat.h"
@@ -94,6 +97,9 @@ using Clock = std::chrono::steady_clock;
 
 std::string gNetLogPath; // свой net.log (cLog открывает файл один раз за процесс — при --loop общий)
 
+constexpr int kClanAuto = -2; // --clan auto: клан выбирает мозг (rule, llm — ruleChooseClan), прочие — The Chosen
+constexpr int kClanRandom = -1;
+
 //------------------------------------------------------------------------------
 struct sOptions
 {
@@ -101,7 +107,7 @@ struct sOptions
 	int port = DEFAULTPORT;
 	std::string brain = "rule";        // rule | base2 | base | llm
 	std::string name;                  // пусто — имя версии ИИИ (ai_version.h): SI-R4.0-T, SI-R2, …
-	int clan = 0;                      // -1 — случайный
+	int clan = kClanAuto;              // kClanAuto — по карте и высадке; kClanRandom — случайный; 0..7 — этот
 	std::string passes = "auto";       // auto — проба в первом ходу; 1..50 — как MAXR_PASSES
 	std::string outDir;                // пусто — <папка exe>/ai_games/<дата-время>_<имя>
 	int waitSec = 1800;                // сколько ждать, пока хост откроет игру
@@ -123,7 +129,8 @@ void printUsage()
 		"  --port <n>         порт (58600)\n"
 		"  --brain <b>        rule (умолчание) | base2 | base | llm\n"
 		"  --name <имя>       имя в лобби (по умолчанию — имя версии ИИИ: rule — SI-R4.0-T, паспорт si/AI_PASSPORT.md)\n"
-		"  --clan <0..7|random>  клан (0 — The Chosen)\n"
+		"  --clan <auto|random|0..7>  клан: auto (умолчание) — rule и llm выбирают по карте и своей высадке, как\n"
+		"                     ai_headless (обычно 4 — Musashi; враг за водой и моря у базы нет — 0, The Chosen), base и base2 — 0\n"
 		"  --passes <auto|1..50> заходов за ход: auto — если хост понимает (проба), иначе 1\n"
 		"  --out <каталог>    куда писать журналы партии\n"
 		"  --wait <сек>       сколько ждать хоста (1800)\n"
@@ -154,7 +161,7 @@ bool parseArgs (int argc, char** argv, sOptions& o, std::string& err)
 		else if (a == "--clan")
 		{
 			const std::string v = value();
-			o.clan = (v == "random") ? -1 : std::atoi (v.c_str());
+			o.clan = v == "auto" ? kClanAuto : v == "random" ? kClanRandom : std::atoi (v.c_str());
 		}
 		else if (a == "--passes") o.passes = value();
 		else if (a == "--out") o.outDir = value();
@@ -187,9 +194,9 @@ bool parseArgs (int argc, char** argv, sOptions& o, std::string& err)
 			return false;
 		}
 	}
-	if (o.clan < -1 || o.clan > 7)
+	if (o.clan < kClanAuto || o.clan > 7)
 	{
-		err = "--clan: 0..7 or random";
+		err = "--clan: auto, random or 0..7";
 		return false;
 	}
 	if (o.port <= 0 || o.port > 65535)
@@ -240,6 +247,16 @@ std::string passportText()
 bool sameColor (const cRgbColor& a, const cRgbColor& b)
 {
 	return a.toLab().deltaE (b.toLab()) < 10.; // как lobbyutils.cpp
+}
+
+// имя клана из данных кланов игры (data/clans.json): 0 — «The Chosen», 4 — «Musashi»; кланы выключены — «-»
+std::string clanNameOf (const cClanData* clans, int clan)
+{
+	if (clan < 0) return "-";
+	if (clans != nullptr)
+		for (const auto& c : clans->getClans())
+			if (c.getClanID() == clan) return c.getDefaultName();
+	return "#" + std::to_string (clan);
 }
 
 const char* landingStateText (eLandingPositionState s)
@@ -299,6 +316,7 @@ private:
 	std::string savedGameAiName (int me) const;
 	void setupLobby();
 	void startPreparation();
+	void chooseClan (const cPosition& landingPoint);
 	void chooseLanding (eLandingPositionState);
 	void sendLanding (const cPosition&);
 	void landingStep();
@@ -352,6 +370,10 @@ private:
 
 	// подготовка
 	sInitPlayerData initPlayerData;
+	bool clanAuto = false;             // клан выбирает мозг по карте и своей точке высадки (chooseClan)
+	cPosition clanLanding {-1, -1};    // точка высадки, по которой выбран клан
+	std::string clanName;              // имя клана (data/clans.json) — журнал, client.json
+	std::string clanWhy;               // почему этот клан
 	ai_client::cLandingChooser landing;
 	int landingTries = 0;
 	cPosition landingPos;
@@ -767,10 +789,38 @@ void cAiClient::startPreparation()
 
 	std::uint32_t seed = opt.seed != 0 ? opt.seed : static_cast<std::uint32_t> (std::time (nullptr)) ^ static_cast<std::uint32_t> (lobby->getLocalPlayer().getNr() * 7919);
 	initPlayerData = sInitPlayerData();
-	if (settings.clansEnabled)
-		initPlayerData.clan = opt.clan >= 0 ? opt.clan : static_cast<int> (seed % 8);
-	else
+	clanAuto = false;
+	clanLanding = cPosition (-1, -1);
+	if (!settings.clansEnabled)
+	{
 		initPlayerData.clan = -1;
+		clanWhy = "clans are off in the game settings";
+	}
+	else if (opt.clan >= 0)
+	{
+		initPlayerData.clan = opt.clan;
+		clanWhy = "--clan " + std::to_string (opt.clan);
+	}
+	else if (opt.clan == kClanRandom)
+	{
+		initPlayerData.clan = static_cast<int> (seed % 8);
+		clanWhy = "--clan random";
+	}
+	else if (opt.brain == "rule" || opt.brain == "llm")
+	{
+		// клан — по карте и своей точке высадки (chooseClan — когда точка выбрана). Бесплатный набор высадки у кланов 0–6
+		// один и тот же (computeInitialLandingUnits; другой — только у Axis Inc., 7, правило его не берёт): набор и точку
+		// можно считать до клана
+		clanAuto = true;
+		initPlayerData.clan = 0;
+		clanWhy = "not chosen yet";
+	}
+	else
+	{
+		initPlayerData.clan = 0;
+		clanWhy = "the brain " + opt.brain + " does not choose a clan: The Chosen, as before";
+	}
+	clanName = clanNameOf (prep.clanData.get(), initPlayerData.clan);
 	// бесплатный стартовый набор (как ai_headless); кредиты остаются на улучшения за золото
 	for (const auto& [unitId, cargo] : computeInitialLandingUnits (initPlayerData.clan, settings, *prep.unitsData))
 		initPlayerData.landingUnits.push_back ({unitId, static_cast<unsigned int> (cargo)});
@@ -778,8 +828,8 @@ void cAiClient::startPreparation()
 	const bool fixed = settings.bridgeheadType == eGameSettingsBridgeheadType::Definite;
 	landing.init (*prep.staticMap, *prep.unitsData, fixed, initPlayerData.landingUnits, seed);
 	landingTries = 0;
-	say ("подготовка: клан " + std::to_string (initPlayerData.clan) + ", юнитов высадки " + std::to_string (initPlayerData.landingUnits.size())
-		+ "; высадка: " + landing.describe());
+	say ("подготовка: " + (clanAuto ? std::string ("клан — по карте и точке высадки") : "клан " + std::to_string (initPlayerData.clan) + " " + clanName + " (" + clanWhy + ")")
+		+ ", юнитов высадки " + std::to_string (initPlayerData.landingUnits.size()) + "; высадка: " + landing.describe());
 
 	lobby->enterLandingSelection();
 	const auto p = landing.first();
@@ -789,8 +839,35 @@ void cAiClient::startPreparation()
 		chat ("На этой карте мне негде высадиться. / No valid landing place on this map.");
 		return;
 	}
+	chooseClan (*p);
 	say ("высадка: (" + std::to_string (p->x()) + "," + std::to_string (p->y()) + ")");
 	sendLanding (*p);
+}
+
+//------------------------------------------------------------------------------
+// Р17 (п. 86 и 158 PLAN.md): клан — тем же правилом, что у ai_headless для мозга rule (ruleChooseClan): по карте (её видно в
+// лобби до игры, как человеку) и своей точке высадки; клан врага не виден и не учитывается. Сервер узнаёт клан только из
+// initNewGame на старте партии, поэтому сменилась точка (рядом другой игрок) — клан выбирается по новой: человек тоже может
+// вернуться из высадки к выбору клана. Правило даёт только кланы 0–6 — набор высадки, посчитанный до клана, тот же.
+void cAiClient::chooseClan (const cPosition& landingPoint)
+{
+	if (!clanAuto || landingPoint == clanLanding) return;
+	const auto& prep = lobby->getLobbyPreparationData();
+	if (!prep.staticMap) return;
+	const ai::sClanChoice choice = ai::ruleChooseClan (*prep.staticMap, landingPoint);
+	const int clan = choice.clan >= 0 && choice.clan <= 6 ? choice.clan : 0; // MAXR_CLAN=0 (опыт «по месту») — The Chosen, как до Р17
+	const bool again = clanLanding.x() >= 0;
+	const bool changed = again && clan != initPlayerData.clan;
+	clanLanding = landingPoint;
+	initPlayerData.clan = clan;
+	clanName = clanNameOf (prep.clanData.get(), clan);
+	clanWhy = choice.why;
+	const std::string where = "(" + std::to_string (landingPoint.x()) + "," + std::to_string (landingPoint.y()) + "): ";
+	if (again && !changed)
+		say ("клан по итоговой точке высадки " + where + "тот же — " + std::to_string (clan) + " " + clanName);
+	else
+		say (std::string (changed ? "клан другой — по итоговой точке высадки " : "клан по карте и точке высадки ") + where + std::to_string (clan) + " "
+			+ clanName + " — " + clanWhy);
 }
 
 //------------------------------------------------------------------------------
@@ -1005,7 +1082,11 @@ void cAiClient::startGame (std::shared_ptr<cClient> c, bool newGame, bool tapped
 		if (loser.getId() == playerId && !gameOver) finishGame ("defeated");
 	});
 
-	if (newGame) client->initNewGame (initPlayerData);
+	if (newGame)
+	{
+		chooseClan (initPlayerData.landingPosition); // точка высадки — итоговая
+		client->initNewGame (initPlayerData);
+	}
 
 	// заходы: числом — сразу; auto — проба в первом своём ходу (хост авторов AiPass не понимает)
 	if (opt.passes == "auto")
@@ -1188,7 +1269,15 @@ void cAiClient::finishGame (const std::string& reason)
 	j["host"] = opt.host + ":" + std::to_string (opt.port);
 	j["version"] = std::string (PACKAGE_VERSION " " PACKAGE_REV);
 	j["map"] = model.getMap() ? utf8::to_string (model.getMap()->getFilename()) : std::string();
-	j["clan"] = initPlayerData.clan;
+	// клан — из модели (что принял сервер; у загруженной партии — из сохранения), выбор — как решал клиент
+	const cPlayer* mePlayer = model.getPlayer (playerId);
+	const int modelClan = mePlayer != nullptr ? mePlayer->getClan() : initPlayerData.clan;
+	j["clan"] = modelClan;
+	j["clanName"] = clanNameOf (&ClanDataGlobal, modelClan);
+	if (clanWhy.empty())
+		j["clanChoice"] = {{"why", "a saved game or a reconnect: the clan comes from the game"}};
+	else
+		j["clanChoice"] = {{"clan", initPlayerData.clan}, {"why", clanWhy}, {"auto", clanAuto}};
 	j["landing"] = {{"x", landingPos.x()}, {"y", landingPos.y()}, {"state", landingState}, {"tries", landingTries}};
 	j["passes"] = passesInfo;
 	j["maxPasses"] = maxPasses;
