@@ -83,8 +83,10 @@ void cActionUpgradeBuilding::execute (cModel& model) const
 	{
 		upgradedData.markLastVersionUsed();
 		// update scan & sentry
-		// (a disabled building is not in the scan maps: it is added with the new scan, when it recovers)
-		if (b->getOwner() && !b->isDisabled() && b->data.getScan() < upgradedData.getScan())
+		// (a disabled building is not in the scan maps: it is added with the new scan, when it recovers,
+		// and searches for stealth units then)
+		const bool scanIncreased = b->getOwner() && !b->isDisabled() && b->data.getScan() < upgradedData.getScan();
+		if (scanIncreased)
 		{
 			b->getOwner()->updateScan (*b, upgradedData.getScan());
 		}
@@ -94,8 +96,12 @@ void cActionUpgradeBuilding::execute (cModel& model) const
 		}
 
 		b->upgradeToCurrentVersion();
-		// search for stealth units in the new scan range
-		b->detectOtherUnits (*model.getMap());
+		if (scanIncreased)
+		{
+			// search for stealth units in the new scan range
+			// (after the upgrade: detectOtherUnits() searches within data.getScan())
+			b->detectOtherUnits (*model.getMap());
+		}
 	}
 	subbase.addMetal (-totalCosts);
 
