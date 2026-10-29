@@ -42,7 +42,10 @@ enum class eThreatLayer
 	None,
 	Fire,
 	Reach,
-	Strike // шаг 9: «удар с подъезда» (дальность + проезд с выстрелом) видимых врагов и зданий
+	Strike, // шаг 9: «удар с подъезда» (дальность + проезд с выстрелом) видимых врагов и зданий
+	// Р24 (п. 165): стройщик — как Reach, но угроза, которая не убьёт его за builderTurns() ходов врага (урон за ход по его
+	// броне × ходы < его hp сейчас), — не угроза: одинокий скаут не останавливает стройку
+	Builder
 };
 
 // что помним о вражеском юните
@@ -118,6 +121,21 @@ public:
 	// угроза для конкретной машины (наземная или воздушная карта; у воздушной
 	// зоны огня нет — берётся «дальность + ход»)
 	int threatFor (const cVehicle& v, const cPosition& p, eThreatLayer layer = eThreatLayer::Reach) const;
+
+	// Р24 (п. 165): слой Builder. Стройщик уходил от любой машины, что за свой ход подъедет и выстрелит, — одинокий скаут
+	// (урон 6 за ход по конструктору с 24 hp) держал единственного конструктора без фабрики вдали от стройки (Save001,
+	// rules/R22_reorders.md §5). Теперь угроза, что не убьёт стройщика за builderTurns() ходов врага, — лёгкая: стройщик
+	// строит и идёт к площадке, площадка годна. MAXR_BUILD_LIGHT=<ходов> (по умолчанию 2; 0 — как до Р24: Builder = Reach).
+	int builderTurns() const { return builderTurns_; }
+	// стройщик, по которому меряются клетки без машины (площадки, cellThreat): его броня и hp сейчас
+	void setBuilderRef (const cVehicle& v);
+	// угроза клетки по слою Builder для стройщика setBuilderRef (0 — нет или лёгкая)
+	int builderThreat (const cPosition& p) const;
+	// ожидаемый урон за ход врага по наземной машине с бронёй armor в клетке p (все вооружённые наземные враги памяти,
+	// «дальность + ход» — как слой Reach)
+	int reachDamage (int armor, const cPosition& p) const;
+	// угроза в клетке для машины с бронёй armor и hp — лёгкая (не убьёт за builderTurns() ходов врага)
+	bool lightThreat (int armor, int hp, const cPosition& p) const;
 	// путь (без стартовой клетки) проходит через клетку под угрозой для v
 	bool pathUnsafe (const cVehicle& v, const std::vector<cPosition>& path, eThreatLayer layer = eThreatLayer::Reach) const;
 
@@ -202,6 +220,12 @@ private:
 	std::vector<int> air_;
 	std::vector<int> fire_;
 	std::vector<int> strike_; // шаг 9: дальность + подъезд с выстрелом (видимые и здания)
+	// Р24 (п. 165): слой Builder — ходов врага, которые стройщик должен пережить; эталон для клеток без машины; урон за ход
+	// по броне (слой Reach) — по запросу, на ход
+	int builderTurns_ = 2;
+	int refArmor_ = 0;
+	int refHp_ = 0;
+	mutable std::map<int, std::vector<int>> reachDamage_;
 	std::vector<int> seen_; // ход последнего наблюдения клетки (−1 — не видели)
 };
 

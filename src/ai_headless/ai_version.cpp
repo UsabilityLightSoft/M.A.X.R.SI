@@ -28,6 +28,9 @@ constexpr sExperimentKnob kExperimentKnobs[] = {
 	{"MAXR_ARMADA", true}, // Р17 (п. 125)
 	{"MAXR_AWAC_HIDE", true},
 	{"MAXR_BLIND", true}, // Р17: огонь наугад
+	{"MAXR_BUILD_GUARD", false}, // Р24 (п. 165): опыт «позвать защитника» стройщику под лёгкой угрозой
+	{"MAXR_BUILD_LIGHT", false}, // Р24 (п. 165): стройщик под лёгкой угрозой (ходов врага; 0 — выкл.)
+	{"MAXR_BUILD_TURBO", false}, // Р24 (п. 165): опыт «турбо-стройка» под лёгкой угрозой
 	{"MAXR_CMD_TRAIN", false},
 	{"MAXR_CMD_TRAIN_RANK", false},
 	{"MAXR_CMD_TURN", false},
@@ -50,6 +53,8 @@ constexpr sExperimentKnob kExperimentKnobs[] = {
 	{"MAXR_SEASUPPLY", true},
 	{"MAXR_SURVEY", true},
 	{"MAXR_SURVEY_ROAM", true}, // Р17 (п. 140)
+	{"MAXR_SURVEY_GUESS", true}, // Р24 (п. 164): точка напротив у центра карты
+	{"MAXR_SURVEY_SKIP", true}, // Р24 (п. 164): прежняя разведка без простоя
 	{"MAXR_YARD_MINES_FIRST", true}, // Р17 (п. 143)
 };
 

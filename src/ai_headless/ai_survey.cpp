@@ -42,6 +42,7 @@ constexpr int kRoamAge = 8;        // Р17 (п. 140): «где может быт
 constexpr int kRoamTurns = 3;      // …ход врага за прошедшие ходы — не больше трёх…
 constexpr int kRoamMaxR = 24;      // …и радиус не больше
 constexpr int kRoamHome = 4;       // уход от свежего врага — к клеткам у центра базы (Чебышёв)
+constexpr int kSmallMapSide = 3 * kCloseEnemy; // Р24 (п. 164): карта меньше — враг близко, где бы ни был (Donuts 70, Mushroom 60, Lava 64)
 
 int cheb (const cPosition& a, const cPosition& b)
 {
@@ -136,6 +137,34 @@ void cSurvey::update (const cModel& model, const cPlayer& player, const cWorldMo
 	for (const auto& kv : world.enemies())
 		if (kv.second.building && kv.second.owner >= 0) enemyBuildings_.push_back (kv.second.pos);
 	guess_ = enemyBuildings_.empty() ? cPosition (W_ - 1 - center_.x(), H_ - 1 - center_.y()) : cPosition (-1, -1);
+	// Р24 (п. 164): точка напротив ближе kCloseEnemy — мы у центра карты, о враге она ничего не говорит (он может быть где угодно,
+	// хоть в 10 клетках, хоть за полкарты); считать её базой врага — значит отдать геолога прежней разведке и обрезать ей все пути
+	const char* gs = std::getenv ("MAXR_SURVEY_GUESS");
+	guessCheck_ = !(gs != nullptr && gs[0] == '0');
+	const char* sk = std::getenv ("MAXR_SURVEY_SKIP");
+	skipNear_ = !(sk != nullptr && sk[0] == '0');
+	// Малая карта (сторона меньше kSmallMapSide): враг и так близко, где бы ни высадился, — точка напротив остаётся (Donuts 70×70,
+	// базы в 13 клетках: снятая догадка — кольца до 24 клеток у игрока 0; вместе с разведкой без простоя — побед игрока 0 против
+	// base5 32% вместо 76%, full Р24)
+	if (guessCheck_ && guess_.x() >= 0 && cheb (guess_, center_) < kCloseEnemy && std::min (W_, H_) >= kSmallMapSide)
+	{
+		if (!guessDropNoted_)
+			event ("guess dropped", {{"guess", {{"x", guess_.x()}, {"y", guess_.y()}}}, {"center", {{"x", center_.x()}, {"y", center_.y()}}},
+				{"distance", cheb (guess_, center_)},
+				{"why", "the point opposite our base is close to it: we stand near the map centre, the guess says nothing about the enemy"}});
+		guessDropNoted_ = true;
+		guess_ = cPosition (-1, -1);
+	}
+	// враг совсем рядом (его здания или точка напротив ближе kCloseEnemy) — прежняя разведка (pathFor); Р24: обход клеток у врага
+	// (MAXR_SURVEY_SKIP) — только когда враг не рядом: на тесной карте геолог, стоявший у базы (ближайшая цель — у врага),
+	// оставлял металл армии, и игрок 0 на Donuts выигрывал ранним разгромом; разведка без простоя там — 0.369 против 0.518
+	// (Donuts, 200 партий против base5): шахты и соединители раньше армии (Donuts 53: первый танк на 44-м ходу вместо 30-го)
+	{
+		int toEnemy = std::numeric_limits<int>::max();
+		for (const auto& b : enemyBuildings_) toEnemy = std::min (toEnemy, cheb (b, center_));
+		if (guess_.x() >= 0) toEnemy = std::min (toEnemy, cheb (guess_, center_));
+		closeEnemy_ = toEnemy < kCloseEnemy;
+	}
 	taken_.clear();
 	// Р17 (п. 140): где может быть враг (см. ai_survey.h); MAXR_SURVEY_ROAM=0 — как в Р7
 	roam_.clear();
@@ -326,16 +355,12 @@ std::vector<cPosition> cSurvey::pathFor (const cModel& model, const cPlayer& pla
 		}
 	}
 	// враг совсем рядом (база или точка напротив ближе kCloseEnemy) — кольца и жилы не нужны (своя земля мала): прежняя разведка.
-	// Donuts (базы в 13 клетках): кольцевая разведка — D 0.40 против 0.535 у прежней на тех же сидах; механизм не установлен
+	// Donuts (базы в 13 клетках): кольцевая разведка — D 0.40 против 0.535 у прежней на тех же сидах; механизм не установлен.
+	// Р24: на большой карте точка напротив ближе kCloseEnemy сюда не доходит (update её снимает); «рядом» — closeEnemy_ (update)
+	if (closeEnemy_)
 	{
-		int toEnemy = std::numeric_limits<int>::max();
-		for (const auto& b : enemyBuildings_) toEnemy = std::min (toEnemy, cheb (b, center_));
-		if (guess_.x() >= 0) toEnemy = std::min (toEnemy, cheb (guess_, center_));
-		if (toEnemy < kCloseEnemy)
-		{
-			why = "surveyor: the enemy base is close, rings are not needed";
-			return {};
-		}
+		why = "surveyor: the enemy base is close, rings are not needed";
+		return {};
 	}
 	// 2) жила: неразведанный сосед найденного ресурса (ближе к геологу; ничья — по углу)
 	{

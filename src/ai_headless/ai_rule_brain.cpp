@@ -524,8 +524,11 @@ constexpr int kSurveyorHome = 20;   // разведчик сначала раз�
 // следующая — до tries попыток (раньше юнит в этом случае стоял на месте).
 // Шаг 7: только клетки без угрозы и путь в обход опасных клеток; если обойти
 // нельзя — клетка отбрасывается (только для этого юнита) и берётся следующая.
+// Р24 (п. 164): skip — клетки, которые не брать целью (геолог: у базы врага); смотрится только у кандидатов ближе
+// лучшего (как угроза) — выбор тот же, что «ближайшая из годных»
 std::vector<cPosition> pathToUnexplored (const cVehicle& v, const cMapView& view,
-	sScoutCache& cache, const cWorldModel& world, eThreatLayer layer, const cPosition* home = nullptr, int radius = 0, int tries = 3)
+	sScoutCache& cache, const cWorldModel& world, eThreatLayer layer, const cPosition* home = nullptr, int radius = 0, int tries = 3,
+	const cSurvey* skipNearEnemy = nullptr)
 {
 	auto& pass = scoutPassable (cache, v, view);
 	const cPosition from = v.getPosition();
@@ -543,6 +546,7 @@ std::vector<cPosition> pathToUnexplored (const cVehicle& v, const cMapView& view
 			if (d < bestDist)
 			{
 				if (world.threatFor (v, p, layer) > 0) continue;
+				if (skipNearEnemy != nullptr && skipNearEnemy->nearEnemy (p)) continue;
 				if (std::find (unsafe.begin(), unsafe.end(), static_cast<int> (i)) != unsafe.end()) continue;
 				bestDist = d;
 				bestI = static_cast<int> (i);
@@ -583,6 +587,7 @@ std::vector<cPosition> threatAwarePath (const cVehicle& v, const cMapView& view,
 int cellThreat (const cWorldModel& world, const cPosition& c, eThreatLayer layer)
 {
 	if (layer == eThreatLayer::None) return 0;
+	if (layer == eThreatLayer::Builder) return world.builderThreat (c); // Р24: по стройщику setBuilderRef
 	return layer == eThreatLayer::Fire ? world.groundFire (c) : world.groundThreat (c);
 }
 
@@ -1532,7 +1537,10 @@ const cBuilding* refillSource (const cPlayer& player, const cSubBase* main, cons
 // шаг 7: тревога у базы — вооружённые враги у ключевых зданий (шахты, фабрики, электростанции, центры исследований, эко-сферы)
 // и идущей стройки; машины — видны сейчас или недавно (память), группами: враги ближе kAlarmGroup друг к другу — одна группа
 // (порядок по id — детерминированно). Р22: вынесено из микро — тревогу смотрит и пересмотр приказов
-std::vector<std::vector<const sEnemyMemory*>> alarmGroups (const cPlayer& player, const cWorldModel& world)
+// Р24 (п. 165): guarded — клетки стройщиков, оставшихся под лёгкой угрозой: враг, что достаёт их за свой ход («дальность + ход»),
+// — тоже тревога (позвать защитника; MAXR_BUILD_GUARD)
+std::vector<std::vector<const sEnemyMemory*>> alarmGroups (const cPlayer& player, const cWorldModel& world,
+	const std::vector<cPosition>* guarded = nullptr)
 {
 	// ключевые клетки: шахты, фабрики, электростанции, центры исследований, идущая стройка
 	std::vector<cPosition> keys;
@@ -1559,7 +1567,15 @@ std::vector<std::vector<const sEnemyMemory*>> alarmGroups (const cPlayer& player
 		long long dOur = std::numeric_limits<long long>::max();
 		for (const auto& k : keys)
 			dOur = std::min<long long> (dOur, (k - m.pos).l2NormSquared());
-		if (dOur > static_cast<long long> (kAlarmRadius) * kAlarmRadius) continue;
+		bool guard = false;
+		if (guarded != nullptr && dOur > static_cast<long long> (kAlarmRadius) * kAlarmRadius && !m.building)
+			for (const auto& g : *guarded)
+				if ((g - m.pos).l2NormSquared() <= static_cast<long long> (m.reach()) * m.reach())
+				{
+					guard = true;
+					dOur = std::min<long long> (dOur, (g - m.pos).l2NormSquared());
+				}
+		if (dOur > static_cast<long long> (kAlarmRadius) * kAlarmRadius && !guard) continue;
 		// враг ближе к своим зданиям, чем к нашим (базы рядом — Donuts), — не налёт на нас
 		long long dTheir = std::numeric_limits<long long>::max();
 		for (const auto& kv2 : world.enemies())
@@ -1696,6 +1712,13 @@ std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 	stats_ = {};
 	holdReason_.clear();   // шаг 11: «стоять» и мир правил — события этого хода
 	extraEvents_.clear();
+	lightGuard_.clear();   // Р24 (п. 165)
+	{
+		const char* g = std::getenv ("MAXR_BUILD_GUARD");
+		buildGuard_ = g != nullptr && g[0] == '1';
+		const char* tb = std::getenv ("MAXR_BUILD_TURBO");
+		buildTurbo_ = tb != nullptr && tb[0] == '1';
+	}
 	// события операций, не взятые движком (мозг внутри советника), — не копить без конца;
 	// директива, заданная до хода, остаётся и уходит в журнал с событиями этого хода
 	if (ops_.pendingEvents() > 200) ops_.takeEvents();
@@ -1955,6 +1978,11 @@ void cRuleBrain::reviewOrders (int playerId, const cModel& model)
 		}
 		const bool combat = isCombatUnit (v) && v.data.getAmmo() > 0;
 		const int hpPct = v.data.getHitpointsMax() > 0 ? v.data.getHitpoints() * 100 / v.data.getHitpointsMax() : 100;
+		// Р24 (п. 165): стройщик (конструктор, инженер) уходит только от угрозы, что убьёт его (слой Builder, как в оперативке)
+		const std::string& canBuild = v.getStaticUnitData().canBuild;
+		const bool builderUnit = canBuild == "BigBuilding" || canBuild == "SmallBuilding";
+		const eThreatLayer bl = builderUnit && world_.builderTurns() > 0 ? eThreatLayer::Builder : kBuilderLayer;
+		if (bl == eThreatLayer::Builder) world_.setBuilderRef (v);
 		// враг в дальности с места — выстрел (как фокус-огонь; машины врага и его вооружённые здания: соединитель не повод)
 		auto enemyInRange = [&] () {
 			if (!combat || role == eRole::Scout || role == eRole::Submarine || isAirRole (role) || role == eRole::Commando) return false;
@@ -1990,7 +2018,7 @@ void cRuleBrain::reviewOrders (int playerId, const cModel& model)
 					const bool big = sd.buildingData.isBig;
 					if (!inFootprint (dest, it->second.pos, big)) return "the build plan has another site";
 					if (!canPlaceIgnoringVehicles (map, *player, sd, it->second.pos) || overlapsAny (it->second.pos, big, inProgress)
-						|| footprintThreatened (world_, it->second.pos, big, kBuilderLayer))
+						|| footprintThreatened (world_, it->second.pos, big, bl))
 						return "the build site is taken or under threat";
 					return {};
 				}
@@ -2050,13 +2078,13 @@ void cRuleBrain::reviewOrders (int playerId, const cModel& model)
 			why = "an enemy in range: fire";
 		else if ((kind == eIntent::Explore || kind == eIntent::Approach) && combat && isArmyRole (role) && shouldRetreat (v, enemies))
 			why = "damaged: retreat";
-		else if (!combat && kind != eIntent::Evacuate && world_.threatFor (v, v.getPosition(), kBuilderLayer) > 0)
+		else if (!combat && kind != eIntent::Evacuate && world_.threatFor (v, v.getPosition(), bl) > 0)
 			why = "under enemy threat: get away";
 		else if ((kind == eIntent::Explore || kind == eIntent::Refit || kind == eIntent::Approach) && nearAlarm())
 			why = "base alarm near: defend";
-		else if (escape && (kind == eIntent::Retreat ? world_.groundFire (dest) > 0 : world_.threatFor (v, dest, kBuilderLayer) > 0))
+		else if (escape && (kind == eIntent::Retreat ? world_.groundFire (dest) > 0 : world_.threatFor (v, dest, bl) > 0))
 			why = "the escape cell is under enemy threat now";
-		else if (!escape && (combat ? world_.groundFire (stop) > 0 : world_.threatFor (v, stop, kBuilderLayer) > 0))
+		else if (!escape && (combat ? world_.groundFire (stop) > 0 : world_.threatFor (v, stop, bl) > 0))
 			why = "it would stop under enemy threat this turn";
 		else
 			why = goalLost();
@@ -2373,7 +2401,9 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 	const sEcon econ = readEcon (*player);
 	const cSubBase* main = econ.sb;
 	opMoved_.clear();
-	const eThreatLayer bl = kBuilderLayer; // слой угроз для стройщиков (шаг 7)
+	// слой угроз для стройщиков (шаг 7); Р24 (п. 165): угроза, что не убьёт стройщика за builderTurns() ходов врага, — не повод
+	// бросать стройку (слой Builder меряется по стройщику, setBuilderRef — в начале его решений); MAXR_BUILD_LIGHT=0 — как до Р24
+	const eThreatLayer bl = world_.builderTurns() > 0 ? eThreatLayer::Builder : kBuilderLayer;
 	// малая фабрика (шаг 9) — здание, что строит малые наземные машины (по данным)
 	sID smallFactoryId;
 	for (const auto& sd : unitsData->getStaticUnitsData())
@@ -2583,7 +2613,16 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 		}
 		for (const auto& c : footprintCells (plan.pos, big))
 			if (!map.possiblePlaceBuilding (bdata, c, player, &v)) return; // площадку заняли — ждём
-		const int speed = std::min (plan.speed, maxFeasibleBuildSpeed (v, buildCost));
+		int speed = std::min (plan.speed, maxFeasibleBuildSpeed (v, buildCost));
+		// Р24 (п. 165, опыт MAXR_BUILD_TURBO=1): площадка под лёгкой угрозой — строить на наибольшей скорости, на которую у
+		// стройщика есть металл (меньше ходов под огнём)
+		if (buildTurbo_ && bl == eThreatLayer::Builder)
+			for (const auto& c : footprintCells (plan.pos, big))
+				if (world_.groundThreat (c) > 0)
+				{
+					speed = maxFeasibleBuildSpeed (v, buildCost);
+					break;
+				}
 		cOrder o;
 		o.type = eOrderType::Build;
 		o.playerId = playerId;
@@ -2599,7 +2638,12 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 	auto makePlan = [&] (const cVehicle& v, const sID& what, const cPosition& pos, bool turbo) -> sBuildPlan& {
 		const int cost0 = player->getLastUnitData (what)->getBuildCost();
 		const int cost1 = builderTurboCost (cost0, v.getStaticUnitData().needsMetal, v.getStaticUnitData().storageResMax);
-		const bool fast = cost1 > 0 && (turbo || rich || econ.free >= cost1 + 12);
+		// Р24 (п. 165, опыт MAXR_BUILD_TURBO=1): площадка под лёгкой угрозой — турбо (стройщик берёт металл на скорость 1)
+		bool threatened = false;
+		if (buildTurbo_ && bl == eThreatLayer::Builder)
+			for (const auto& c : footprintCells (pos, unitsData->getStaticUnitData (what).buildingData.isBig))
+				threatened = threatened || world_.groundThreat (c) > 0;
+		const bool fast = cost1 > 0 && (turbo || rich || econ.free >= cost1 + 12 || threatened);
 		sBuildPlan p;
 		p.typeFirst = what.firstPart;
 		p.typeSecond = what.secondPart;
@@ -2640,7 +2684,19 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 	};
 	// стройщик под угрозой врага — уйти в ближайшую безопасную клетку (ближе к высадке)
 	auto evacuate = [&] (const cVehicle& v) {
-		if (world_.threatFor (v, v.getPosition(), bl) <= 0) return false;
+		if (world_.threatFor (v, v.getPosition(), bl) <= 0)
+		{
+			// Р24 (п. 165): угроза есть, но лёгкая — стройщик строит дальше (до Р24 уходил: Save001 — от одного скаута)
+			if (bl == eThreatLayer::Builder && world_.groundThreat (v.getPosition()) > 0)
+			{
+				lightGuard_.push_back (v.getPosition());
+				extraEvents_.push_back ({{"event", "build"}, {"level", "operational"}, {"what", "light threat"}, {"unitId", v.getId()},
+					{"damage", world_.reachDamage (v.data.getArmor(), v.getPosition())}, {"hp", v.data.getHitpoints()},
+					{"turns", world_.builderTurns()},
+					{"why", "the enemy within reach would not kill the builder in " + std::to_string (world_.builderTurns()) + " turns: keep building"}});
+			}
+			return false;
+		}
 		cPosition dest;
 		if (!world_.nearestSafeCell (v, view, v.getPosition(), kEvacuateRadius, player->getLandingPos(), dest, bl)) return false;
 		if (!pushMoveSafe (v, view, dest, world_, bl, playerId, "op", "builder evacuates (threat)", builderOrders)) return false;
@@ -2667,6 +2723,7 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			continue;
 		}
 		if (review_.moveBusy (v)) continue; // Р22: едет по старому пути и не отпущен пересмотром
+		world_.setBuilderRef (v); // Р24: площадки и путь — по этому стройщику (слой Builder)
 
 		// заперт своими зданиями (высадка в угол) — освободить проход, как в GUI
 		if (const cBuilding* blocker = trappingBuilding (map, *player, factoryData, v))
@@ -2936,6 +2993,7 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			continue;
 		}
 		if (review_.moveBusy (v) || v.bandPosition) continue; // Р22: см. конструкторы
+		world_.setBuilderRef (v); // Р24: площадки и путь — по этому стройщику (слой Builder)
 		if (evacuate (v)) continue; // под угрозой — не строить, уйти
 		if (isStuck (v)) continue;
 
@@ -3109,8 +3167,9 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			refills.push_back ({&v, src, cap - stored});
 		else if (stored * 3 < cap)
 		{
-			const cPosition dock = findBaseDock (map, *player, main, v, view, reservedFootprints(), world_, bl);
-			if (dock.x() >= 0 && pushMoveSafe (v, view, dock, world_, bl, playerId, "op", "repairer to base for metal", builderOrders))
+			// Р24: ремонтник, снабженец, минёр — прежний слой (Builder — только стройщикам)
+			const cPosition dock = findBaseDock (map, *player, main, v, view, reservedFootprints(), world_, kBuilderLayer);
+			if (dock.x() >= 0 && pushMoveSafe (v, view, dock, world_, kBuilderLayer, playerId, "op", "repairer to base for metal", builderOrders))
 				opMoved_.push_back (v.getId());
 		}
 	}
@@ -4049,7 +4108,7 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 	std::vector<unsigned int> covered;        // враги, на которых сил хватило: прочим к ним не идти
 	std::vector<cPosition> alarmTargets;      // клетки всех врагов тревоги — для резерва без дела
 	{
-		const auto groups = alarmGroups (*player, world_);
+		const auto groups = alarmGroups (*player, world_, buildGuard_ ? &lightGuard_ : nullptr);
 
 		// свободные бойцы: без цели огня в этом ходу, не отходят, не отогнаны оперативкой
 		std::vector<const cVehicle*> idleFighters;
@@ -5163,8 +5222,10 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 					continue;
 				}
 			}
-			auto path = pathToUnexplored (*vehicle, view, scoutCache, world_, bl, &landing, kSurveyorHome);
-			if (path.empty()) path = pathToUnexplored (*vehicle, view, scoutCache, world_, bl);
+			// Р24 (п. 164): цели у базы врага не брать (а не обрезать путь к ближайшей — геолог стоял, пока она у врага)
+			const cSurvey* skipNear = survey_.enabled() && survey_.skipNearEnemy() ? &survey_ : nullptr;
+			auto path = pathToUnexplored (*vehicle, view, scoutCache, world_, bl, &landing, kSurveyorHome, 3, skipNear);
+			if (path.empty()) path = pathToUnexplored (*vehicle, view, scoutCache, world_, bl, nullptr, 0, 3, skipNear);
 			if (survey_.enabled() && !path.empty() && survey_.nearEnemy (path.back())) path.clear(); // Р7: не к базе врага
 			if (!path.empty())
 			{
