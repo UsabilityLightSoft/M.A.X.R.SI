@@ -99,8 +99,8 @@ cDialogPreferences::cDialogPreferences() :
 	cancelButton->addClickShortcut (cKeySequence (cKeyCombination (SDLK_ESCAPE)));
 	signalConnectionManager.connect (cancelButton->clicked, [this]() { cancelClicked(); });
 
-	languageLabel = emplaceChild<cLabel> (cBox<cPosition> (getPosition() + cPosition (140, 298 + 20), getPosition() + cPosition (140 + 95, 298 + 20 + 10)), lngPack.i18n ("Settings~Language") + lngPack.i18n ("Punctuation~Colon"), eUnicodeFontType::LatinNormal, eAlignmentType::Right);
-	languagesComboBox = emplaceChild<cComboBox> (cBox<cPosition> (getPosition() + cPosition (240, 294 + 20), getPosition() + cPosition (240 + 100, 294 + 20 + 17)));
+	languageLabel = emplaceChild<cLabel> (cBox<cPosition> (getPosition() + cPosition (140, 298 + 20 * 2), getPosition() + cPosition (140 + 95, 298 + 20 * 2 + 10)), lngPack.i18n ("Settings~Language") + lngPack.i18n ("Punctuation~Colon"), eUnicodeFontType::LatinNormal, eAlignmentType::Right);
+	languagesComboBox = emplaceChild<cComboBox> (cBox<cPosition> (getPosition() + cPosition (240, 294 + 20 * 2), getPosition() + cPosition (240 + 100, 294 + 20 * 2 + 17)));
 	signalConnectionManager.connect (languagesComboBox->onItemChanged, [this] (const std::string& selectedLanguage) {
 		auto& settings = cSettings::getInstance();
 		if (iequals (selectedLanguage, settings.getLanguage()))
@@ -117,13 +117,26 @@ cDialogPreferences::cDialogPreferences() :
 		}
 	});
 
+	// why a scale of the user interface is not used (below the lists: created before them, the open lists are above it)
+	uiScaleHintLabel = emplaceChild<cLabel> (cBox<cPosition> (getPosition() + cPosition (150, 358), getPosition() + cPosition (340, 368)), "", eUnicodeFontType::LatinNormal, eAlignmentType::Right);
+
+	// the size of the mouse cursor: applied at once
+	// (created before the scale: the open list of scales is drawn over it)
+	cursorSizeLabel = emplaceChild<cLabel> (cBox<cPosition> (getPosition() + cPosition (140, 298 + 20), getPosition() + cPosition (140 + 95, 298 + 20 + 10)), lngPack.i18n ("Settings~CursorSize") + lngPack.i18n ("Punctuation~Colon"), eUnicodeFontType::LatinNormal, eAlignmentType::Right);
+	cursorSizeComboBox = emplaceChild<cComboBox> (cBox<cPosition> (getPosition() + cPosition (240, 294 + 20), getPosition() + cPosition (240 + 100, 294 + 20 + 17)));
+	cursorSizeComboBox->setMaxVisibleItems (cursorSizePercents.size() + 1);
+	signalConnectionManager.connect (cursorSizeComboBox->onItemChanged, [this] (const std::string&) { cursorSizeChanged(); });
+
 	// the scale of the user interface (instead of the screen resolution): applied at once
 	uiScaleLabel = emplaceChild<cLabel> (cBox<cPosition> (getPosition() + cPosition (140, 298), getPosition() + cPosition (140 + 95, 298 + 10)), lngPack.i18n ("Settings~UiScale") + lngPack.i18n ("Punctuation~Colon"), eUnicodeFontType::LatinNormal, eAlignmentType::Right);
 	uiScaleComboBox = emplaceChild<cComboBox> (cBox<cPosition> (getPosition() + cPosition (240, 294), getPosition() + cPosition (240 + 100, 294 + 17)));
 	uiScaleComboBox->setMaxVisibleItems (uiScalePercents.size() + 1);
 	signalConnectionManager.connect (uiScaleComboBox->onItemChanged, [this] (const std::string&) { uiScaleChanged(); });
-	uiScaleHintLabel = emplaceChild<cLabel> (cBox<cPosition> (getPosition() + cPosition (150, 338), getPosition() + cPosition (340, 348)), "", eUnicodeFontType::LatinNormal, eAlignmentType::Right);
-	signalConnectionManager.connect (Video.resolutionChanged, [this]() { updateUiScaleItems(); });
+	signalConnectionManager.connect (Video.resolutionChanged, [this]() {
+		updateUiScaleItems();
+		// the automatic cursor size follows the scale of the user interface
+		updateCursorSizeItems();
+	});
 
 	loadValues();
 }
@@ -146,6 +159,8 @@ void cDialogPreferences::retranslate()
 	languageLabel->setText (lngPack.i18n ("Settings~Language") + lngPack.i18n ("Punctuation~Colon"));
 	uiScaleLabel->setText (lngPack.i18n ("Settings~UiScale") + lngPack.i18n ("Punctuation~Colon"));
 	updateUiScaleItems();
+	cursorSizeLabel->setText (lngPack.i18n ("Settings~CursorSize") + lngPack.i18n ("Punctuation~Colon"));
+	updateCursorSizeItems();
 
 	doneButton->setText (lngPack.i18n ("Others~Done"));
 	cancelButton->setText (lngPack.i18n ("Others~Cancel"));
@@ -212,6 +227,7 @@ void cDialogPreferences::loadValues()
 	}
 
 	updateUiScaleItems();
+	updateCursorSizeItems();
 
 	storePreviewValues();
 }
@@ -244,8 +260,9 @@ void cDialogPreferences::saveValues()
 
 	settings.setScrollSpeed (scrollSpeedSlider->getValue());
 
-	// the scale has been applied when it was chosen
+	// the scale and the cursor size have been applied when they were chosen
 	settings.getVideoSettings().uiScale = Video.getUiScale();
+	settings.getVideoSettings().cursorSize = Video.getCursorSize();
 
 	applySettings (Video, settings.getVideoSettings());
 	settings.saveInFile();
@@ -265,6 +282,7 @@ void cDialogPreferences::storePreviewValues()
 	storedVoicesMute = cSettings::getInstance().isVoiceMute();
 
 	storedUiScale = cSettings::getInstance().getVideoSettings().uiScale;
+	storedCursorSize = cSettings::getInstance().getVideoSettings().cursorSize;
 }
 
 //------------------------------------------------------------------------------
@@ -299,6 +317,7 @@ void cDialogPreferences::restorePreviewValues()
 	cSettings::getInstance().saveInFile();
 
 	if (Video.getUiScale() != storedUiScale) Video.setUiScale (storedUiScale);
+	if (Video.getCursorSize() != storedCursorSize) Video.setCursorSize (storedCursorSize);
 }
 
 //------------------------------------------------------------------------------
@@ -434,4 +453,45 @@ void cDialogPreferences::uiScaleChanged()
 	uiScaleHintLabel->setText ("");
 	// applied with the next frame: the game (if any) is shown in the new scale at once
 	Video.setUiScale (percent);
+}
+
+//------------------------------------------------------------------------------
+void cDialogPreferences::updateCursorSizeItems()
+{
+	const bool wasUpdating = std::exchange (updatingCursorSizeItems, true);
+
+	const int current = Video.getCursorSize();
+
+	cursorSizeComboBox->clearItems();
+	cursorSizeItemPercents.clear();
+	const auto addItem = [&] (int percent, const std::string& text) {
+		cursorSizeComboBox->addItem (text);
+		cursorSizeItemPercents.push_back (percent);
+	};
+	addItem (0, lngPack.i18n ("Settings~CursorSize_Auto", std::to_string (Video.getAutoCursorSize()) + "%"));
+	for (const int percent : cursorSizePercents)
+	{
+		addItem (percent, std::to_string (percent) + "%");
+	}
+	if (std::ranges::find (cursorSizeItemPercents, current) == cursorSizeItemPercents.end())
+	{
+		// a value from the settings file, that is not in the list
+		addItem (current, std::to_string (current) + "%");
+	}
+	const auto it = std::ranges::find (cursorSizeItemPercents, current);
+	cursorSizeComboBox->setSelectedIndex (it - cursorSizeItemPercents.begin());
+
+	updatingCursorSizeItems = wasUpdating;
+}
+
+//------------------------------------------------------------------------------
+void cDialogPreferences::cursorSizeChanged()
+{
+	if (updatingCursorSizeItems) return;
+
+	const auto index = cursorSizeComboBox->getSelectedIndex();
+	if (!index || *index >= cursorSizeItemPercents.size()) return;
+
+	// the cursor is created again at once: its new size is seen over this dialog
+	Video.setCursorSize (cursorSizeItemPercents[*index]);
 }

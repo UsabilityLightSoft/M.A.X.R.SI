@@ -37,6 +37,17 @@ class cKeyboard;
 struct sVideoSettings;
 
 /**
+ * For which kind of screen the mouse cursor is scaled (see computeCursorScale).
+ */
+enum class eCursorScaleContext
+{
+	/** menus, lobbies, settings: the cursor in the size of the mouse pointer of the system */
+	Menu,
+	/** the map of the game (and the windows above it): the cursor not bigger than the pictures of the game */
+	Map
+};
+
+/**
  * cVideo class.
  * Stores videosettings (and can hopefully operate 'em too one day'):-)
  *
@@ -137,11 +148,37 @@ public:
 	cPosition windowToBuffer (const cPosition&) const;
 
 	/**
-	 * Factor for the mouse cursor (pixels of the window per pixel of the cursor image),
-	 * following the scale of the user interface (see @ref computeCursorScale).
+	 * Factor for the mouse cursor on the screen (pixels of the window per pixel of the cursor image),
+	 * following the scale of the user interface, the size of the mouse pointer set in the system,
+	 * the screen (menus or the map of the game) and the setting of the cursor size (see @ref computeCursorScale).
 	 * @ref cursorScaleChanged is emitted, when it changes.
 	 */
 	double getCursorScale() const { return cursorScale; }
+
+	/**
+	 * Sets the size of the mouse cursor in percent (see @ref computeCursorScale), 0: automatic.
+	 * Applied at once.
+	 */
+	void setCursorSize (int percent);
+	int getCursorSize() const { return cursorSize; }
+
+	/**
+	 * The size of the cursor in the game in percent of the game picture, that the automatic setting gives
+	 * for the current scale of the user interface and pointer size of the system (see @ref computeAutoCursorSize).
+	 */
+	int getAutoCursorSize() const;
+
+	/**
+	 * Sets, whether the active screen shows the map of the game (the cursor in the scale of the map)
+	 * or is a menu. Applied at once.
+	 */
+	void setCursorScaleContext (eCursorScaleContext);
+	eCursorScaleContext getCursorScaleContext() const { return cursorScaleContext; }
+
+	/**
+	 * The size of the mouse pointer set in the system (1 = normal), read the last time the cursor scale has been computed.
+	 */
+	double getSystemPointerScale() const { return systemPointerScale; }
 
 	/**
 	 * Increased each time the mapping from window positions to buffer positions changes.
@@ -234,6 +271,8 @@ private:
 
 	/** Recreates the screen buffer in the size for the current window and scale; returns whether the size has changed. */
 	bool applyPictureSize (bool force);
+	/** Computes the scale of the cursor again (and reads the pointer size of the system); emits cursorScaleChanged, if it has changed. */
+	void updateCursorScale();
 	/** Scale of the display set in the system (DPI / 96) or 1, if unknown. */
 	double getDisplayScale() const;
 
@@ -306,6 +345,10 @@ private:
 	sPresentation presentation;
 	unsigned int presentationVersion = 0;
 	double cursorScale = 1.;
+	/** Size of the cursor in percent, 0: automatic. */
+	int cursorSize = 0;
+	eCursorScaleContext cursorScaleContext = eCursorScaleContext::Menu;
+	double systemPointerScale = 1.;
 
 	cSignalConnectionManager signalConnectionManager;
 };
@@ -389,13 +432,35 @@ cPosition computePictureSize (const cPosition& outputSize, double uiScale);
 bool isUiScaleFitting (int uiScalePercent, const cPosition& outputSize);
 
 /**
- * The scale of the mouse cursor for a scale of the user interface:
- * two thirds of it (the automatic scale 3 of a 4K display at 125% gives 2:
- * the hand is 36 pixels, about 1.5 standard arrows of the system), but at least 1
- * (the cursor images are not made smaller than drawn).
- * Equal for the menus and the game, so that the cursor does not change its size between them.
+ * The sizes of the mouse cursor offered in the settings, in percent of the pictures of the game (see computeCursorScale).
+ * 0 (not in the list) is the automatic size.
  */
-double computeCursorScale (double uiScale);
+inline constexpr std::array<int, 7> cursorSizePercents{50, 75, 100, 125, 150, 175, 200};
+
+/**
+ * The scale of the mouse cursor on the screen: pixels of the window per pixel of the cursor image.
+ *
+ * Automatic (cursorSizePercent 0):
+ * - menus: two thirds of the scale of the user interface, but at least 1 (the automatic scale 3 of a 4K display
+ *   at 125% gives 2: the hand is 36 pixels, about 1.5 standard arrows of the system),
+ *   times the size of the mouse pointer set in the system, that enlarges the arrow of the system as well;
+ * - the map of the game: the same, but not bigger than the pictures of the game (the scale of the user interface):
+ *   with an enlarged pointer of the system the cursor would cover several tiles.
+ *   The circle of the cursor (26 pixels) is about a tile of a far zoom (24 pixels).
+ *
+ * Chosen size (cursorSizePercent > 0): on the map this part of the pictures of the game
+ * (100: a pixel of the cursor image is a pixel of the game picture), in the menus as many times bigger
+ * than on the map as with the automatic size.
+ *
+ * @param uiScale scale of the user interface (pixels of the window per pixel of the game picture)
+ * @param systemPointerScale size of the mouse pointer set in the system, 1 = normal
+ */
+double computeCursorScale (double uiScale, double systemPointerScale, eCursorScaleContext, int cursorSizePercent);
+
+/**
+ * The size of the cursor on the map in percent of the pictures of the game, that the automatic setting gives.
+ */
+int computeAutoCursorSize (double uiScale, double systemPointerScale);
 
 /**
 * Works like SDL_BlittSurface.

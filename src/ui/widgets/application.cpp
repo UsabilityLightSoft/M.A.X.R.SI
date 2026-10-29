@@ -30,6 +30,7 @@
 #include "ui/widgets/widget.h"
 #include "ui/widgets/window.h"
 
+#include <algorithm>
 #include <utility>
 
 //------------------------------------------------------------------------------
@@ -105,6 +106,9 @@ void cApplication::execute()
 			if (activeWindow != lastActiveWindow)
 			{
 				if (lastActiveWindow != nullptr) lastActiveWindow->handleDeactivated (*this, false);
+				// the cursor in the scale of the map, while the game (or the landing) is on the window stack
+				const bool gameMap = std::ranges::any_of (modalWindows, [] (const auto& window) { return window != nullptr && window->showsGameMap(); });
+				Video.setCursorScaleContext (gameMap ? eCursorScaleContext::Map : eCursorScaleContext::Menu);
 				activeWindow->handleActivated (*this, !lastClosed);
 				lastClosed = false;
 			}

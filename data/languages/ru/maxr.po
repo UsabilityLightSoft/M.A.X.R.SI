@@ -961,6 +961,12 @@ msgstr "Анимации"
 msgid "Settings~Autosave"
 msgstr "Автосохранение"
 
+msgid "Settings~CursorSize"
+msgstr "Курсор"
+
+msgid "Settings~CursorSize_Auto"
+msgstr "Авто %s"
+
 msgid "Settings~Disable"
 msgstr "Отключить"
 

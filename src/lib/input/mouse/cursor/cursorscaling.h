@@ -24,7 +24,7 @@
 #include "utility/position.h"
 
 /**
- * The size of a cursor image enlarged by a factor: rounded, at least 1 pixel.
+ * The size of a cursor image scaled by a factor: rounded, at least 1 pixel.
  */
 cPosition computeScaledCursorSize (const cPosition& imageSize, double scale);
 
@@ -41,7 +41,7 @@ cPosition computeScaledCursorHotPoint (const cPosition& hotPoint, const cPositio
  * Integer factors keep the pixels as they are.
  * Other factors enlarge the image first by the next integer factor (pixels as they are)
  * and then smoothly to the size ("sharp bilinear"): sharp edges without pixels of different width.
- * Factors below 1 are taken as 1.
+ * Factors below 1 make the image smaller smoothly.
  */
 UniqueSurface makeScaledCursorSurface (SDL_Surface& image, double scale);
 

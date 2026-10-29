@@ -953,6 +953,12 @@ msgstr ""
 msgid "Settings~Autosave"
 msgstr ""
 
+msgid "Settings~CursorSize"
+msgstr ""
+
+msgid "Settings~CursorSize_Auto"
+msgstr ""
+
 msgid "Settings~Disable"
 msgstr ""
 

@@ -960,6 +960,12 @@ msgstr "Animations"
 msgid "Settings~Autosave"
 msgstr "Autosave"
 
+msgid "Settings~CursorSize"
+msgstr "Cursor"
+
+msgid "Settings~CursorSize_Auto"
+msgstr "Auto %s"
+
 msgid "Settings~Disable"
 msgstr "Disable"
 

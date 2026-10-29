@@ -69,12 +69,23 @@ namespace
 	{
 		return UniqueSurface (SDL_CreateRGBSurfaceWithFormat (0, width, height, 32, SDL_PIXELFORMAT_ARGB8888));
 	}
+
+	//--------------------------------------------------------------------------
+	/** The source scaled smoothly to the size of the destination, the edges without the color of transparent pixels. */
+	bool stretchSmoothly (SDL_Surface& source, SDL_Surface& destination)
+	{
+		applyAlpha (source, true);
+		const bool ok = SDL_SoftStretchLinear (&source, nullptr, &destination, nullptr) == 0;
+		applyAlpha (source, false);
+		if (ok) applyAlpha (destination, false);
+		return ok;
+	}
 } // namespace
 
 //------------------------------------------------------------------------------
 cPosition computeScaledCursorSize (const cPosition& imageSize, double scale)
 {
-	scale = std::max (1., scale);
+	if (!(scale > 0.)) scale = 1.;
 	return cPosition (std::max (1, static_cast<int> (std::lround (imageSize.x() * scale))), std::max (1, static_cast<int> (std::lround (imageSize.y() * scale))));
 }
 
@@ -100,9 +111,17 @@ UniqueSurface makeScaledCursorSurface (SDL_Surface& image, double scale)
 	SDL_SetColorKey (converted.get(), SDL_FALSE, 0);
 	SDL_SetSurfaceBlendMode (converted.get(), SDL_BLENDMODE_NONE);
 
-	scale = std::max (1., scale);
+	if (!(scale > 0.)) scale = 1.;
 	const cPosition size = computeScaledCursorSize (cPosition (converted->w, converted->h), scale);
 	if (size.x() == converted->w && size.y() == converted->h) return converted;
+
+	if (scale < 1.)
+	{
+		// smaller than drawn: smoothly (the pixels can not stay as they are)
+		UniqueSurface reduced = createArgbSurface (size.x(), size.y());
+		if (reduced == nullptr || !stretchSmoothly (*converted, *reduced)) return converted;
+		return reduced;
+	}
 
 	// pixels as they are: by the factor itself, if it is an integer, else by the next integer
 	const int integerScale = isIntegerScale (scale) ? static_cast<int> (std::lround (scale)) : static_cast<int> (std::ceil (scale));
@@ -114,13 +133,6 @@ UniqueSurface makeScaledCursorSurface (SDL_Surface& image, double scale)
 
 	// then smoothly down to the size
 	UniqueSurface scaled = createArgbSurface (size.x(), size.y());
-	if (scaled == nullptr) return enlarged;
-	applyAlpha (*enlarged, true);
-	if (SDL_SoftStretchLinear (enlarged.get(), nullptr, scaled.get(), nullptr) != 0)
-	{
-		applyAlpha (*enlarged, false);
-		return enlarged;
-	}
-	applyAlpha (*scaled, false);
+	if (scaled == nullptr || !stretchSmoothly (*enlarged, *scaled)) return enlarged;
 	return scaled;
 }

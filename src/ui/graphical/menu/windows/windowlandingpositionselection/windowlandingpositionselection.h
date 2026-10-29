@@ -76,6 +76,8 @@ public:
 
 	/** The window covers the whole game picture from its top left corner. */
 	bool wantsCentered() const override { return false; }
+	/** The map of the landing: the cursor in the scale of the map, as in the game. */
+	bool showsGameMap() const override { return true; }
 
 	cSignal<void (const std::string&)> onCommandEntered;
 	cSignal<void (const cPosition&)> selectedPosition;
