@@ -35,6 +35,8 @@
 //           турниров шагов 7–10: «rule,base» мерит, насколько новые правила сильнее.
 //           "base2" — замороженный итог шага 10 (ai_base2_*.cpp, 26.10.2026), эталон с шага 11.
 //           "base3" — замороженный итог шага 13, часть 1 (ai_base3_*.cpp, 26.10.2026), чемпион с части 2.
+//           "base4" — замороженный итог шага 13, часть 4а (Р7; ai_base4_*.cpp, 27.10.2026), чемпион после Р7.
+//           "base5" — замороженный итог шага 13, часть 4б (Р17; ai_base5_*.cpp, 28.10.2026), чемпион после Р17.
 //           "scenario" — сценарная проверка новых приказов (шаг 11, ai_scenario_brain.h): игроку 0
 //           при высадке добавляются машины сценария; точки высадки — MAXR_LANDING рядом.
 //           "external" — решает внешняя программа по HTTP (шаг 16, ai_external_brain.h):
@@ -51,6 +53,8 @@
 //           берёт ответы из записи, модель не зовётся (те же argv и MAXR_LLM_*).
 // MAXR_FAST_TICK=0 — проигрывать ходы в реальном времени (по умолчанию быстрый такт).
 // MAXR_DETERMINISTIC_TICK=0 — время идёт само, как в сетевой игре (шаг 11; партия не повторяется).
+// MAXR_VICTORY=turns|points:N|death — условие победы партии (Р7; по умолчанию turns: на пределе ходов вердикт —
+//           очки эко-сфер, при равенстве — материал, иначе ничья; points:N — победа при N очках).
 // Партия кончается на ходе argv[1] или раньше — когда движок признал игрока
 // побеждённым. Выход: digest/, journal.jsonl, metrics.json (исход и метрики D),
 // metrics_turns.jsonl (ряд по ходам).
@@ -59,6 +63,8 @@
 #include "SDLutility/sdlnetcomponent.h"
 #include "ai_base2_rule_brain.h"
 #include "ai_base3_rule_brain.h"
+#include "ai_base4_rule_brain.h"
+#include "ai_base5_rule_brain.h"
 #include "ai_base_brain.h"
 #include "ai_brain.h"
 #include "ai_decision_journal.h"
@@ -69,6 +75,7 @@
 #include "ai_rule_brain.h"
 #include "ai_red_brain.h"
 #include "ai_scenario_brain.h"
+#include "ai_version.h"
 #include "crashreporter/debug.h"
 #include "game/connectionmanager.h"
 #include "game/data/gamesettings.h"
@@ -101,6 +108,7 @@
 #include <clocale>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -133,9 +141,9 @@ static bool parseBrains (const std::string& spec, int nPlayers, std::vector<std:
 	}
 	for (const auto& item : items)
 	{
-		if (item != "rule" && item != "base" && item != "base2" && item != "base3" && item != "llm" && item != "scenario" && item != "external" && item != "red1" && item != "red2")
+		if (item != "rule" && item != "base" && item != "base2" && item != "base3" && item != "base4" && item != "base5" && item != "llm" && item != "scenario" && item != "external" && item != "red1" && item != "red2")
 		{
-			err = "unknown brain '" + item + "' (allowed: rule, base, base2, base3, llm, scenario, external, red1, red2)";
+			err = "unknown brain '" + item + "' (allowed: rule, base, base2, base3, base4, base5, llm, scenario, external, red1, red2)";
 			return false;
 		}
 	}
@@ -654,12 +662,12 @@ try
 		if (!parseBrains (spec, kPlayers, brains, err))
 		{
 			std::cout << "[ai_headless] ERROR: brain '" << spec << "' from " << source << ": " << err
-				<< ". Usage: rule | base | base2 | base3 | llm | rule,base3 | llm,rule" << std::endl;
+				<< ". Usage: rule | base | base2 | base3 | base4 | base5 | llm | rule,base5 | llm,rule" << std::endl;
 			return -1;
 		}
 		std::cout << "[ai_headless] brains (" << source << "):";
 		for (int i = 0; i < kPlayers; ++i)
-			std::cout << " p" << i << "=" << brains[i];
+			std::cout << " p" << i << "=" << brains[i] << " (" << ai::aiVersion (brains[i]).name << ")";
 		std::cout << std::endl;
 	}
 	const bool anyLlm = std::find (brains.begin(), brains.end(), "llm") != brains.end();
@@ -784,6 +792,29 @@ try
 	gameSettings->victoryConditionType = eGameSettingsVictoryCondition::Turns;
 	gameSettings->victoryTurns = maxTurns + 1;
 	gameSettings->turnEndDeadlineActive = false;
+	// Р7 (п. 94, 106): условие победы — MAXR_VICTORY: «turns» (по умолчанию: по ходам, предел — maxTurns + 1, партию
+	// останавливает драйвер на maxTurns, вердикт — очки эко-сфер, при равенстве материал), «points:N» (победа при N очках —
+	// её объявляет движок; предел ходов драйвера — тот же), «death» (до уничтожения). ИИИ читает условие из настроек партии.
+	if (const char* envVictory = std::getenv ("MAXR_VICTORY"); envVictory != nullptr && envVictory[0] != '\0')
+	{
+		const std::string v = envVictory;
+		if (v.rfind ("points:", 0) == 0 && std::atoi (v.c_str() + 7) > 0)
+		{
+			gameSettings->victoryConditionType = eGameSettingsVictoryCondition::Points;
+			gameSettings->victoryPoints = static_cast<unsigned int> (std::atoi (v.c_str() + 7));
+		}
+		else if (v == "death")
+			gameSettings->victoryConditionType = eGameSettingsVictoryCondition::Death;
+		else if (v != "turns")
+		{
+			std::cout << "[ai_headless] ERROR: MAXR_VICTORY='" << v << "': expected turns, points:N or death" << std::endl;
+			return -1;
+		}
+	}
+	std::cout << "[ai_headless] victory: "
+		<< (gameSettings->victoryConditionType == eGameSettingsVictoryCondition::Points ? "points " + std::to_string (gameSettings->victoryPoints)
+			: (gameSettings->victoryConditionType == eGameSettingsVictoryCondition::Death ? std::string ("death") : "turns " + std::to_string (gameSettings->victoryTurns)))
+		<< ", driver stops at turn " << maxTurns << std::endl;
 
 	// --- карта ---
 	auto staticMap = std::make_shared<cStaticMap>();
@@ -851,6 +882,17 @@ try
 		<< (landing.distance < 0 ? " (different land regions)" : "") << ", land region "
 		<< landing.regionSize << (landing.regionSize1 != landing.regionSize ? "/" + std::to_string (landing.regionSize1) : std::string())
 		<< " cells, room " << landing.room[0] << "/" << landing.room[1] << std::endl;
+	// Р17 (п. 86, П26): ИИИ правил выбирает клан, как человек в лобби, — по карте и своей точке высадки; прочие мозги — по месту
+	// (игрок 0 — клан 0, игрок 1 — клан 1, как прежде). Бесплатный набор высадки у кланов 0–6 одинаков (Axis Inc. не выбирается)
+	std::array<int, 2> clans {0, 1};
+	for (int i = 0; i < 2; ++i)
+		if (brains[i] == "rule" || brains[i] == "base5")
+		{
+			const ai::sClanChoice c = brains[i] == "rule" ? ai::ruleChooseClan (*staticMap, landing.landing[i])
+				: [&] { const auto b5 = ai::base5::ruleChooseClan (*staticMap, landing.landing[i]); return ai::sClanChoice {b5.clan, b5.why}; }();
+			if (c.clan >= 0) clans[i] = c.clan;
+			std::cout << "[ai_headless] clan p" << i << "=" << clans[i] << " (" << c.why << ")" << std::endl;
+		}
 
 	// --- игроки ---
 	std::vector<cPlayerBasicData> playersBasicData;
@@ -932,7 +974,7 @@ try
 	for (int i = 0; i < 2; ++i)
 	{
 		sInitPlayerData initPlayerData;
-		initPlayerData.clan = i;
+		initPlayerData.clan = clans[i]; // Р17 (п. 86): ИИИ правил — по карте, прочие — по месту
 		initPlayerData.landingPosition = landing.send[i];
 		initPlayerData.landingUnits = landingUnits[i];
 		clients[i]->initNewGame (initPlayerData);
@@ -953,16 +995,22 @@ try
 			Log.error ("ai_headless: cannot open " + llmReplies->getPath());
 		llmReplies->log (gameInfo);
 	}
+	// Р22: мозги правил — и для проверки «после загрузки» (MAXR_BRAIN_RESET): тот же мозг заново
+	auto ruleBrainOf = [] (const std::string& b) -> std::shared_ptr<ai::cAiBrain> {
+		if (b == "base") return std::make_shared<ai::cBaseRuleBrain>();
+		if (b == "base2") return std::make_shared<ai::base2::cRuleBrain>();
+		if (b == "base3") return std::make_shared<ai::base3::cRuleBrain>();
+		if (b == "base4") return std::make_shared<ai::base4::cRuleBrain>();
+		if (b == "base5") return std::make_shared<ai::base5::cRuleBrain>();
+		if (b == "rule") return std::make_shared<ai::cRuleBrain>();
+		return nullptr;
+	};
 	for (int i = 0; i < kPlayers; ++i)
 	{
 		if (brains[i] == "llm")
 			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::cLlmAdvisorBrain> (llmJournal, llmConfig, llmReplies, llmReplay));
-		else if (brains[i] == "base")
-			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::cBaseRuleBrain>());
-		else if (brains[i] == "base2")
-			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::base2::cRuleBrain>());
-		else if (brains[i] == "base3")
-			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::base3::cRuleBrain>());
+		else if (brains[i] == "base" || brains[i] == "base2" || brains[i] == "base3" || brains[i] == "base4" || brains[i] == "base5")
+			engine.addPlayer (i, clients[i].get(), ruleBrainOf (brains[i]));
 		else if (brains[i] == "scenario")
 			engine.addPlayer (i, clients[i].get(), std::make_shared<ai::cScenarioBrain>());
 		else if (brains[i] == "red1")
@@ -976,6 +1024,29 @@ try
 	}
 
 	Log.info ("ai_headless: game started, maxTurns=" + std::to_string (maxTurns));
+	// Р22: проверка «после загрузки» без окна — MAXR_BRAIN_RESET=<ход>[:<мозг0>,<мозг1>]: в начале этого хода мозги правил
+	// создаются заново, как у клиента ИИИ после загрузки сохранения (модель с заданиями движения та же, память мозга — планы,
+	// операции, враги — пуста); после двоеточия — каким мозгом продолжить (до хода партия та же: «base5,base5» и
+	// «40:rule,base5» — ход 40 после «загрузки» у прежнего и нового мозга)
+	int brainResetTurn = 0;
+	std::vector<std::string> resetBrains = brains;
+	if (const char* envReset = std::getenv ("MAXR_BRAIN_RESET"); envReset != nullptr && std::atoi (envReset) > 1)
+	{
+		brainResetTurn = std::atoi (envReset);
+		if (const char* colon = std::strchr (envReset, ':'); colon != nullptr)
+		{
+			std::string err;
+			if (!parseBrains (colon + 1, kPlayers, resetBrains, err))
+			{
+				std::cout << "[ai_headless] ERROR: MAXR_BRAIN_RESET brains '" << (colon + 1) << "': " << err << std::endl;
+				return -1;
+			}
+		}
+		std::cout << "[ai_headless] MAXR_BRAIN_RESET: fresh rule brains at turn " << brainResetTurn << ":";
+		for (int i = 0; i < kPlayers; ++i)
+			std::cout << " p" << i << "=" << resetBrains[i];
+		std::cout << std::endl;
+	}
 
 	// Первый ход ИИ — только когда высадка ВСЕХ игроков дошла до ВСЕХ клиентских
 	// моделей: иначе дайджест хода 1 зависел бы от того, успел ли клиент принять
@@ -1025,6 +1096,10 @@ try
 		{
 			Log.info ("ai_headless: turn " + std::to_string (turn));
 			lastTurn = turn;
+			// Р22: ход ещё не начат ни одним игроком (решения — в engine.run ниже) — мозги заново
+			if (turn == brainResetTurn)
+				for (int i = 0; i < kPlayers; ++i)
+					if (auto b = ruleBrainOf (resetBrains[i])) engine.resetBrain (i, std::move (b), turn);
 			lastProgressTick = SDL_GetTicks();
 		}
 		// Шаг 11: итог партии читается, когда начало хода доиграно (ответный огонь начала хода

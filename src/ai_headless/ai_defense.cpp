@@ -65,6 +65,11 @@ constexpr int kCoastSea = 100;          // П25: водоём от стольк�
 constexpr int kCoastGunSpread = 6;      // ракетные пушки — не ближе друг к другу (Чебышёв)
 constexpr int kCoastGunsMax = 6;
 constexpr int kEnemyShipFresh = 30;     // корабль врага в памяти не старше стольких ходов — угроза берегу
+constexpr int kFarMine = 6;             // Р17 (п. 140): дальняя шахта — дальше стольких клеток от края базы…
+constexpr int kFarMineCover = 6;        // …и своей зенитки ближе нет — зенитка у неё…
+constexpr int kFarMineAa = 4;           // …таких зениток не больше
+constexpr int kGuessIslandPct = 40;     // Р17 (п. 142): догадка «пути по суше нет» — на острове (своя суша меньше этой доли всей)…
+constexpr int kGuessFar = 40;           // …или точка напротив нашей базы не ближе (Чебышёв): Donuts — 29–37, Gen_Coast — 73
 
 int cheb (const cPosition& a, const cPosition& b)
 {
@@ -142,7 +147,8 @@ nlohmann::json sMapPicture::toJson() const
 {
 	return {{"emphasis", emphasis}, {"sure", sure}, {"why", why}, {"waterPct", waterPct}, {"landRegionCells", landRegionCells},
 		{"landTotal", landTotal}, {"landSharePct", landSharePct}, {"bigRegions", bigRegions}, {"islands", islands},
-		{"seaDistance", seaDistance}, {"seaCells", seaCells}, {"enemyLand", enemyLand}};
+		{"seaDistance", seaDistance}, {"seaCells", seaCells}, {"enemyLand", enemyLand},
+		{"noLandPath", noLandPath}, {"landPathProven", landPathProven}, {"oppDistance", oppDistance}, {"guessCredible", guessCredible}};
 }
 
 //------------------------------------------------------------------------------
@@ -234,6 +240,27 @@ void cBaseDefense::updateMap (const cModel& model, const cPlayer& player, const 
 	}
 	m.enemyLand = ours > 0 ? 1 : (elsewhere > 0 ? 0 : -1);
 	const bool seaNear = m.seaDistance >= 0 && m.seaDistance <= kSeaNear;
+	// Р17 (п. 142): здания врага хоть раз на нашей суше — путь по суше есть навсегда (память о них пустеет, когда их снесли)
+	if (m.enemyLand == 1) landPathProven_ = true;
+	m.landPathProven = landPathProven_;
+	// Р7 (п. 114): пути по суше к врагу нет (догадка по симметрии — пока его зданий не видели)
+	if (m.enemyLand == 0 && !landPathProven_)
+		m.noLandPath = true;
+	else if (m.enemyLand < 0 && m.landRegion >= 0 && !landPathProven_)
+	{
+		const cPosition opp (W_ - 1 - home.x(), H_ - 1 - home.y());
+		int oppRegion = -1;
+		for (int r = 0; r <= 4 && oppRegion < 0; ++r)
+			for (int dy = -r; dy <= r && oppRegion < 0; ++dy)
+				for (int dx = -r; dx <= r && oppRegion < 0; ++dx)
+					if (std::max (std::abs (dx), std::abs (dy)) == r) oppRegion = world.tankRegionOf (opp + cPosition (dx, dy));
+		// Р17 (п. 142): догадке верим на острове (наша суша — меньше kGuessIslandPct всей) или когда точка напротив далеко (на
+		// тесной карте враг рядом — разведка найдёт его раньше, чем понадобится ранняя верфь; Donuts: режим ложно включался у 25
+		// сторон из 50)
+		m.oppDistance = std::max (std::abs (opp.x() - home.x()), std::abs (opp.y() - home.y()));
+		m.guessCredible = m.landSharePct < kGuessIslandPct || m.oppDistance >= kGuessFar;
+		m.noLandPath = oppRegion >= 0 && oppRegion != m.landRegion && m.guessCredible;
+	}
 	if (m.enemyLand == 1)
 	{
 		m.emphasis = "land";
@@ -326,6 +353,15 @@ void cBaseDefense::update (const cModel& model, const cPlayer& player, const cWo
 			{"type", sd.getDefaultName()}, {"pos", {{"x", u->getPosition().x()}, {"y", u->getPosition().y()}}}});
 	}
 	reportedDisabled_.clear();
+	// Р17 (П22): урон из ниоткуда у базы — как выключение: пехота ищет у клетки, тревога «диверсант»
+	for (const auto& p : hiddenHits_)
+	{
+		newDisable = true;
+		recentDisables_.emplace_back (p, turn);
+		events_.push_back ({{"event", "defense"}, {"level", "operational"}, {"what", "hidden hit"}, {"pos", {{"x", p.x()}, {"y", p.y()}}},
+			{"why", "damage from nowhere at the base: a hidden commando (or a gun from the fog) — infantry sweeps the cells"}});
+	}
+	hiddenHits_.clear();
 	// поиск у выключенного здания — 4 хода после выключения
 	recentDisables_.erase (std::remove_if (recentDisables_.begin(), recentDisables_.end(), [turn] (const auto& r) { return turn - r.second > 4; }),
 		recentDisables_.end());
@@ -417,6 +453,9 @@ void cBaseDefense::update (const cModel& model, const cPlayer& player, const cWo
 		for (const auto& p : alarmSites_)
 			for (const auto& b : player.getBuildings())
 				if (b->getPosition() == p) wallTargets_.emplace_back (p, b->getIsBig());
+	// Р7: эко-сферы — первыми (выключенная коммандос не даёт очков, а её очки — победа на пределе ходов)
+	for (const auto& b : player.getBuildings())
+		if (b->getStaticUnitData().buildingData.canScore && level_ >= 1) wallTargets_.emplace_back (b->getPosition(), b->getIsBig());
 	if (level_ >= 2)
 		for (const auto& b : player.getBuildings())
 		{
@@ -933,6 +972,45 @@ cBaseDefense::sBuild cBaseDefense::nextSmall (const cModel& model, const cPlayer
 	if (static_cast<int> (guns.size()) < aaWanted_)
 		if (const cPosition c = aaSpot (aaWanted_); c.x() >= 0)
 			return {kIdGunAA, c, "aa ring " + std::to_string (guns.size() + 1) + " of " + std::to_string (aaWanted_)};
+	// 6¼) Р17 (п. 140, охрана дальних шахт): авиация врага видна, кольцо ПВО готово — зенитка у своей шахты дальше kFarMine от края
+	//     базы, если своей зенитки у неё (kFarMineCover) нет; таких — не больше kFarMineAa (Р7: база шире — налёт с хода 60 сносит
+	//     вдвое больше: rear 146 → 284 металла; бомбардировщики бьют шахты, электростанции и соединители). MAXR_FAR_MINE_AA=0 — выкл.
+	if (airAlarm_ && static_cast<int> (guns.size()) >= aaWanted_)
+	{
+		const char* fmEnv = std::getenv ("MAXR_FAR_MINE_AA");
+		if (!(fmEnv != nullptr && fmEnv[0] == '0'))
+		{
+			int farGuns = 0;
+			for (const auto& g : guns)
+				if (cheb (g, center_) > radius_ + kFarMine - 2) ++farGuns;
+			if (farGuns < kFarMineAa)
+				for (const auto& b : player.getBuildings())
+				{
+					if (b->getStaticUnitData().buildingData.canMineMaxRes <= 0 || b->subBase == nullptr) continue;
+					const cPosition m = b->getPosition();
+					if (cheb (m, center_) <= radius_ + kFarMine) continue;
+					bool covered = false;
+					for (const auto& g : guns)
+						if (cheb (g, m) <= kFarMineCover) covered = true;
+					if (covered) continue;
+					cPosition best (-1, -1);
+					long long bestKey = std::numeric_limits<long long>::max();
+					for (int dy = -3; dy <= 4; ++dy)
+						for (int dx = -3; dx <= 4; ++dx)
+						{
+							const cPosition c = m + cPosition (dx, dy);
+							if (!spotOk (model, player, world, kIdGunAA, c, reserved, walls)) continue;
+							const long long key = dist2 (c, m) * 100000 + offs (c);
+							if (key < bestKey)
+							{
+								bestKey = key;
+								best = c;
+							}
+						}
+					if (best.x() >= 0) return {kIdGunAA, best, "aa at a far mine (enemy air seen: bombers hit far mines first)"};
+				}
+		}
+	}
 	// 6½) П25: ракетные пушки у моря заранее (упор «море», своя верфь)
 	if (!navalThreat)
 		if (const sBuild s = coastSpot(); s.valid()) return s;
@@ -988,7 +1066,8 @@ void cBaseDefense::updatePosts (const cModel& model, const cPlayer& player, cons
 		const auto& sd = b->getStaticUnitData();
 		if (sd.surfacePosition != eSurfacePosition::Ground || sd.ID == kIdBlock) continue;
 		const bool key = sd.produceEnergy > 0 || sd.ID == kIdEnergyBig || sd.ID == kIdEnergySmall || sd.buildingData.canMineMaxRes > 0
-			|| !sd.canBuild.empty() || sd.ID == kIdRadar || sd.ID == kIdGunAA || sd.buildingData.canResearch || sd.storageUnitsMax > 0;
+			|| !sd.canBuild.empty() || sd.ID == kIdRadar || sd.ID == kIdGunAA || sd.buildingData.canResearch || sd.storageUnitsMax > 0
+			|| sd.buildingData.canScore; // Р7: эко-сфера
 		if (!key) continue;
 		bool alarm = b->isDisabled();
 		for (const auto& r : recentDisables_)

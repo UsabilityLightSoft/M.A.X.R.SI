@@ -74,6 +74,11 @@ public:
 	void handleDeactivated (cApplication&, bool removed) override;
 	bool handleMouseMoved (cApplication&, cMouse&, const cPosition& offset) override;
 
+	/** The window covers the whole game picture from its top left corner. */
+	bool wantsCentered() const override { return false; }
+	/** The map of the landing: the cursor in the scale of the map, as in the game. */
+	bool showsGameMap() const override { return true; }
+
 	cSignal<void (const std::string&)> onCommandEntered;
 	cSignal<void (const cPosition&)> selectedPosition;
 	cSignal<void()> canceled;
@@ -83,6 +88,8 @@ public:
 
 private:
 	UniqueSurface createHudSurface();
+	/** The game picture has got another size (window resized, other scale of the user interface). */
+	void handleResolutionChange();
 
 	void backClicked();
 	void mapClicked (const cPosition& tilePosition);
@@ -103,6 +110,7 @@ private:
 	cPushButton* backButton = nullptr;
 	cLabel* infoLabel = nullptr;
 	cImage* circlesImage = nullptr;
+	cImage* hudImage = nullptr;
 	cChatBox<cLobbyChatBoxListViewItem, cChatBoxLandingPlayerListViewItem>* chatBox = nullptr;
 
 	float circleAnimationState = 0.f;

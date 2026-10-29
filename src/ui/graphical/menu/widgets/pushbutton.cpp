@@ -19,6 +19,7 @@
 
 #include "ui/graphical/menu/widgets/pushbutton.h"
 
+#include "SDLutility/drawing.h"
 #include "SDLutility/tosdl.h"
 #include "input/mouse/mouse.h"
 #include "output/sound/sounddevice.h"
@@ -95,7 +96,15 @@ void cPushButton::draw (SDL_Surface& destination, const cBox<cPosition>& clipRec
 			font->showTextCentered (position.x + position.w / 2, position.y + getTextYOffset(), text, fontType);
 	}
 
+	if (dimmed) drawDimmed (destination, getArea());
+
 	cWidget::draw (destination, clipRect);
+}
+
+//------------------------------------------------------------------------------
+void cPushButton::setDimmed (bool dimmed_)
+{
+	dimmed = dimmed_;
 }
 
 //------------------------------------------------------------------------------

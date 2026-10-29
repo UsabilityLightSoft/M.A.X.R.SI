@@ -19,6 +19,7 @@
 
 #include "menucontrollermultiplayerhost.h"
 
+#include "game/data/gamesettings.h"
 #include "game/data/savegameinfo.h"
 #include "mapdownloader/mapdownload.h"
 #include "settings.h"
@@ -50,6 +51,10 @@ cMenuControllerMultiplayerHost::cMenuControllerMultiplayerHost (cApplication& ap
 		if (!windowNetworkLobby) return;
 		windowNetworkLobby->addInfoEntry (lngPack.i18n ("Multiplayer~MapDL_UploadFinished", player.getName()));
 	});
+
+	// the AI plays turn based only: check it, when a player comes or goes and when the options change
+	signalConnectionManager.connect (lobbyClient.onPlayersList, [this] (const cPlayerBasicData&, const std::vector<cPlayerBasicData>&) { handleAiTurnBasedOnly(); });
+	signalConnectionManager.connect (lobbyClient.onOptionsChanged, [this] (std::shared_ptr<cGameSettings>, std::shared_ptr<cStaticMap>, const cSaveGameInfo&) { handleAiTurnBasedOnly(); });
 
 	signalConnectionManager.connect (lobbyClient.onChatMessage, [this] (const std::string& playerName, const std::string& message) {
 		if (initGamePreparation)
@@ -160,8 +165,44 @@ void cMenuControllerMultiplayerHost::handleSelectSettings()
 {
 	if (!windowNetworkLobby) return;
 
-	auto windowGameSettings = application.show (std::make_shared<cWindowGameSettings>());
-	windowGameSettings->initFor (lobbyClient);
+	auto window = std::make_shared<cWindowGameSettings>();
+	application.show (window);
+	window->initFor (lobbyClient);
+	windowGameSettings = window;
+	handleAiTurnBasedOnly();
+}
+
+//------------------------------------------------------------------------------
+std::optional<std::string> cMenuControllerMultiplayerHost::findAiPlayerName() const
+{
+	for (const auto& player : lobbyClient.getPlayers())
+	{
+		if (isSiAiPlayerName (player.getName())) return player.getName();
+	}
+	return std::nullopt;
+}
+
+//------------------------------------------------------------------------------
+void cMenuControllerMultiplayerHost::handleAiTurnBasedOnly()
+{
+	const auto aiName = findAiPlayerName();
+
+	// the open settings window: only "Turn based" while the AI is in the lobby, all types again when it has left
+	if (auto window = windowGameSettings.lock())
+	{
+		window->setTurnBasedOnly (aiName ? lngPack.i18n ("Multiplayer~AI_Turn_Based_Only") : std::string());
+	}
+	if (!aiName || !windowNetworkLobby) return;
+	// a saved game keeps its game type (the server warns in the log, if it is not turn based)
+	if (lobbyClient.getSaveGameInfo().number >= 0) return;
+
+	const auto& gameSettings = lobbyClient.getLobbyPreparationData().gameSettings;
+	if (!gameSettings || gameSettings->gameType != eGameSettingsGameType::Simultaneous) return;
+
+	auto turnBased = *gameSettings;
+	turnBased.gameType = eGameSettingsGameType::Turns;
+	lobbyClient.selectGameSettings (turnBased);
+	windowNetworkLobby->addInfoEntry (lngPack.i18n ("Multiplayer~AI_Game_Type_Changed", *aiName));
 }
 
 //------------------------------------------------------------------------------

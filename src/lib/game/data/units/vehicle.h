@@ -238,6 +238,9 @@ public:
 	}
 
 private:
+	/** The status text of the vehicle changes with these values: they signal statusChanged. */
+	void connectStatusSignals();
+
 	//---- sentry and reaction fire helpers ------------------------------------
 	/**
 	 * Is called after a unit moved one field;

@@ -9,7 +9,9 @@
 #include "ai_paths.h"
 #include "ai_types.h"
 #include "ai_upgrades.h"
+#include "ai_version.h"
 
+#include "game/data/gamesettings.h"
 #include "game/data/map/map.h"
 #include "game/data/miningresource.h"
 #include "game/data/model.h"
@@ -67,6 +69,7 @@ nlohmann::json orderToJson (const cOrder& o)
 	j["unitId"] = o.unitId;
 	// шаг 13: unitId2 пишется, когда задан (kNoUnit — нет; 0 — настоящая машина, пишется)
 	if (o.unitId2 != kNoUnit) j["unitId2"] = o.unitId2;
+	if (o.blindFire) j["blind"] = true; // Р17: огонь наугад по клетке без видимой цели
 	// шаг 11: Move с unitId2 — что сделать с ним в конце пути (выстрел — по умолчанию, не пишется)
 	if (o.moveEnd != eMoveEnd::Attack) j["moveEnd"] = toString (o.moveEnd);
 	if (is ({eOrderType::Move, eOrderType::Attack, eOrderType::Build, eOrderType::BuildPath, eOrderType::ActivateUnit, eOrderType::FinishBuild})
@@ -147,11 +150,28 @@ cAiEngine::~cAiEngine()
 	journal_.close();
 }
 
+void cAiEngine::resetBrain (int playerId, std::shared_ptr<cAiBrain> brain, int turn)
+{
+	for (auto& ctx : players_)
+		if (ctx.playerId == playerId)
+		{
+			journal_.log ({{"event", "brain_reset"}, {"player", playerId}, {"turn", turn}, {"brain", brain->name()},
+				{"why", "MAXR_BRAIN_RESET: a fresh brain, as after loading a saved game"}});
+			ctx.brain = std::move (brain);
+			return;
+		}
+}
+
 void cAiEngine::addPlayer (int playerId, cClient* client, std::shared_ptr<cAiBrain> brain)
 {
 	const std::size_t index = players_.size();
 	players_.push_back ({playerId, client, std::move (brain)});
 	if (index == 0) metrics_.attach (client->getModel()); // все модели синхронны — хватит одной
+	// Р10: имя версии ИИИ (ai_version.h) — первым событием игрока в журнале
+	nlohmann::json version = aiVersion (players_.back().brain->name()).toJson();
+	version["event"] = "aiVersion";
+	version["player"] = playerId;
+	journal_.log (version);
 
 	// cActionEndTurn не сдаёт ход, если base.checkTurnEnd() что-то выключил
 	// (нехватка энергии/топлива/металла/золота/людей) — как в GUI, где игрок
@@ -551,6 +571,8 @@ void cAiEngine::executeOrder (cClient& client, const cOrder& o)
 			const auto& field = model.getMap()->getField (o.position);
 			const cUnit* target = field.getTopBuilding();
 			if (target == nullptr) target = field.getVehicle();
+			// Р17: огонь наугад — цели мы не знаем (сервер ударит по клетке и попадёт в то, что там есть на самом деле)
+			if (o.blindFire) target = nullptr;
 			client.attack (*u, o.position, target);
 			return;
 		}
@@ -762,6 +784,15 @@ void cAiEngine::writeMetrics (const sGameResult& result)
 	m["endReason"] = result.endReason;
 	m["endTurn"] = result.endTurn;
 	m["materialWinRatio"] = kMaterialWinRatio;
+	// Р7: прежний вердикт (без очков эко-сфер) — для D «по материалу»; условие победы партии
+	m["winnerMaterial"] = result.winnerMaterial;
+	m["winReasonMaterial"] = result.winReasonMaterial;
+	if (const auto settings = model.getGameSettings())
+	{
+		const auto vc = settings->victoryConditionType;
+		m["victory"] = {{"type", vc == eGameSettingsVictoryCondition::Points ? "points" : (vc == eGameSettingsVictoryCondition::Death ? "death" : "turns")},
+			{"turns", settings->victoryTurns}, {"points", settings->victoryPoints}};
+	}
 	// зависшие концы хода, развязанные движком (cModel::setResolveStalledTurnEnd)
 	m["stalledTurnEnds"] = model.getStalledTurnEnds();
 	m["forcedTurnEnds"] = model.getForcedTurnEnds();
@@ -776,10 +807,14 @@ void cAiEngine::writeMetrics (const sGameResult& result)
 		nlohmann::json p;
 		p["id"] = player->getId();
 		p["name"] = player->getName();
+		// Р10: имя версии ИИИ (ai_version.h) — у игроков, за которых играет этот движок
+		for (const auto& ctx : players_)
+			if (ctx.playerId == player->getId()) p["aiVersion"] = aiVersion (ctx.brain->name()).name;
 		p["clan"] = player->getClan();
 		p["defeated"] = player->isDefeated;
 		p["credits"] = player->getCredits();
 		p["score"] = player->getScore();
+		p["ecoSpheres"] = player->getNumEcoSpheres(); // Р7: работающих эко-сфер в конце
 		p["units"] = player->getVehicles().size() + player->getBuildings().size();
 		p["builtFactories"] = s.builtFactoriesCount;
 		p["builtMineStations"] = s.builtMineStationCount;

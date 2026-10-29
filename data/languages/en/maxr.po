@@ -91,6 +91,9 @@ msgstr "%s is attacking the enemy"
 msgid "Comp~AttackingStatusStr"
 msgstr "attacking"
 
+msgid "Comp~Build_Queue_Empty"
+msgstr "The queue is empty - double click a vehicle in the list to add it"
+
 msgid "Comp~Building_Disabled"
 msgstr "Building turned off"
 
@@ -205,6 +208,12 @@ msgstr "Landing position is near an other player. Please confirm the position by
 
 msgid "Comp~Laying"
 msgstr "minelaying"
+
+msgid "Comp~Load_HotSeat_Game_In_Single_Player"
+msgstr "This is a hot seat game (players: %s) - in a single player game their turn never comes. Load it with Multiplayer -> Load Hot Seat."
+
+msgid "Comp~Load_Network_Game_In_Single_Player"
+msgstr "This is a network game (players: %s) - in a single player game their turn never comes. Load it with Multiplayer -> TCP/IP Host -> Load Game."
 
 msgid "Comp~Metal_Insufficient"
 msgstr "Cannot start, raw materials needed."
@@ -399,6 +408,12 @@ msgstr "M.A.X.R. %s based on Interplay's Mechanized Assault and eXploration"
 
 msgid "Main~Version"
 msgstr "version v%s"
+
+msgid "Multiplayer~AI_Game_Type_Changed"
+msgstr "Game type changed to \"Turn based\": the AI %s plays turn based only."
+
+msgid "Multiplayer~AI_Turn_Based_Only"
+msgstr "The AI plays turn based only"
 
 msgid "Multiplayer~Abort_Waiting"
 msgstr "Server, press F2 to abort waiting."
@@ -768,6 +783,9 @@ msgstr "Limited to:"
 msgid "Others~Load"
 msgstr "Load"
 
+msgid "Others~Load_Anyway"
+msgstr "Load anyway"
+
 msgid "Others~Load_7"
 msgstr "Load"
 
@@ -942,6 +960,12 @@ msgstr "Animations"
 msgid "Settings~Autosave"
 msgstr "Autosave"
 
+msgid "Settings~CursorSize"
+msgstr "Cursor"
+
+msgid "Settings~CursorSize_Auto"
+msgstr "Auto %s"
+
 msgid "Settings~Disable"
 msgstr "Disable"
 
@@ -977,6 +1001,15 @@ msgstr "Vehicledamage"
 
 msgid "Settings~Tracks"
 msgstr "Vehicletracks"
+
+msgid "Settings~UiScale"
+msgstr "UI scale"
+
+msgid "Settings~UiScale_Auto"
+msgstr "Auto %s"
+
+msgid "Settings~UiScale_WindowTooSmall"
+msgstr "Window too small for %s"
 
 msgid "Settings~Unlimited_11"
 msgstr "No limit"

@@ -74,6 +74,8 @@ const char* roleName (eRole r)
 		case eRole::AirTransport: return "airtransport";
 		case eRole::AirOther: return "airother";
 		case eRole::Apc: return "apc";
+		case eRole::SeaSupply: return "seasupply";
+		case eRole::SeaMineLayer: return "seaminelayer";
 		case eRole::Other: return "other";
 		default: return "none";
 	}
@@ -91,6 +93,9 @@ eRole cRoleBook::classify (const cStaticUnitData& sd, int range, int scan, int s
 		if (shipArmed && (sd.canDetectStealthOn & eTerrainFlag::Sea) != 0) return eRole::Corvette;
 		if (shipArmed && (sd.isStealthOn & eTerrainFlag::Sea) != 0) return eRole::Submarine;
 		if (shipArmed && (sd.canAttack & eTerrainFlag::Ground) != 0) return eRole::NavalGun;
+		// Р7: грузовое судно (пополняет боезапас в море) и морской минёр
+		if (!shipArmed && sd.canRearm && sd.storageResMax > 0) return eRole::SeaSupply;
+		if (sd.vehicleData.canPlaceMines) return eRole::SeaMineLayer;
 		return eRole::NavalOther;
 	}
 	// шаг 13, часть 3: самолёты — по способностям (П15–П17, П10)

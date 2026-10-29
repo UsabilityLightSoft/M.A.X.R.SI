@@ -5,6 +5,7 @@
 #include "ai_commando.h"
 
 #include "ai_defense.h"
+#include "ai_reorders.h"
 #include "ai_roles.h"
 #include "ai_world_model.h"
 
@@ -45,10 +46,18 @@ constexpr int kSabotageRank = 2;     // диверсия у врага — с э
 constexpr int kSabotageChance = 75;  // и шанс выключить не ниже, % (неудача — тревога и огонь)
 constexpr int kSabotageCooldown = 3; // после удачи — отойти и вернуться не раньше
 constexpr int kStealthExpand = 12000; // предел узлов A* в обход сыщиков
-constexpr int kRaidStale = 30;       // налёт без готовности коммандос — снять через столько ходов
+constexpr int kRaidStale = 40;       // налёт без готовности коммандос — снять через столько ходов (Р17: 30 → 40, ждёт глаз AWAC)
+constexpr int kRaidWatch = 12;       // Р17 (п. 116): ближе к клетке у зенитки налёта — шаг, только когда её округа видна…
+constexpr int kRaidWatchR = 4;       // …в этом радиусе (обзор пехоты 4), в этот ход или прошлый (70% клеток)
 constexpr int kHomeHold = 5;         // без дела — у центра базы (Чебышёв)
 constexpr int kAlienEnemyGap = 15;   // чужие ближе к зданиям врага — не трогать: его пехота и армия найдут коммандос
 constexpr int kStatusEvery = 10;
+// Р7 (п. 127, Владыка 27.10.2026: «немного прокачать — и в дело»): после правки 32 выключенный пришелец просыпается к
+// следующему ходу, и «сначала выключить всех, потом захватывать выключенных» стало бесконечной тренировкой (выключений чужих
+// 714 → 24 973, захватов 648 → 157). Тренировка (выключение — опыт) — до этого звания; дальше выключать чужих незачем:
+// захват в лоб (шанс тот же, что у выключенного, неудача у ничейной техники тревоги не даёт), затем диверсия и налёт.
+// Опыт: MAXR_CMD_TRAIN_RANK.
+constexpr int kTrainRank = 3;
 
 int cheb (const cPosition& a, const cPosition& b)
 {
@@ -122,6 +131,12 @@ void cCommandos::event (const char* what, nlohmann::json extra)
 	events_.push_back (std::move (e));
 }
 
+bool cCommandos::moveBusy (const cVehicle& v) const
+{
+	return review_ != nullptr ? review_->moveBusy (v) : (v.isUnitMoving() || v.getMoveJob() != nullptr);
+}
+
+//------------------------------------------------------------------------------
 std::vector<nlohmann::json> cCommandos::takeEvents()
 {
 	std::vector<nlohmann::json> res;
@@ -301,6 +316,8 @@ void cCommandos::update (const cModel& model, const cPlayer& player, const cWorl
 	int trainIncome = kTrainIncome, trainTurn = kTrainTurn;
 	if (const char* e = std::getenv ("MAXR_CMD_TRAIN")) trainIncome = std::atoi (e);
 	if (const char* e = std::getenv ("MAXR_CMD_TURN")) trainTurn = std::atoi (e);
+	trainRank_ = kTrainRank; // Р7: звание, до которого коммандос тренируется на чужих
+	if (const char* e = std::getenv ("MAXR_CMD_TRAIN_RANK")) trainRank_ = std::atoi (e);
 	const bool on = income >= trainIncome || (turn >= trainTurn && income >= kTrainLateIncome);
 	const bool keep = wantTraining_ && income * 3 >= trainIncome * 2;
 	wantTraining_ = want > 0 && factories >= 1 && (on || keep);
@@ -597,13 +614,15 @@ bool cCommandos::act (const cModel& model, const cPlayer& player, const cVehicle
 }
 
 //------------------------------------------------------------------------------
-// работа у чужих: сначала выключить невыключенную машину (опыт, тревоги нет), потом захватывать выключенные —
-// дороже и с лучшим шансом раньше; своя цель держится, пока она есть; одна машина — одному коммандос
+// работа у чужих: новичок выключает невыключенную машину (опыт, тревоги нет) и захватывает выключенную; обученный (звание ≥
+// kTrainRank, Р7) не тренируется — захватывает в лоб: дороже и с лучшим шансом раньше; своя цель держится, пока она есть; одна
+// машина — одному коммандос
 unsigned int cCommandos::pickAlien (const cModel& model, const cMapView& view, const cWorldModel& world, const cVehicle& c, bool& steal,
 	bool ferry) const
 {
 	(void) view;
 	const int myRegion = world.regionOf (c, c.getPosition());
+	const bool trained = rankOf (c) >= trainRank_;
 	std::set<unsigned int> taken;
 	for (const auto& [id, t] : tasks_)
 		if (id != c.getId() && t.task == eTask::Alien && t.target != kNoUnit) taken.insert (t.target);
@@ -620,7 +639,7 @@ unsigned int cCommandos::pickAlien (const cModel& model, const cMapView& view, c
 		if (u == nullptr || u->getOwner() != nullptr) continue;
 		// пешком — только своя суша (область коммандос); другая — только если есть авиатранспорт
 		if (!ferry && world.regionOf (c, a.pos) != myRegion) continue;
-		const bool st = a.disabled; // выключена — захватывать; иначе — выключить (опыт)
+		const bool st = a.disabled || trained; // выключена или коммандос обучен — захватывать; иначе — выключить (опыт)
 		const int chance = c.getCommandoData().computeChance (u, st);
 		if (chance <= 0) continue;
 		// дорога (Чебышёв) — главное; среди близких — выключить раньше захвата (опыт поднимает шанс захвата), захват —
@@ -792,6 +811,22 @@ void cCommandos::cancelRaid (const char* why)
 	raid_ = {};
 }
 
+bool cCommandos::freshAround (const cWorldModel& world, const cPosition& p, int r) const
+{
+	// не меньше 70% клеток округи видны в этот ход или прошлый (AWAC держится вне досягаемости зенитки — дальний край её округи
+	// ему не виден; r17i: «ждём глаз» 38 ходов подряд при требовании «все клетки»)
+	int all = 0, seen = 0;
+	for (int dy = -r; dy <= r; ++dy)
+		for (int dx = -r; dx <= r; ++dx)
+		{
+			const cPosition c = p + cPosition (dx, dy);
+			if (c.x() < 0 || c.y() < 0 || c.x() >= W_ || c.y() >= H_) continue;
+			++all;
+			if (world.seenTurn (c) >= turn_ - 1) ++seen;
+		}
+	return all > 0 && seen * 10 >= all * 7;
+}
+
 int cCommandos::nearestFree (const cModel& model, const cWorldModel& world, const cPosition& p) const
 {
 	int best = std::numeric_limits<int>::max();
@@ -896,7 +931,7 @@ void cCommandos::planOne (const cModel& model, const cPlayer& player, const cMap
 	const cMap& map = *model.getMap();
 	const unsigned int id = c.getId();
 	if (c.isUnitLoaded() || c.isDisabled() || ferried_.count (id) != 0) return;
-	if (c.isUnitMoving() || c.getMoveJob() != nullptr) return;
+	if (moveBusy (c)) return;
 	sTask& t = tasks_[id];
 	// 1) обнаружен — уйти
 	if (c.isDetectedByAnyPlayer())
@@ -938,6 +973,18 @@ void cCommandos::planOne (const cModel& model, const cPlayer& player, const cMap
 			}
 			else
 			{
+				// Р17 (п. 116): у зенитки — шаг только туда, где видим (AWAC налёта смотрит её округу): пехота врага у зенитки, которую
+				// никто не видел, обнаруживала и убивала коммандос налёта (r17base: из 23 налётов до удара дошёл один)
+				if (cheb (c.getPosition(), dest) <= kRaidWatch && !freshAround (world, dest, kRaidWatchR) && !inDetectorZone (c.getPosition()))
+				{
+					if (raidWaitNoted_ != raid_.target)
+					{
+						raidWaitNoted_ = raid_.target;
+						event ("raid wait eyes", {{"unitId", id}, {"target", raid_.target}, {"pos", posJ (c.getPosition())}, {"dest", posJ (dest)},
+							{"why", "the AA surroundings are not seen this turn: wait for the AWAC before the last steps"}});
+					}
+					return;
+				}
 				auto path = routeTo (model, view, c, dest, t, true);
 				if (path.empty() || !pushPath (c, view, std::move (path), "sneaks to the AA of the raid", out))
 					if (turn_ - raid_.since > 6) cancelRaid ("no stealthy path to the target");
@@ -1019,7 +1066,8 @@ void cCommandos::planOne (const cModel& model, const cPlayer& player, const cMap
 					{"distance", cheb (c.getPosition(), u->getPosition())}, {"rank", rankOf (c)}});
 				t = {eTask::Alien, target, u->getPosition(), turn_, steal ? "capture" : "train"};
 			}
-			const char* why = steal ? "alien: capture (no alarm, no owner)" : "alien: train on it (no alarm, rank grows)";
+			const char* why = !steal ? "alien: train on it (no alarm, rank grows)"
+				: (u->isDisabled() ? "alien: capture (no alarm, no owner)" : "alien: trained, capture head-on (no alarm, no owner; no endless training)");
 			if (besideUnit (*u, c.getPosition()))
 			{
 				if (c.data.getShots() > 0) act (model, player, c, *u, steal, why, out, pass);
@@ -1201,7 +1249,7 @@ void cCommandos::apcPlan (const cModel& model, const cPlayer& player, const cMap
 		if (apc == nullptr) return;
 	}
 	claimed_.insert (apc->getId());
-	if (apc->isUnitMoving() || apc->getMoveJob() != nullptr || apc->isDisabled()) return;
+	if (moveBusy (*apc) || apc->isDisabled()) return;
 	const cVehicle* c = apc_.commando != kNoUnit ? model.getVehicleFromID (apc_.commando) : nullptr;
 	if (apc_.commando != kNoUnit && c == nullptr)
 	{

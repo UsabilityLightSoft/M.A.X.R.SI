@@ -190,24 +190,35 @@ void cGameTimerServer::setPlayerNumbers (const std::vector<std::shared_ptr<cPlay
 }
 
 //------------------------------------------------------------------------------
-void cGameTimerServer::handleSyncMessage (const cNetMessageSyncClient& message, unsigned int gameTime)
+bool cGameTimerServer::handleSyncMessage (const cNetMessageSyncClient& message, unsigned int gameTime)
 {
 	//Note: this function handles incoming data from network. Make every possible sanity check!
 
 	int playerNr = message.playerNr;
-	if (receivedTime.find (playerNr) == receivedTime.end()) return;
+	if (receivedTime.find (playerNr) == receivedTime.end()) return false;
 
 	if (message.gameTime > gameTime)
 	{
 		NetLog.error (" Server: the received game time from client is in the future");
-		return;
+		return false;
 	}
 	if (message.gameTime < receivedTime[playerNr])
 	{
 		NetLog.error (" Server: the received game time from client is older than the last one");
-		return;
+		return false;
 	}
 	receivedTime[playerNr] = message.gameTime;
+
+	// a new out of sync period of the client: the server writes its checksum parts to the net log
+	const auto inSync = clientInSync.find (playerNr);
+	const bool wasInSync = inSync == clientInSync.end() || inSync->second;
+	clientInSync[playerNr] = message.crcOK;
+	bool reportChecksumParts = false;
+	if (wasInSync && !message.crcOK && outOfSyncReports[playerNr] < MAX_OUT_OF_SYNC_REPORTS)
+	{
+		++outOfSyncReports[playerNr];
+		reportChecksumParts = true;
+	}
 
 	//save debug data from clients
 	auto& debugData = clientDebugData[playerNr];
@@ -219,6 +230,7 @@ void cGameTimerServer::handleSyncMessage (const cNetMessageSyncClient& message, 
 	debugData.ticksPerFrame = (1 - filter) * debugData.ticksPerFrame + filter * message.ticksPerFrame;
 	debugData.timeBuffer = (1 - filter) * debugData.timeBuffer + filter * message.timeBuffer;
 	debugData.ping = (1 - filter) * debugData.ping + filter * 10 * (gameTime - message.gameTime);
+	return reportChecksumParts;
 }
 
 //------------------------------------------------------------------------------
@@ -414,6 +426,11 @@ void cGameTimerClient::run (cClient& client, cModel& model)
 			if (localChecksum != remoteChecksum)
 			{
 				NetLog.error ("OUT OF SYNC @" + std::to_string (model.getGameTime()));
+				handleOutOfSync (client, model);
+			}
+			else
+			{
+				outOfSyncTicks = 0;
 			}
 
 			syncMessageReceived = false;
@@ -432,6 +449,25 @@ void cGameTimerClient::run (cClient& client, cModel& model)
 		for (unsigned i = 0; i < (getReceivedTime() - model.getGameTime()) / 2; i++)
 			pushEvent();
 	}
+}
+
+//------------------------------------------------------------------------------
+void cGameTimerClient::handleOutOfSync (cClient& client, const cModel& model)
+{
+	++outOfSyncTicks;
+	if (outOfSyncTicks == 1 && outOfSyncReports < MAX_OUT_OF_SYNC_REPORTS)
+	{
+		++outOfSyncReports;
+		NetLog.error (" Client: checksum parts @" + std::to_string (model.getGameTime()) + ":" + model.getChecksumReport());
+	}
+	if (outOfSyncTicks < AUTO_RESYNC_TICKS) return;
+	if (lastAutoResyncRequest && model.getGameTime() < *lastAutoResyncRequest + AUTO_RESYNC_PAUSE) return;
+
+	// the model differs from the server model and does not converge again: get the model from the server.
+	// The period goes on until the resynced model matches (outOfSyncTicks is not reset here)
+	NetLog.warn (" Client: out of sync for " + std::to_string (outOfSyncTicks) + " ticks, requesting the model from the server @" + std::to_string (model.getGameTime()));
+	lastAutoResyncRequest = model.getGameTime();
+	client.requestModelResync();
 }
 
 //------------------------------------------------------------------------------

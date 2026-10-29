@@ -19,7 +19,9 @@
 
 #include "ui/graphical/game/widgets/gamemapwidget.h"
 
+#include "SDLutility/drawing.h"
 #include "SDLutility/tosdl.h"
+#include "game/data/gui/mapzoom.h"
 #include "game/data/map/map.h"
 #include "game/data/map/mapfieldview.h"
 #include "game/data/map/mapview.h"
@@ -75,6 +77,31 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
+
+static_assert (sGraphicTile::tilePixelWidth == mapZoomFullTileSize && sGraphicTile::tilePixelHeight == mapZoomFullTileSize);
+
+namespace
+{
+	// below the former farthest zoom (a map of 250 tiles in the map area of a picture of 1280x720):
+	// the grid would cover the map, the images of the units are a few pixels
+	constexpr int minimalGridTileSize = 5;
+	constexpr int minimalUnitImageTileSize = 5;
+
+	//--------------------------------------------------------------------------
+	int floorDivision (int value, int divisor)
+	{
+		const int quotient = value / divisor;
+		return (value % divisor != 0 && value < 0) ? quotient - 1 : quotient;
+	}
+
+	//--------------------------------------------------------------------------
+	// position on the map in tiles (not rounded) of a position on the screen, inside the map
+	double toMapTileCoordinate (int screenPosition, int mapScreenOrigin, int tileSize, int mapTiles)
+	{
+		return std::clamp ((screenPosition - mapScreenOrigin) / static_cast<double> (tileSize), 0., mapTiles - 0.001);
+	}
+} // namespace
 
 //------------------------------------------------------------------------------
 cGameMapWidget::cGameMapWidget (const cBox<cPosition>& area, std::shared_ptr<const cStaticMap> staticMap_, std::shared_ptr<cAnimationTimer> animationTimer_, std::shared_ptr<cSoundManager> soundManager_, std::shared_ptr<const cFrameCounter> frameCounter) :
@@ -517,6 +544,7 @@ void cGameMapWidget::setUnitsData (std::shared_ptr<const cUnitsData> unitsData_)
 //------------------------------------------------------------------------------
 void cGameMapWidget::draw (SDL_Surface& destination, const cBox<cPosition>& clipRect)
 {
+	drawBackground();
 	drawTerrain();
 
 	if (shouldDrawGrid) drawGrid();
@@ -532,6 +560,8 @@ void cGameMapWidget::draw (SDL_Surface& destination, const cBox<cPosition>& clip
 	drawVehicles();
 	drawConnectors();
 	drawPlanes();
+
+	if (getZoomedTileSize().x() < minimalUnitImageTileSize) drawUnitMarks();
 
 	auto selectedVehicle = unitSelection.getSelectedVehicle();
 	if (shouldDrawSurvey || (selectedVehicle && selectedVehicle->getOwner() == player.get() && selectedVehicle->getStaticData().canSurvey))
@@ -736,7 +766,7 @@ void cGameMapWidget::setMouseInputMode (std::unique_ptr<cMouseMode> newMouseMode
 	mouseModeSignalConnectionManager.connect (mouseMode->needRefresh, [this]() { updateMouseCursor(); });
 
 	auto activeMouse = getActiveMouse();
-	if (activeMouse && getArea().withinOrTouches (activeMouse->getPosition()))
+	if (activeMouse && isOverMap (activeMouse->getPosition()))
 	{
 		mouseMode->handleMapTilePositionChanged (getMapTilePosition (activeMouse->getPosition()));
 	}
@@ -807,7 +837,7 @@ void cGameMapWidget::scroll (const cPosition& offset)
 	const auto activeMouse = getActiveMouse();
 
 	cPosition oldTileUnderMouse (-1, -1);
-	if (activeMouse && getArea().withinOrTouches (activeMouse->getPosition()))
+	if (activeMouse && isOverMap (activeMouse->getPosition()))
 	{
 		oldTileUnderMouse = getMapTilePosition (activeMouse->getPosition());
 	}
@@ -817,18 +847,16 @@ void cGameMapWidget::scroll (const cPosition& offset)
 
 	pixelOffset += offset;
 
-	pixelOffset.x() = std::max (0, pixelOffset.x());
-	pixelOffset.y() = std::max (0, pixelOffset.y());
-
-	const auto maximalPixelOffset = computeMaximalPixelOffset();
-
-	pixelOffset.x() = std::min (maximalPixelOffset.x(), pixelOffset.x());
-	pixelOffset.y() = std::min (maximalPixelOffset.y(), pixelOffset.y());
+	// a map larger than the widget: the shown part stays on the map;
+	// a map smaller than the widget (on an axis): it is centered and does not move
+	const auto zoomedTileSize = getZoomedTileSize();
+	pixelOffset.x() = clampMapPixelOffset (pixelOffset.x(), getSize().x(), staticMap->getSize().x(), zoomedTileSize.x());
+	pixelOffset.y() = clampMapPixelOffset (pixelOffset.y(), getSize().y(), staticMap->getSize().y(), zoomedTileSize.y());
 
 	if (oldPixelOffset != pixelOffset)
 	{
 		cPosition newTileUnderMouse (-1, -1);
-		if (activeMouse && getArea().withinOrTouches (activeMouse->getPosition()))
+		if (activeMouse && isOverMap (activeMouse->getPosition()))
 		{
 			newTileUnderMouse = getMapTilePosition (activeMouse->getPosition());
 		}
@@ -864,9 +892,10 @@ cPosition cGameMapWidget::getMapCenterOffset()
 {
 	const auto zoomedTileSize = getZoomedTileSize();
 
+	// the offset is negative, if the map is centered in the widget
 	cPosition center;
-	center.x() = pixelOffset.x() / sGraphicTile::tilePixelWidth + (getSize().x() / (2 * zoomedTileSize.x()));
-	center.y() = pixelOffset.y() / sGraphicTile::tilePixelHeight + (getSize().y() / (2 * zoomedTileSize.y()));
+	center.x() = floorDivision (pixelOffset.x(), sGraphicTile::tilePixelWidth) + (getSize().x() / (2 * zoomedTileSize.x()));
+	center.y() = floorDivision (pixelOffset.y(), sGraphicTile::tilePixelHeight) + (getSize().y() / (2 * zoomedTileSize.y()));
 
 	return center;
 }
@@ -916,32 +945,39 @@ void cGameMapWidget::addEffect (std::shared_ptr<cFx> effect, bool playSound)
 //------------------------------------------------------------------------------
 float cGameMapWidget::computeMinimalZoomFactor() const
 {
-	// inequality to be fulfilled:
-	//
-	//   round (tile_x * zoom) * map_x <= size_x
-	//
-	// we first discard the 'round' and solve for zoom:
-	//
-	//   zoom = size_x / (map_x * tile_x)
-
-	auto xZoom = (float) getSize().x() / (staticMap->getSize().x() * sGraphicTile::tilePixelWidth);
-	auto yZoom = (float) getSize().y() / (staticMap->getSize().y() * sGraphicTile::tilePixelHeight);
-
-	// then we try to fix if round would have rounded up:
-
-	xZoom = std::max (xZoom, (float) ((int) (sGraphicTile::tilePixelWidth * xZoom) + (xZoom >= 1.0f ? 0 : 1)) / sGraphicTile::tilePixelWidth);
-	yZoom = std::max (yZoom, (float) ((int) (sGraphicTile::tilePixelHeight * yZoom) + (yZoom >= 1.0f ? 0 : 1)) / sGraphicTile::tilePixelHeight);
-
-	return std::max (xZoom, yZoom);
+	// the farthest zoom: the whole map fits into the widget on both axes (a tile has a whole number of pixels)
+	return computeMapFittingTileSize (getSize(), staticMap->getSize()) / static_cast<float> (sGraphicTile::tilePixelWidth);
 }
 
 //------------------------------------------------------------------------------
-cPosition cGameMapWidget::computeMaximalPixelOffset() const
+cPosition cGameMapWidget::getZoomedMapOffset() const
 {
-	const auto x = staticMap->getSize().x() * sGraphicTile::tilePixelWidth - (int) (getSize().x() / getZoomFactor());
-	const auto y = staticMap->getSize().y() * sGraphicTile::tilePixelHeight - (int) (getSize().y() / getZoomFactor());
+	const auto zoomedTileSize = getZoomedTileSize();
+	return cPosition (computeZoomedMapOffset (pixelOffset.x(), zoomedTileSize.x()), computeZoomedMapOffset (pixelOffset.y(), zoomedTileSize.y()));
+}
 
-	return cPosition (x, y);
+//------------------------------------------------------------------------------
+cPosition cGameMapWidget::getMapScreenOrigin() const
+{
+	return getPosition() - getZoomedMapOffset();
+}
+
+//------------------------------------------------------------------------------
+cBox<cPosition> cGameMapWidget::getMapScreenArea() const
+{
+	// like getArea(): the end position belongs to the box
+	const auto origin = getMapScreenOrigin();
+	const cPosition mapEnd = origin + staticMap->getSize() * getZoomedTileSize();
+
+	const cPosition minCorner (std::max (getPosition().x(), origin.x()), std::max (getPosition().y(), origin.y()));
+	const cPosition maxCorner (std::min (getEndPosition().x(), mapEnd.x()), std::min (getEndPosition().y(), mapEnd.y()));
+	return cBox<cPosition> (minCorner, maxCorner);
+}
+
+//------------------------------------------------------------------------------
+bool cGameMapWidget::isOverMap (const cPosition& screenPosition) const
+{
+	return getMapScreenArea().withinOrTouches (screenPosition);
 }
 
 //------------------------------------------------------------------------------
@@ -960,19 +996,25 @@ cPosition cGameMapWidget::getZoomedTileSize() const
 //------------------------------------------------------------------------------
 cPosition cGameMapWidget::getZoomedStartTilePixelOffset() const
 {
-	return zoomSize (cPosition (pixelOffset.x() % sGraphicTile::tilePixelWidth, pixelOffset.y() % sGraphicTile::tilePixelHeight), getZoomFactor());
+	// distance from the first drawn tile (computeTileDrawingRange().first) to the left upper corner of the widget:
+	// negative, if the map is centered in the widget
+	return getZoomedMapOffset() - computeTileDrawingRange().first * getZoomedTileSize();
 }
 
 //------------------------------------------------------------------------------
 std::pair<cPosition, cPosition> cGameMapWidget::computeTileDrawingRange() const
 {
 	const auto zoomedTileSize = getZoomedTileSize();
+	const auto zoomedMapOffset = getZoomedMapOffset();
 
-	const cPosition drawingPixelRange = getSize() + getZoomedStartTilePixelOffset();
+	// the tile at the left upper corner of the widget (negative, if the map is centered in the widget)
+	cPosition startTile (floorDivision (zoomedMapOffset.x(), zoomedTileSize.x()), floorDivision (zoomedMapOffset.y(), zoomedTileSize.y()));
+	const cPosition startTilePixelOffset = zoomedMapOffset - startTile * zoomedTileSize;
 
-	const cPosition tilesSize ((int) std::ceil (drawingPixelRange.x() / zoomedTileSize.x()), (int) std::ceil (drawingPixelRange.y() / zoomedTileSize.y()));
+	const cPosition drawingPixelRange = getSize() + startTilePixelOffset;
 
-	cPosition startTile ((int) std::floor (pixelOffset.x() / sGraphicTile::tilePixelWidth), (int) std::floor (pixelOffset.y() / sGraphicTile::tilePixelHeight));
+	const cPosition tilesSize (drawingPixelRange.x() / zoomedTileSize.x(), drawingPixelRange.y() / zoomedTileSize.y());
+
 	cPosition endTile (startTile + tilesSize + 1);
 
 	startTile.x() = std::max (0, startTile.x());
@@ -1016,19 +1058,63 @@ void cGameMapWidget::drawTerrain()
 }
 
 //------------------------------------------------------------------------------
+void cGameMapWidget::drawBackground()
+{
+	// dark, where no map tile will be drawn: the empty space around a map smaller than the widget
+	// and a border around the widget below the HUD (it is drawn later; its transparent pixels next to the map
+	// show the tiles reaching beyond the widget, without them they would show the remains of earlier pictures)
+	const auto zoomedTileSize = getZoomedTileSize();
+	const auto [firstTile, endTile] = computeTileDrawingRange();
+	const auto origin = getMapScreenOrigin();
+	const cPosition tilesStart = origin + firstTile * zoomedTileSize;
+	const cPosition tilesEnd = origin + endTile * zoomedTileSize;
+
+	const int border = sGraphicTile::tilePixelWidth;
+	const int left = std::max (0, getPosition().x() - border);
+	const int top = std::max (0, getPosition().y() - border);
+	const int right = std::min (cVideo::buffer->w, getEndPosition().x() + border);
+	const int bottom = std::min (cVideo::buffer->h, getEndPosition().y() + border);
+
+	const int mapLeft = std::clamp (tilesStart.x(), left, right);
+	const int mapTop = std::clamp (tilesStart.y(), top, bottom);
+	const int mapRight = std::clamp (tilesEnd.x(), left, right);
+	const int mapBottom = std::clamp (tilesEnd.y(), top, bottom);
+
+	if (mapLeft == left && mapTop == top && mapRight == right && mapBottom == bottom) return;
+
+	const Uint32 color = SDL_MapRGB (cVideo::buffer->format, 0, 0, 0);
+	const SDL_Rect stripes[] = {
+		{left, top, right - left, mapTop - top},
+		{left, mapBottom, right - left, bottom - mapBottom},
+		{left, mapTop, mapLeft - left, mapBottom - mapTop},
+		{mapRight, mapTop, right - mapRight, mapBottom - mapTop}};
+	for (auto stripe : stripes)
+	{
+		if (stripe.w > 0 && stripe.h > 0) SDL_FillRect (cVideo::buffer, &stripe, color);
+	}
+}
+
+//------------------------------------------------------------------------------
 void cGameMapWidget::drawGrid()
 {
 	const auto zoomedTileSize = getZoomedTileSize();
+	if (zoomedTileSize.x() < minimalGridTileSize) return;
+
 	const auto zoomedStartTilePixelOffset = getZoomedStartTilePixelOffset();
 
-	SDL_Rect destY = {getPosition().x(), getPosition().y() + zoomedTileSize.y() - zoomedStartTilePixelOffset.y(), getSize().x(), 1};
-	for (; destY.y < getEndPosition().y(); destY.y += zoomedTileSize.y())
+	// only on the map, not on the empty space around a map smaller than the widget
+	const auto mapArea = getMapScreenArea();
+	const auto& mapStart = mapArea.getMinCorner();
+	const auto& mapEnd = mapArea.getMaxCorner();
+
+	SDL_Rect destY = {mapStart.x(), getPosition().y() + zoomedTileSize.y() - zoomedStartTilePixelOffset.y(), mapEnd.x() - mapStart.x(), 1};
+	for (; destY.y < mapEnd.y(); destY.y += zoomedTileSize.y())
 	{
 		SDL_FillRect (cVideo::buffer, &destY, GRID_COLOR);
 	}
 
-	SDL_Rect destX = {getPosition().x() + zoomedTileSize.x() - zoomedStartTilePixelOffset.x(), getPosition().y(), 1, getSize().y()};
-	for (; destX.x < getEndPosition().x(); destX.x += zoomedTileSize.x())
+	SDL_Rect destX = {getPosition().x() + zoomedTileSize.x() - zoomedStartTilePixelOffset.x(), mapStart.y(), 1, mapEnd.y() - mapStart.y()};
+	for (; destX.x < mapEnd.x(); destX.x += zoomedTileSize.x())
 	{
 		SDL_FillRect (cVideo::buffer, &destX, GRID_COLOR);
 	}
@@ -1041,6 +1127,7 @@ void cGameMapWidget::drawEffects (bool bottom)
 	SDL_SetClipRect (cVideo::buffer, &clipRect);
 
 	const cPosition originalTileSize (sGraphicTile::tilePixelWidth, sGraphicTile::tilePixelHeight);
+	const auto mapScreenOrigin = getMapScreenOrigin();
 
 	std::erase_if (effects, [] (const auto& effect) { return effect->isFinished(); });
 	for (const auto& effect : effects)
@@ -1048,8 +1135,8 @@ void cGameMapWidget::drawEffects (bool bottom)
 		if (effect->bottom == bottom && (!player || player->canSeeAt (effect->getPixelPosition() / originalTileSize)))
 		{
 			cPosition screenDestination;
-			screenDestination.x() = getPosition().x() + static_cast<int> ((effect->getPixelPosition().x() - pixelOffset.x()) * getZoomFactor());
-			screenDestination.y() = getPosition().y() + static_cast<int> ((effect->getPixelPosition().y() - pixelOffset.y()) * getZoomFactor());
+			screenDestination.x() = mapScreenOrigin.x() + static_cast<int> (effect->getPixelPosition().x() * getZoomFactor());
+			screenDestination.y() = mapScreenOrigin.y() + static_cast<int> (effect->getPixelPosition().y() * getZoomFactor());
 			drawFx (*effect, getZoomFactor(), screenDestination);
 		}
 	}
@@ -1270,6 +1357,42 @@ void cGameMapWidget::drawPlanes()
 }
 
 //------------------------------------------------------------------------------
+void cGameMapWidget::drawUnitMarks()
+{
+	// below the former farthest zoom the images of the units have only a few pixels:
+	// the units are marked with the color of their owner, like on the mini map,
+	// the selected units get a white frame (their selection corners would have no length)
+	if (!mapView) return;
+
+	const auto zoomedTileSize = getZoomedTileSize();
+	const auto [topLeft, bottomRight] = computeTileDrawingRange();
+	const auto zoomedStartTilePixelOffset = getZoomedStartTilePixelOffset();
+
+	for (auto i = makeIndexIterator (topLeft, bottomRight); i.hasMore(); i.next())
+	{
+		const auto& mapField = mapView->getField (*i);
+
+		const cUnit* unit = mapField.getPlane();
+		if (unit == nullptr) unit = mapField.getVehicle();
+		if (unit == nullptr) unit = mapField.getTopBuilding();
+		if (unit == nullptr || unit->getOwner() == nullptr) continue;
+
+		auto drawDestination = computeTileDrawingArea (zoomedTileSize, zoomedStartTilePixelOffset, topLeft, *i);
+		SDL_FillRect (cVideo::buffer, &drawDestination, toSdlAlphaColor (unit->getOwner()->getColor(), *cVideo::buffer));
+	}
+
+	for (const auto* unit : unitSelection.getSelectedUnits())
+	{
+		if (!mapView->canSeeUnit (*unit)) continue;
+
+		const int tiles = unit->getIsBig() ? 2 : 1;
+		const auto start = computeTileDrawingArea (zoomedTileSize, zoomedStartTilePixelOffset, topLeft, unit->getPosition());
+		const cBox<cPosition> frame (cPosition (start.x - 1, start.y - 1), cPosition (start.x + tiles * zoomedTileSize.x() + 1, start.y + tiles * zoomedTileSize.y() + 1));
+		drawRectangle (*cVideo::buffer, frame, cRgbColor::white());
+	}
+}
+
+//------------------------------------------------------------------------------
 void cGameMapWidget::drawResources()
 {
 	if (!mapView) return;
@@ -1324,8 +1447,9 @@ void cGameMapWidget::drawSelectionBox()
 
 	const auto zoomedTileSize = getZoomedTileSize();
 
-	const auto zoomOffX = (int) (pixelOffset.x() * getZoomFactor());
-	const auto zoomOffY = (int) (pixelOffset.y() * getZoomFactor());
+	const auto zoomedMapOffset = getZoomedMapOffset();
+	const auto zoomOffX = zoomedMapOffset.x();
+	const auto zoomOffY = zoomedMapOffset.y();
 
 	const int mouseTopX = static_cast<int> (std::min (unitSelectionBox.getBox().getMinCorner()[0], unitSelectionBox.getBox().getMaxCorner()[0]) * zoomedTileSize.x());
 	const int mouseTopY = static_cast<int> (std::min (unitSelectionBox.getBox().getMinCorner()[1], unitSelectionBox.getBox().getMaxCorner()[1]) * zoomedTileSize.y());
@@ -1516,7 +1640,7 @@ void cGameMapWidget::drawBuildBand()
 	{
 		auto mouse = getActiveMouse();
 
-		if (!mouse || !getArea().withinOrTouches (mouse->getPosition())) return;
+		if (!mouse || !isOverMap (mouse->getPosition())) return;
 
 		if (mouseMode->getType() == eMouseModeType::SelectBuildPosition)
 		{
@@ -1527,8 +1651,8 @@ void cGameMapWidget::drawBuildBand()
 			if (!destination) return;
 
 			SDL_Rect dest;
-			dest.x = getPosition().x() - (int) (pixelOffset.x() * getZoomFactor()) + zoomedTileSize.x() * destination->x();
-			dest.y = getPosition().y() - (int) (pixelOffset.y() * getZoomFactor()) + zoomedTileSize.y() * destination->y();
+			dest.x = getMapScreenOrigin().x() + zoomedTileSize.x() * destination->x();
+			dest.y = getMapScreenOrigin().y() + zoomedTileSize.y() * destination->y();
 			CHECK_SCALING (*GraphicsData.gfx_band_big, *GraphicsData.gfx_band_big_org, getZoomFactor());
 			SDL_BlitSurface (GraphicsData.gfx_band_big.get(), nullptr, cVideo::buffer, &dest);
 		}
@@ -1538,8 +1662,8 @@ void cGameMapWidget::drawBuildBand()
 			if (mouseTilePosition.x() == selectedVehicle->getPosition().x() || mouseTilePosition.y() == selectedVehicle->getPosition().y())
 			{
 				SDL_Rect dest;
-				dest.x = getPosition().x() - (int) (pixelOffset.x() * getZoomFactor()) + zoomedTileSize.x() * mouseTilePosition.x();
-				dest.y = getPosition().y() - (int) (pixelOffset.y() * getZoomFactor()) + zoomedTileSize.y() * mouseTilePosition.y();
+				dest.x = getMapScreenOrigin().x() + zoomedTileSize.x() * mouseTilePosition.x();
+				dest.y = getMapScreenOrigin().y() + zoomedTileSize.y() * mouseTilePosition.y();
 				CHECK_SCALING (*GraphicsData.gfx_band_small, *GraphicsData.gfx_band_small_org, getZoomFactor());
 				SDL_BlitSurface (GraphicsData.gfx_band_small.get(), nullptr, cVideo::buffer, &dest);
 			}
@@ -1599,11 +1723,12 @@ void cGameMapWidget::drawBuildPath (const cVehicle& vehicle)
 	else
 		sp = 6;
 
+	const auto mapScreenOrigin = getMapScreenOrigin();
 	while (m != vehicle.bandPosition)
 	{
 		SDL_Rect dest;
-		dest.x = getPosition().x() - (int) (pixelOffset.x() * getZoomFactor()) + zoomedTileSize.x() * m.x();
-		dest.y = getPosition().y() - (int) (pixelOffset.y() * getZoomFactor()) + zoomedTileSize.y() * m.y();
+		dest.x = mapScreenOrigin.x() + zoomedTileSize.x() * m.x();
+		dest.y = mapScreenOrigin.y() + zoomedTileSize.y() * m.y();
 
 		SDL_BlitSurface (OtherData.WayPointPfeileSpecial[sp][64 - zoomedTileSize.x()].get(), nullptr, cVideo::buffer, &dest);
 
@@ -1618,8 +1743,8 @@ void cGameMapWidget::drawBuildPath (const cVehicle& vehicle)
 			m.y()--;
 	}
 	SDL_Rect dest;
-	dest.x = getPosition().x() - (int) (pixelOffset.x() * getZoomFactor()) + zoomedTileSize.x() * m.x();
-	dest.y = getPosition().y() - (int) (pixelOffset.y() * getZoomFactor()) + zoomedTileSize.y() * m.y();
+	dest.x = mapScreenOrigin.x() + zoomedTileSize.x() * m.x();
+	dest.y = mapScreenOrigin.y() + zoomedTileSize.y() * m.y();
 
 	SDL_BlitSurface (OtherData.WayPointPfeileSpecial[sp][64 - zoomedTileSize.x()].get(), nullptr, cVideo::buffer, &dest);
 }
@@ -1640,8 +1765,8 @@ void cGameMapWidget::drawPath (const cVehicle& vehicle)
 	int sp = vehicle.data.getSpeed() + moveJob->getSavedSpeed();
 
 	SDL_Rect dest;
-	dest.x = getPosition().x() - (int) (pixelOffset.x() * getZoomFactor()) + zoomedTileSize.x() * vehicle.getPosition().x();
-	dest.y = getPosition().y() - (int) (pixelOffset.y() * getZoomFactor()) + zoomedTileSize.y() * vehicle.getPosition().y();
+	dest.x = getMapScreenOrigin().x() + zoomedTileSize.x() * vehicle.getPosition().x();
+	dest.y = getMapScreenOrigin().y() + zoomedTileSize.y() * vehicle.getPosition().y();
 	dest.w = zoomedTileSize.x();
 	dest.h = zoomedTileSize.y();
 	SDL_Rect ndest = dest;
@@ -1746,8 +1871,10 @@ cPosition cGameMapWidget::getMapTilePosition (const cPosition& pixelPosition) co
 
 	const auto zoomedTileSize = getZoomedTileSize();
 
-	const auto x = (int) ((pixelPosition.x() - getPosition().x() + pixelOffset.x() * getZoomFactor()) / zoomedTileSize.x());
-	const auto y = (int) ((pixelPosition.y() - getPosition().y() + pixelOffset.y() * getZoomFactor()) / zoomedTileSize.y());
+	// the same tile, that is drawn at this position
+	const cPosition mapPixelPosition = pixelPosition - getMapScreenOrigin();
+	const auto x = floorDivision (mapPixelPosition.x(), zoomedTileSize.x());
+	const auto y = floorDivision (mapPixelPosition.y(), zoomedTileSize.y());
 
 	const cPosition tilePosition (std::clamp (x, 0, staticMap->getSize().x() - 1), std::clamp (y, 0, staticMap->getSize().y() - 1));
 
@@ -1761,7 +1888,7 @@ bool cGameMapWidget::handleMouseMoved (cApplication& application, cMouse& mouse,
 
 	cPosition lastMouseOverTilePosition;
 	const auto lastMousePosition = mouse.getPosition() - offset;
-	if (getArea().withinOrTouches (lastMousePosition))
+	if (isOverMap (lastMousePosition))
 	{
 		lastMouseOverTilePosition = getMapTilePosition (lastMousePosition);
 	}
@@ -1770,7 +1897,7 @@ bool cGameMapWidget::handleMouseMoved (cApplication& application, cMouse& mouse,
 		lastMouseOverTilePosition = cPosition (-1, -1);
 	}
 
-	if (getArea().withinOrTouches (mouse.getPosition()))
+	if (isOverMap (mouse.getPosition()))
 	{
 		const auto tilePosition = getMapTilePosition (mouse.getPosition());
 		if (tilePosition != lastMouseOverTilePosition)
@@ -1782,14 +1909,18 @@ bool cGameMapWidget::handleMouseMoved (cApplication& application, cMouse& mouse,
 	else
 	{
 		tileUnderMouseChanged (cPosition (-1, -1));
+		// the empty space around a map smaller than the widget
+		if (getArea().withinOrTouches (mouse.getPosition())) updateMouseCursor();
 	}
 
 	if (unitSelectionBox.isValidStart() && isAt (mouse.getPosition()) && mouse.isButtonPressed (eMouseButtonType::Left) && !mouse.isButtonPressed (eMouseButtonType::Right))
 	{
+		// the box ends on the map, also if the mouse is beside the map
 		const auto zoomedTileSize = getZoomedTileSize();
+		const auto mapScreenOrigin = getMapScreenOrigin();
 
-		unitSelectionBox.getBox().getMaxCorner()[0] = (mouse.getPosition().x() - getPosition().x() + (pixelOffset.x() * getZoomFactor())) / zoomedTileSize.x();
-		unitSelectionBox.getBox().getMaxCorner()[1] = (mouse.getPosition().y() - getPosition().y() + (pixelOffset.y() * getZoomFactor())) / zoomedTileSize.y();
+		unitSelectionBox.getBox().getMaxCorner()[0] = toMapTileCoordinate (mouse.getPosition().x(), mapScreenOrigin.x(), zoomedTileSize.x(), staticMap->getSize().x());
+		unitSelectionBox.getBox().getMaxCorner()[1] = toMapTileCoordinate (mouse.getPosition().y(), mapScreenOrigin.y(), zoomedTileSize.y(), staticMap->getSize().y());
 	}
 
 	return consumed;
@@ -1800,12 +1931,13 @@ bool cGameMapWidget::handleMousePressed (cApplication& application, cMouse& mous
 {
 	if (rightMouseButtonScrollerWidget->handleMousePressed (application, mouse, button)) return true;
 
-	if (button == eMouseButtonType::Left && !mouse.isButtonPressed (eMouseButtonType::Right) && !unitSelectionBox.isValidStart() && isAt (mouse.getPosition()))
+	if (button == eMouseButtonType::Left && !mouse.isButtonPressed (eMouseButtonType::Right) && !unitSelectionBox.isValidStart() && isAt (mouse.getPosition()) && isOverMap (mouse.getPosition()))
 	{
 		const auto zoomedTileSize = getZoomedTileSize();
+		const auto mapScreenOrigin = getMapScreenOrigin();
 
-		unitSelectionBox.getBox().getMinCorner()[0] = (mouse.getPosition().x() - getPosition().x() + (pixelOffset.x() * getZoomFactor())) / zoomedTileSize.x();
-		unitSelectionBox.getBox().getMinCorner()[1] = (mouse.getPosition().y() - getPosition().y() + (pixelOffset.y() * getZoomFactor())) / zoomedTileSize.y();
+		unitSelectionBox.getBox().getMinCorner()[0] = toMapTileCoordinate (mouse.getPosition().x(), mapScreenOrigin.x(), zoomedTileSize.x(), staticMap->getSize().x());
+		unitSelectionBox.getBox().getMinCorner()[1] = toMapTileCoordinate (mouse.getPosition().y(), mapScreenOrigin.y(), zoomedTileSize.y(), staticMap->getSize().y());
 	}
 
 	return cClickableWidget::handleMousePressed (application, mouse, button);
@@ -1839,9 +1971,20 @@ void cGameMapWidget::handleLooseMouseFocus (cApplication&) /* override */
 //------------------------------------------------------------------------------
 void cGameMapWidget::handleResized (const cPosition& oldSize)
 {
+	// the center of the shown part of the map (in map pixels at zoom 1) stays where it is
+	const double oldZoom = getZoomFactor();
+	const double centerX = pixelOffset.x() + oldSize.x() / (2. * oldZoom);
+	const double centerY = pixelOffset.y() + oldSize.y() / (2. * oldZoom);
+
 	cClickableWidget::handleResized (oldSize);
 
-	setZoomFactor (internalZoomFactor, true); // revalidates zoom and offset
+	setZoomFactor (internalZoomFactor, false); // revalidates the zoom (the minimal zoom depends on the size)
+
+	const double newZoom = getZoomFactor();
+	const cPosition newPixelOffset (static_cast<int> (std::lround (centerX - getSize().x() / (2. * newZoom))), static_cast<int> (std::lround (centerY - getSize().y() / (2. * newZoom))));
+	scroll (newPixelOffset - pixelOffset); // revalidates the offset
+
+	updateUnitMenuPosition();
 }
 
 //------------------------------------------------------------------------------
@@ -1856,6 +1999,9 @@ bool cGameMapWidget::handleClicked (cApplication&, cMouse& mouse, eMouseButtonTy
 	if (!getArea().withinOrTouches (mouse.getPosition())) return false;
 
 	if (!mapView) return false;
+
+	// the empty space around a map smaller than the widget: no tile, nothing to do
+	if (!isOverMap (mouse.getPosition())) return true;
 
 	const auto tilePosition = getMapTilePosition (mouse.getPosition());
 
@@ -1969,13 +2115,14 @@ bool cGameMapWidget::handleClicked (cApplication&, cMouse& mouse, eMouseButtonTy
 //------------------------------------------------------------------------------
 cPosition cGameMapWidget::getScreenPosition (const cUnit& unit, bool movementOffset) const
 {
-	cPosition position;
+	// like the unit is drawn: its tile and the movement offset (cUnitDrawingEngine::drawUnit)
+	cPosition position = getMapScreenOrigin() + unit.getPosition() * getZoomedTileSize();
 
-	const int offsetX = movementOffset ? unit.getMovementOffset().x() : 0;
-	position.x() = getPosition().x() - ((int) ((pixelOffset.x() - offsetX) * getZoomFactor())) + getZoomedTileSize().x() * unit.getPosition().x();
-
-	const int offsetY = movementOffset ? unit.getMovementOffset().y() : 0;
-	position.y() = getPosition().y() - ((int) ((pixelOffset.y() - offsetY) * getZoomFactor())) + getZoomedTileSize().y() * unit.getPosition().y();
+	if (movementOffset)
+	{
+		position.x() += static_cast<int> (unit.getMovementOffset().x() * getZoomFactor());
+		position.y() += static_cast<int> (unit.getMovementOffset().y() * getZoomFactor());
+	}
 
 	return position;
 }
@@ -2111,7 +2258,7 @@ void cGameMapWidget::updateMouseCursor (cMouse& mouse)
 
 	if (rightMouseButtonScrollerWidget->isScrolling()) return;
 
-	if (!staticMap || (unitMenu->isEnabled() && !unitMenu->isHidden() && unitMenu->isAt (mouse.getPosition())))
+	if (!staticMap || !isOverMap (mouse.getPosition()) || (unitMenu->isEnabled() && !unitMenu->isHidden() && unitMenu->isAt (mouse.getPosition())))
 	{
 		mouse.setCursor (std::make_unique<cMouseCursorSimple> (eMouseCursorSimpleType::Hand));
 	}

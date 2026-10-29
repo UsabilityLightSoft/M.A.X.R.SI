@@ -45,7 +45,9 @@ SDL_Surface* cMouseCursorAmount::getSurface() const
 //------------------------------------------------------------------------------
 cPosition cMouseCursorAmount::getHotPoint() const
 {
-	return cPosition (19, 19);
+	// the center of the circle (steal.pcx: x 5..29, disable.pcx: x 6..30, both y 0..24;
+	// below it the bar of the chance). Was (19, 19): 7 pixels below the center.
+	return type == eMouseCursorAmountType::Disable ? cPosition (18, 12) : cPosition (17, 12);
 }
 
 //------------------------------------------------------------------------------

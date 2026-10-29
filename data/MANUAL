@@ -25,7 +25,7 @@ s		scan on/off or stop or start or sentry or steal
 r		range on/off or reload or repair or research menu
 m		munition on/off
 t		hitpoints on/off
-f		color on/off
+o		color on/off
 p		status on/off
 h		survey on/off or info menu
 n		shild on/off

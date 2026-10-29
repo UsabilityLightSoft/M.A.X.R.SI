@@ -102,3 +102,9 @@ void cPlayerBasicData::setDefeated (bool defeated_)
 	std::swap (defeated_, defeated);
 	if (defeated != defeated_) isDefeatedChanged();
 }
+
+//------------------------------------------------------------------------------
+bool isSiAiPlayerName (const std::string& name)
+{
+	return name.starts_with ("SI-") || name.starts_with ("AI ");
+}

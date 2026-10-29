@@ -24,6 +24,7 @@
 #include "ui/graphical/menu/control/local/singleplayer/localsingleplayergamenew.h"
 #include "ui/graphical/menu/control/local/singleplayer/localsingleplayergamesaved.h"
 #include "ui/graphical/menu/dialogs/dialogok.h"
+#include "ui/graphical/menu/dialogs/dialogproceedanyway.h"
 #include "ui/graphical/menu/widgets/pushbutton.h"
 #include "ui/graphical/menu/windows/windowgamesettings/windowgamesettings.h"
 #include "ui/graphical/menu/windows/windowload/windowload.h"
@@ -96,20 +97,40 @@ void cWindowSinglePlayer::loadGameClicked()
 
 	auto windowLoad = getActiveApplication()->show (std::make_shared<cWindowLoad>());
 	windowLoad->load.connect ([=] (const cSaveGameInfo& saveInfo) {
-		auto game = std::make_shared<cLocalSinglePlayerGameSaved> (saveInfo.number);
-		try
+		const auto startGame = [=]() {
+			auto game = std::make_shared<cLocalSinglePlayerGameSaved> (saveInfo.number);
+			try
+			{
+				game->start (*application);
+			}
+			catch (const std::runtime_error& e)
+			{
+				Log.error ("Could not start saved game.");
+				Log.error (e.what());
+				application->show (std::make_shared<cDialogOk> (lngPack.i18n ("Error_Messages~ERROR_Save_Loading")));
+				return;
+			}
+
+			windowLoad->close();
+		};
+
+		if (saveInfo.type != eGameType::Single)
 		{
-			game->start (*application);
-		}
-		catch (const std::runtime_error& e)
-		{
-			Log.error ("Could not start saved game.");
-			Log.error (e.what());
-			application->show (std::make_shared<cDialogOk> (lngPack.i18n ("Error_Messages~ERROR_Save_Loading")));
+			// a network or hot seat game: here nobody plays the other players, their turn would never come
+			std::string otherPlayers;
+			for (const auto& player : saveInfo.players)
+			{
+				if (player.getNr() == 0) continue; // the local player of a single player game
+				if (!otherPlayers.empty()) otherPlayers += ", ";
+				otherPlayers += player.getName();
+			}
+			Log.warn ("Saved game " + std::to_string (saveInfo.number) + " is not a single player game (players: " + otherPlayers + ")");
+			const auto* warning = saveInfo.type == eGameType::Hotseat ? "Comp~Load_HotSeat_Game_In_Single_Player" : "Comp~Load_Network_Game_In_Single_Player";
+			auto dialog = application->show (std::make_shared<cDialogProceedAnyway> (lngPack.i18n (warning, otherPlayers), lngPack.i18n ("Others~Load_Anyway")));
+			dialog->proceedClicked.connect (startGame);
 			return;
 		}
-
-		windowLoad->close();
+		startGame();
 	});
 }
 

@@ -31,6 +31,7 @@ class cBuilding;
 class cCheckBox;
 class cLabel;
 class cMapView;
+class cToolTip;
 class cTurnTimeClock;
 class cUnitListViewItemBuild;
 class cUnitsData;
@@ -46,8 +47,12 @@ public:
 	int getSelectedBuildSpeed() const;
 	bool isRepeatActive() const;
 
+	void draw (SDL_Surface& destination, const cBox<cPosition>& clipRect) override;
+
 protected:
 	void setActiveUnit (const sID& unitId) override;
+	/** With an empty queue "Done" does nothing: the list of vehicles is shown, that has to be used first. */
+	void okClicked() override;
 
 private:
 	cSignalConnectionManager signalConnectionManager;
@@ -58,11 +63,20 @@ private:
 
 	cLabel* titleLabel = nullptr;
 	cCheckBox* repeatCheckBox = nullptr;
+	/** Why "Done" is not available: shown while the mouse is over it and for a moment after a click on it. */
+	cToolTip* emptyQueueHint = nullptr;
+
+	/** "Done" was clicked with an empty queue: the list of vehicles is highlighted for a moment (SDL ticks). */
+	Uint32 emptyQueueClickTime = 0;
+	bool emptyQueueClicked = false;
 
 	void generateSelectionList (const cBuilding& building, const cMapView& map, const cUnitsData& unitsData);
 	void generateBuildList (const cBuilding& building);
 
 	void closeOnUnitDestruction();
+
+	/** "Done" is available only with a vehicle in the queue (double click in the list adds one). */
+	void updateDoneButton();
 };
 
 #endif // ui_graphical_menu_windows_windowbuildvehicles_windowbuildvehiclesH

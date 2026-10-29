@@ -91,4 +91,12 @@ inline auto byPlayerName (const std::string& name)
 	return [=] (const cPlayerBasicData& player) { return player.getName() == name; };
 }
 
+/**
+ * Whether a player of the lobby is the AI client of M.A.X.R.SI (maxr_ai_client):
+ * it joins as a normal player named after its version ("SI-R4.0-T", a second one "SI-R4.0-T 2";
+ * older clients "AI rule"), unless it has been given another name.
+ * This AI plays turn based games only.
+ */
+bool isSiAiPlayerName (const std::string& name);
+
 #endif // game_data_player_playerbasicdataH

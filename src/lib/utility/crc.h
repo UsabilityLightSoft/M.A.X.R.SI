@@ -43,7 +43,9 @@
 	for (const char* i = data; i != data + dataSize; ++i)
 	{
 		checksum = checksum << 1 | checksum >> 31; // Rotate left by one.
-		checksum += *i;
+		// as signed char: the signedness of char depends on the platform (unsigned on Linux on ARM),
+		// and the bytes from 128 to 255 have to give the same checksum everywhere
+		checksum += static_cast<signed char> (*i);
 	}
 	return checksum;
 }
@@ -73,6 +75,10 @@ template <typename T>
 
 [[nodiscard]] uint32_t calcCheckSum (const std::string& data, uint32_t checksum);
 [[nodiscard]] uint32_t calcCheckSum (std::string_view data, uint32_t checksum);
+
+// The same value as the generic calcCheckSum (const std::vector<T>&, uint32_t) for T = uint16_t,
+// but faster for runs of zero values (most fields of a range map are zero)
+[[nodiscard]] uint32_t calcCheckSum (const std::vector<uint16_t>& data, uint32_t checksum);
 
 struct sCrcEnum
 {

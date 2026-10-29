@@ -117,9 +117,12 @@ cWindowNetworkLobby::cWindowNetworkLobby (const std::string title, bool disableI
 
 	playersList = emplaceChild<cListView<cLobbyPlayerListViewItem>> (cBox<cPosition> (getPosition() + cPosition (465, 284), getPosition() + cPosition (465 + 167, 284 + 124)), eScrollBarStyle::Classic);
 	playersList->disableSelectable();
-	playersList->setBeginMargin (cPosition (12, 12));
-	playersList->setEndMargin (cPosition (10, 10));
-	playersList->setItemDistance (4);
+	// the rows touch each other: the cell of the ready dot takes the distance between the rows and some pixels
+	// of the right margin, so that it can be hit easily; the dots and names stay where they were
+	// (margins 12, 12 / 10, 10 and a distance of 4 with the dot alone)
+	playersList->setBeginMargin (cPosition (12, 12 - cLobbyPlayerListViewItem::readyCellMarginY));
+	playersList->setEndMargin (cPosition (10 - cLobbyPlayerListViewItem::readyCellMarginX, 10 - cLobbyPlayerListViewItem::readyCellMarginY));
+	playersList->setItemDistance (4 - 2 * cLobbyPlayerListViewItem::readyCellMarginY);
 
 	auto colorSelector = emplaceChild<cColorSelector> (getPosition() + cPosition (478, 256), localPlayer->getColor());
 	signalConnectionManager.connect (colorSelector->onColorChanged, [this] (const cRgbColor& color) {
@@ -440,6 +443,7 @@ void cWindowNetworkLobby::addPlayer (const std::shared_ptr<cPlayerBasicData>& pl
 	auto item = playersList->addItem (std::make_unique<cLobbyPlayerListViewItem> (player));
 	if (player == localPlayer)
 	{
+		item->setReadyClickable (true);
 		signalConnectionManager.connect (item->readyClicked, [player, this]() {
 			cSoundDevice::getInstance().playSoundEffect (SoundData.SNDHudButton);
 			wantLocalPlayerReadyChange();

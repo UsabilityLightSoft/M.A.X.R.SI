@@ -16,7 +16,10 @@
  * «подъехал — выстрелил» (выстрел в конце пути); шаг 10 — исследования и
  * золото (ai_tech): центры исследований по доходу, тема по пользе против
  * видимого врага, переработка золота и покупка улучшений, обновление машин в
- * депо; шаг 13 — оборона (ai_defense), флот (ai_navy), коммандос (ai_commando) и авиация (ai_air).
+ * депо; шаг 13 — оборона (ai_defense), флот (ai_navy), коммандос (ai_commando) и авиация (ai_air);
+ * Р7 (часть 4а) — эко-сферы и победа по очкам (ai_eco); Р22 — пересмотр приказов каждый ход (ai_reorders): машина с путём из
+ * прошлых ходов едет дальше, только если приказ ещё имеет смысл и лучшей задачи нет. Р24 — геолог у центра карты (ai_survey) и
+ * стройщик под лёгкой угрозой: не уходит от врага, что не убьёт его за два своих хода (слой угроз Builder, ai_world_model).
  * Детерминированный, тестируемый, fallback для LLM-советника.
  ***************************************************************************/
 
@@ -28,8 +31,12 @@
 #include "ai_brain.h"
 #include "ai_commando.h"
 #include "ai_defense.h"
+#include "ai_eco.h"
 #include "ai_navy.h"
+#include "ai_reorders.h"
 #include "ai_roles.h"
+#include "ai_survey.h"
+#include "ai_tactics.h"
 #include "ai_tech.h"
 #include "ai_world_model.h"
 
@@ -40,11 +47,24 @@
 #include <vector>
 
 class cModel;
+class cStaticMap;
 
 namespace ai
 {
 
 struct cOrder;
+
+// Р17 (п. 86, П26): клан, как человек в лобби, — по карте (её видно до игры), своей точке высадки и плану: враг по догадке за водой,
+// а моря у базы нет — до него долетают одни самолёты: The Chosen (авиация); иначе — Musashi (танки: урон 20, броня 12, прочность 28
+// против 16/10/24 — основа армии и обороны правил на любой карте с морем или путём по суше: по замерам Р17 Musashi лучше Crimson Path и
+// на морских картах). Клан врага в лобби не виден — не учитывается. Axis Inc. (7) не берём: у него другой бесплатный набор высадки.
+// MAXR_CLAN=0 — клан по месту, как до Р17 (игрок 0 — 0, игрок 1 — 1); MAXR_CLAN=cN — клан N (опыт)
+struct sClanChoice
+{
+	int clan = -1; // −1 — по месту
+	std::string why;
+};
+sClanChoice ruleChooseClan (const cStaticMap& map, const cPosition& landing);
 
 class cRuleBrain : public cAiBrain
 {
@@ -81,12 +101,18 @@ public:
 		cPosition pos;
 		int speed = 0;
 		int cost = 0;
+		int since = 0; // Р7: ход, когда план составлен
 	};
 
 private:
 	void strategicDecisions (int playerId, const cModel& model, std::vector<cOrder>& out);
 	void operationalDecisions (int playerId, const cModel& model, std::vector<cOrder>& out);
 	void microDecisions (int playerId, const cModel& model, std::vector<cOrder>& out);
+
+	// Р22: начало хода — пересмотр машин с путём из прошлых ходов (ai_reorders): едет дальше или отпущена
+	void reviewOrders (int playerId, const cModel& model);
+	// заходы 2+ (шаг 11) — сами решения; decidePass добавляет их в память намерений (Р22)
+	std::vector<cOrder> decidePassOrders (int playerId, const cModel& model, int pass);
 
 	// планы стройщиков (id машины → план); упорядочено по id — детерминированно
 	std::map<unsigned int, sBuildPlan> plans_;
@@ -113,8 +139,27 @@ private:
 	// шаг 13, часть 3: свои коммандос (П2, П18) и авиация (П15–П17, П10) — ai_commando, ai_air
 	cCommandos commando_;
 	cAirForce air_;
+	// Р7 (п. 94, 106): эко-сферы и победа по очкам — условие победы из настроек партии, когда и сколько сфер (ai_eco)
+	cEcoPlan eco_;
+	// Р7 (п. 104, схема Владыки): умный геолог (ai_survey)
+	cSurvey survey_;
+	// Р17 (П19–П22, огонь наугад): тактика заходов (ai_tactics)
+	cTactics tactics_;
+	// Р22: пересмотр приказов каждый ход — память намерений, отпущенные машины (ai_reorders)
+	cOrderReview review_;
 	// шаг 13: минёр уже включил закладку в этом ходу — в следующем заходе выключить
 	std::vector<unsigned int> minesToggled_;
+	// Р7 (п. 114): потолок сухопутной армии «пути по суше нет» уже записан в журнал
+	bool landCapNoted_ = false;
+	bool landFactoryCapNoted_ = false; // Р17 (п. 142): потолок больших фабрик «пути по суше нет» записан в журнал
+	int earlyDefenderNoted_ = -1;      // Р17 (п. 55): ход, когда «танк-защитник раньше конструкторов» записан в журнал
+	// Р7 (п. 94): площадки эко-сфер, где стройка не началась за kEcoPlanStale ходов (занята, не подойти), — (клетка, ход)
+	std::vector<std::pair<cPosition, int>> badEcoSites_;
+	// Р24 (п. 165): стройщики, оставшиеся в этом ходу под лёгкой угрозой (слой Builder), — клетки для тревоги «позвать
+	// защитника» (MAXR_BUILD_GUARD=1); стройка под лёгкой угрозой — на наибольшей доступной скорости (MAXR_BUILD_TURBO=1)
+	std::vector<cPosition> lightGuard_;
+	bool buildGuard_ = false;
+	bool buildTurbo_ = false;
 	// шаг 11: нужен ли ещё заход в этом ходу (после decideTurn / decidePass)
 	bool wantPass_ = false;
 	// шаг 11 (для шага 16): почему машина стоит (правило «стоять»), события журнала хода

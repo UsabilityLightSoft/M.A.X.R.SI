@@ -125,6 +125,25 @@ public:
 	virtual bool wantsCentered() const { return true; }
 
 	/**
+	 * What the window does with the background behind it.
+	 * A window with a black background hides all windows below it.
+	 */
+	eWindowBackgrounds getBackgroundType() const { return backgroundType; }
+
+	/**
+	 * Return true if the window shows the map of the game:
+	 * the mouse cursor gets the scale of the map (see eCursorScaleContext),
+	 * also over the windows above it (menus of the game, reports, settings).
+	 */
+	virtual bool showsGameMap() const { return false; }
+
+	/**
+	 * The background (black or the shadow over the windows below) is drawn again with the next draw,
+	 * e.g. because the screen buffer has been recreated in another size.
+	 */
+	void redrawBackground() { hasBeenDrawnOnce = false; }
+
+	/**
 	 * Triggered when @ref handleRemoved is called.
 	 */
 	cSignal<void()> terminated;

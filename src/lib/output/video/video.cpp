@@ -22,6 +22,7 @@
 #include "SDLutility/tosdl.h"
 #include "SDLutility/uniquesurface.h"
 #include "input/keyboard/keyboard.h"
+#include "input/mouse/cursor/systemcursor.h"
 #include "output/video/unifonts.h"
 #include "resources/pcx.h"
 #include "resources/uidata.h"
@@ -34,6 +35,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <vector>
 
 cVideo Video;
@@ -44,6 +46,42 @@ cVideo Video;
 /** Minimum video mode resolution we need */
 #define MINWIDTH 640
 #define MINHEIGHT 480
+
+namespace
+{
+	/**
+	 * An integer scale factor is used (sharp pixels, no filtering),
+	 * if the picture covers at least this part of the size it would have with the fitting scale factor.
+	 * Otherwise the picture is scaled smoothly to fit the window.
+	 */
+	constexpr double integerScaleCoverage = 0.9;
+
+	/** The automatic scale of the user interface is this factor times the scale of the display (DPI / 96). */
+	constexpr double autoUiScalePerDisplayScale = 2.4;
+	/** The automatic scale leaves a picture of at least this size (up to the tolerance less) ... */
+	constexpr int autoUiScaleMinimalWidth = 1280;
+	constexpr int autoUiScaleMinimalHeight = 720;
+	/** ... a maximized window loses some height to the title bar and the task bar (4K at 125%: 2071 instead of 2160). */
+	constexpr double autoUiScaleTolerance = 0.9;
+	/** The scales of the user interface are multiples of this step. */
+	constexpr double uiScaleStep = 0.5;
+	/** The mouse cursor in the menus is this part of the scale of the user interface (but at least 1, see computeCursorScale). */
+	constexpr double cursorScalePerUiScale = 2. / 3.;
+	/** The cursor is not made smaller or bigger than this (pixels of the window per pixel of the cursor image). */
+	constexpr double minimalCursorScale = 0.5;
+	constexpr double maximalCursorScale = 16.;
+	/** The screen buffer is recreated for a new window size not more often than this (milliseconds). */
+	constexpr Uint32 pictureSizeUpdateInterval = 150;
+	/** The default size of a window that is not maximized is a multiple of this size. */
+	constexpr int defaultWindowUnitWidth = 1280;
+	constexpr int defaultWindowUnitHeight = 720;
+
+	//--------------------------------------------------------------------------
+	bool isPictureAtLeast (const cPosition& pictureSize, double minimalWidth, double minimalHeight)
+	{
+		return pictureSize.x() >= minimalWidth && pictureSize.y() >= minimalHeight;
+	}
+} // namespace
 
 //------------------------------------------------------------------------------
 cVideo::cVideo() :
@@ -59,6 +97,7 @@ cVideo::cVideo() :
 cVideo::~cVideo()
 {
 	SDL_FreeSurface (cVideo::buffer);
+	SDL_DestroyTexture (scaledTexture);
 	SDL_DestroyTexture (sdlTexture);
 	SDL_DestroyRenderer (sdlRenderer);
 	SDL_DestroyWindow (sdlWindow);
@@ -68,10 +107,12 @@ cVideo::~cVideo()
 void cVideo::clearMemory()
 {
 	SDL_FreeSurface (cVideo::buffer);
+	SDL_DestroyTexture (scaledTexture);
 	SDL_DestroyTexture (sdlTexture);
 	SDL_DestroyRenderer (sdlRenderer);
 	SDL_DestroyWindow (sdlWindow);
 	cVideo::buffer = nullptr;
+	scaledTexture = nullptr;
 	sdlTexture = nullptr;
 	sdlRenderer = nullptr;
 	sdlWindow = nullptr;
@@ -81,12 +122,18 @@ void cVideo::clearMemory()
 void cVideo::init (std::shared_ptr<SDLComponent> sdlComponent, const std::string& title, const std::filesystem::path& iconPath)
 {
 	this->sdlComponent = std::move (sdlComponent);
+	// No SDL_WINDOW_OPENGL: the renderer chooses the graphics API
+	// (and recreates the window, if it needs an OpenGL window).
 	sdlWindow = SDL_CreateWindow (title.c_str(),
 	                              SDL_WINDOWPOS_CENTERED_DISPLAY (getDisplayIndex()),
 	                              SDL_WINDOWPOS_CENTERED_DISPLAY (getDisplayIndex()),
 	                              MINWIDTH,
 	                              MINHEIGHT,
-	                              SDL_WINDOW_BORDERLESS | SDL_WINDOW_OPENGL);
+	                              SDL_WINDOW_BORDERLESS);
+	if (sdlWindow == nullptr)
+	{
+		throw std::runtime_error (std::string ("Could not create window: ") + SDL_GetError());
+	}
 
 	{
 		auto icon = UniqueSurface (SDL_LoadBMP (utf8::to_string (iconPath).c_str()));
@@ -95,11 +142,22 @@ void cVideo::init (std::shared_ptr<SDLComponent> sdlComponent, const std::string
 	}
 
 	sdlRenderer = SDL_CreateRenderer (sdlWindow, -1, 0);
+	if (sdlRenderer == nullptr)
+	{
+		throw std::runtime_error (std::string ("Could not create renderer: ") + SDL_GetError());
+	}
 
 	// make the scaled rendering look smoother.
+	// (The screen textures choose their scaling themselves, see draw.)
 	SDL_SetHint (SDL_HINT_RENDER_SCALE_QUALITY, "linear");
 
-	detectResolutions();
+	SDL_RendererInfo rendererInfo;
+	if (SDL_GetRendererInfo (sdlRenderer, &rendererInfo) == 0)
+	{
+		Log.info (std::string ("cVideo: Renderer ") + rendererInfo.name + ", maximal texture size " + std::to_string (rendererInfo.max_texture_width) + "x" + std::to_string (rendererInfo.max_texture_height));
+		maximalTextureSize = cPosition (rendererInfo.max_texture_width, rendererInfo.max_texture_height);
+	}
+	sharpScalingAvailable = SDL_RenderTargetSupported (sdlRenderer);
 }
 
 //------------------------------------------------------------------------------
@@ -107,8 +165,16 @@ void cVideo::showSplashScreen (const std::filesystem::path& splashScreenPath)
 {
 	UniqueSurface splash (LoadPCX (splashScreenPath));
 
+	// enlarge the splash screen on big displays: to about half of the display size
+	int scale = 1;
+	SDL_Rect displayBounds;
+	if (SDL_GetDisplayBounds (std::max (0, SDL_GetWindowDisplayIndex (sdlWindow)), &displayBounds) == 0 && splash->w > 0 && splash->h > 0)
+	{
+		scale = std::max (1, std::min (displayBounds.w / splash->w, displayBounds.h / splash->h) / 2);
+	}
+
 	SDL_SetWindowBordered (sdlWindow, SDL_FALSE);
-	SDL_SetWindowSize (sdlWindow, splash->w, splash->h);
+	SDL_SetWindowSize (sdlWindow, splash->w * scale, splash->h * scale);
 	SDL_SetWindowPosition (sdlWindow, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
 	SDL_SetWindowFullscreen (sdlWindow, 0);
 
@@ -122,14 +188,145 @@ void cVideo::showSplashScreen (const std::filesystem::path& splashScreenPath)
 //------------------------------------------------------------------------------
 void cVideo::prepareGameScreen()
 {
+	gameScreenPrepared = true;
 	SDL_SetWindowBordered (sdlWindow, SDL_TRUE);
-	SDL_SetWindowSize (sdlWindow, getResolutionX(), getResolutionY());
-	SDL_SetWindowPosition (sdlWindow, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-	SDL_SetWindowFullscreen (sdlWindow, getWindowMode() ? 0 : SDL_WINDOW_FULLSCREEN);
+	SDL_SetWindowResizable (sdlWindow, SDL_TRUE);
+	SDL_SetWindowMinimumSize (sdlWindow, MINWIDTH, MINHEIGHT);
 
-	initializeBuffer (getResolutionX(), getResolutionY());
+	const auto maximalSize = getMaximalWindowSize();
+	auto size = windowedSize.value_or (getDefaultWindowSize());
+	size.x() = std::clamp (size.x(), MINWIDTH, std::max (MINWIDTH, maximalSize.x()));
+	size.y() = std::clamp (size.y(), MINHEIGHT, std::max (MINHEIGHT, maximalSize.y()));
+	windowedSize = size;
+
+	SDL_SetWindowSize (sdlWindow, size.x(), size.y());
+	SDL_SetWindowPosition (sdlWindow, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+	if (windowMaximized)
+	{
+		SDL_MaximizeWindow (sdlWindow);
+	}
+	applyWindowMode();
+	storeWindowGeometry (cSettings::getInstance().getVideoSettings());
+
+	// the game picture: window size / scale of the user interface
+	applyPictureSize (true);
+	pictureSizeOutdated = false;
+	lastPictureSizeUpdate = SDL_GetTicks();
 
 	draw();
+}
+
+//------------------------------------------------------------------------------
+void cVideo::setUiScale (int percent)
+{
+	uiScale = std::max (0, percent);
+	// a changed setting is applied with the next frame, without waiting
+	pictureSizeOutdated = true;
+	lastPictureSizeUpdate = SDL_GetTicks() - pictureSizeUpdateInterval;
+}
+
+//------------------------------------------------------------------------------
+double cVideo::getAutoUiScaleFactor() const
+{
+	return computeUiScale (0, getOutputSize(), getDisplayScale());
+}
+
+//------------------------------------------------------------------------------
+void cVideo::setCursorSize (int percent)
+{
+	cursorSize = std::max (0, percent);
+	updateCursorScale();
+}
+
+//------------------------------------------------------------------------------
+int cVideo::getAutoCursorSize() const
+{
+	return computeAutoCursorSize (uiScaleFactor, systemPointerScale);
+}
+
+//------------------------------------------------------------------------------
+void cVideo::setCursorScaleContext (eCursorScaleContext context)
+{
+	if (cursorScaleContext == context) return;
+	cursorScaleContext = context;
+	updateCursorScale();
+}
+
+//------------------------------------------------------------------------------
+void cVideo::updateCursorScale()
+{
+	// the pointer size may have been changed in the system meanwhile
+	systemPointerScale = readSystemPointerScale();
+	const double newCursorScale = computeCursorScale (uiScaleFactor, systemPointerScale, cursorScaleContext, cursorSize);
+	if (std::abs (newCursorScale - cursorScale) > 1e-9)
+	{
+		cursorScale = newCursorScale;
+		cursorScaleChanged();
+	}
+}
+
+//------------------------------------------------------------------------------
+cPosition cVideo::getOutputSize() const
+{
+	int width = 0;
+	int height = 0;
+	if (sdlRenderer) SDL_GetRendererOutputSize (sdlRenderer, &width, &height);
+	return cPosition (width, height);
+}
+
+//------------------------------------------------------------------------------
+double cVideo::getDisplayScale() const
+{
+	const int index = sdlWindow ? SDL_GetWindowDisplayIndex (sdlWindow) : getDisplayIndex();
+	float dpi = 0.f;
+	if (SDL_GetDisplayDPI (std::max (0, index), nullptr, &dpi, nullptr) != 0 || !(dpi > 0.f))
+	{
+		return 1.; // unknown, e.g. no real display
+	}
+	return dpi / 96.;
+}
+
+//------------------------------------------------------------------------------
+void cVideo::updatePictureSize()
+{
+	if (!pictureSizeOutdated || !gameScreenPrepared) return;
+
+	const Uint32 now = SDL_GetTicks();
+	if (now - lastPictureSizeUpdate < pictureSizeUpdateInterval) return;
+
+	pictureSizeOutdated = false;
+	lastPictureSizeUpdate = now;
+	applyPictureSize (false);
+}
+
+//------------------------------------------------------------------------------
+bool cVideo::applyPictureSize (bool force)
+{
+	const auto outputSize = getOutputSize();
+	if (!force && (outputSize.x() <= 0 || outputSize.y() <= 0))
+	{
+		// e.g. minimized: keep the picture until the window is restored
+		return false;
+	}
+	const auto displayScale = getDisplayScale();
+	uiScaleFactor = computeUiScale (uiScale, outputSize, displayScale);
+	const auto size = computePictureSize (outputSize, uiScaleFactor);
+
+	// the cursor follows the scale of the user interface at once (also when the picture keeps its size)
+	updateCursorScale();
+
+	if (!force && buffer != nullptr && buffer->w == size.x() && buffer->h == size.y())
+	{
+		return false;
+	}
+	Log.info ("cVideo: Picture " + std::to_string (size.x()) + "x" + std::to_string (size.y()) + " for window " + std::to_string (outputSize.x()) + "x" + std::to_string (outputSize.y()) + ", user interface scale " + std::to_string (uiScaleFactor) + " (setting " + std::to_string (uiScale) + "%, display " + std::to_string (displayScale) + ")");
+
+	resolutionX = size.x();
+	resolutionY = size.y();
+	initializeBuffer (size.x(), size.y());
+
+	resolutionChanged();
+	return true;
 }
 
 //------------------------------------------------------------------------------
@@ -147,49 +344,10 @@ void cVideo::initializeBuffer (int width, int height)
 	                                SDL_TEXTUREACCESS_STREAMING,
 	                                width,
 	                                height);
+	// the buffer is opaque: its alpha byte must not be used
+	SDL_SetTextureBlendMode (sdlTexture, SDL_BLENDMODE_NONE);
 
-	SDL_RenderSetLogicalSize (sdlRenderer, width, height);
-}
-
-//------------------------------------------------------------------------------
-void cVideo::setResolution (int iWidth, int iHeight, bool bApply)
-{
-	resolutionX = iWidth;
-	resolutionY = iHeight;
-
-	// validate only if we should apply
-	// because the resolution may be set during reading of settings
-	// and at this point does no SDL context exist yet
-	if (bApply)
-	{
-		// BEGIN SANITY CHECK SCREEN RES
-
-		if (validateResolution (iWidth, iHeight) >= 0)
-		{
-			Log.info ("cVideo:  => Found requested video mode " + std::to_string (iWidth) + "x" + std::to_string (iHeight) + " :)");
-		}
-		else
-		{
-			Log.warn ("cVideo:  => Couldn't find requested video mode " + std::to_string (iWidth) + "x" + std::to_string (iHeight) + " :(");
-			if (haveMinMode())
-			{
-				Log.warn ("cVideo:  => Edit your config and try default video mode " + std::to_string (getMinW()) + "x" + std::to_string (getMinH()) + " if I crash now!");
-			}
-			else
-			{
-				Log.warn ("cVideo:  => Couldn't even find my minimal video mode " + std::to_string (getMinW()) + "x" + std::to_string (getMinH()) + " - panic! ;(");
-			}
-		}
-		// END SANITY CHECK SCREEN RES
-
-		applyResolution();
-
-		resolutionChanged();
-	}
-	else
-	{
-		Log.info ("cVideo: Resolution set to " + std::to_string (iWidth) + "x" + std::to_string (iHeight) + " but was not applied yet");
-	}
+	viewArea.reset();
 }
 
 //------------------------------------------------------------------------------
@@ -238,32 +396,39 @@ void cVideo::draw()
 	// TODO: add sanity check to redraw function
 
 	SDL_UpdateTexture (sdlTexture, nullptr, buffer->pixels, buffer->pitch);
+
+	updatePresentation();
+
+	SDL_Texture* texture = sdlTexture;
+	SDL_Rect source = presentation.source;
+	if (presentation.prescale > 1)
+	{
+		// sharp bilinear: enlarge by an integer factor without filtering, then scale smoothly to the window
+		const int width = source.w * presentation.prescale;
+		const int height = source.h * presentation.prescale;
+		if (auto* scaled = getScaledTexture (width, height))
+		{
+			SDL_SetTextureScaleMode (sdlTexture, SDL_ScaleModeNearest);
+			SDL_SetRenderTarget (sdlRenderer, scaled);
+			SDL_RenderCopy (sdlRenderer, sdlTexture, &source, nullptr);
+			SDL_SetRenderTarget (sdlRenderer, nullptr);
+			texture = scaled;
+			source = {0, 0, width, height};
+		}
+	}
+	SDL_SetTextureScaleMode (texture, presentation.smooth ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+	SDL_SetRenderDrawColor (sdlRenderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
 	SDL_RenderClear (sdlRenderer);
-	SDL_RenderCopy (sdlRenderer, sdlTexture, nullptr, nullptr);
+	SDL_RenderCopy (sdlRenderer, texture, &source, &presentation.destination);
 	SDL_RenderPresent (sdlRenderer);
-}
-
-//------------------------------------------------------------------------------
-void cVideo::applyResolution()
-{
-	const auto windowFlags = SDL_GetWindowFlags (sdlWindow);
-	const auto isFullscreen = (windowFlags & SDL_WINDOW_FULLSCREEN) != 0;
-
-	if (isFullscreen) SDL_SetWindowFullscreen (sdlWindow, 0);
-
-	SDL_SetWindowSize (sdlWindow, getResolutionX(), getResolutionY());
-
-	applyWindowMode();
-
-	initializeBuffer (getResolutionX(), getResolutionY());
-
-	draw();
 }
 
 //------------------------------------------------------------------------------
 void cVideo::applyWindowMode()
 {
-	const auto result = SDL_SetWindowFullscreen (sdlWindow, getWindowMode() ? 0 : SDL_WINDOW_FULLSCREEN);
+	// Fullscreen covers the desktop without changing the video mode of the display:
+	// switching the video mode messes up other windows and makes switching to other applications fragile.
+	const auto result = SDL_SetWindowFullscreen (sdlWindow, getWindowMode() ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
 	if (result == -1)
 	{
 		throw std::runtime_error (std::string ("Could not apply window mode: ") + SDL_GetError() + "'");
@@ -271,77 +436,182 @@ void cVideo::applyWindowMode()
 }
 
 //------------------------------------------------------------------------------
+void cVideo::setWindowGeometry (std::optional<cPosition> size, bool maximized)
+{
+	windowedSize = size;
+	windowMaximized = maximized;
+}
+
+//------------------------------------------------------------------------------
+void cVideo::storeWindowGeometry (sVideoSettings& videoSettings) const
+{
+	videoSettings.windowSize = windowedSize;
+	videoSettings.windowMaximized = windowMaximized;
+}
+
+//------------------------------------------------------------------------------
+void cVideo::handleWindowEvent (const SDL_WindowEvent& event)
+{
+	if (sdlWindow == nullptr || event.windowID != SDL_GetWindowID (sdlWindow)) return;
+
+	switch (event.event)
+	{
+		case SDL_WINDOWEVENT_SIZE_CHANGED:
+		case SDL_WINDOWEVENT_MAXIMIZED:
+		case SDL_WINDOWEVENT_RESTORED:
+		{
+			// the splash screen is not the game window
+			if (!gameScreenPrepared) break;
+			// the game picture follows the window size (also in fullscreen)
+			pictureSizeOutdated = true;
+			const auto flags = SDL_GetWindowFlags (sdlWindow);
+			if ((flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MINIMIZED)) != 0) break;
+
+			windowMaximized = (flags & SDL_WINDOW_MAXIMIZED) != 0;
+			if (!windowMaximized)
+			{
+				int width = 0;
+				int height = 0;
+				SDL_GetWindowSize (sdlWindow, &width, &height);
+				if (width > 0 && height > 0) windowedSize = cPosition (width, height);
+			}
+			// remembered in the settings, saved with them
+			storeWindowGeometry (cSettings::getInstance().getVideoSettings());
+			break;
+		}
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+		case SDL_WINDOWEVENT_DISPLAY_CHANGED:
+			// another display may have another scale
+			pictureSizeOutdated = true;
+			break;
+#endif
+		case SDL_WINDOWEVENT_FOCUS_GAINED:
+			// the pointer size of the system may have been changed in its settings
+			updateCursorScale();
+			break;
+		default:
+			break;
+	}
+}
+
+//------------------------------------------------------------------------------
+cPosition cVideo::getMaximalWindowSize() const
+{
+	const int index = sdlWindow ? SDL_GetWindowDisplayIndex (sdlWindow) : getDisplayIndex();
+	SDL_Rect usableBounds;
+	if (SDL_GetDisplayUsableBounds (std::max (0, index), &usableBounds) != 0)
+	{
+		return cPosition (getResolutionX(), getResolutionY());
+	}
+	int top = 0;
+	int left = 0;
+	int bottom = 0;
+	int right = 0;
+	if (sdlWindow == nullptr || SDL_GetWindowBordersSize (sdlWindow, &top, &left, &bottom, &right) != 0)
+	{
+		top = left = bottom = right = 0;
+	}
+	return cPosition (usableBounds.w - left - right, usableBounds.h - top - bottom);
+}
+
+//------------------------------------------------------------------------------
+cPosition cVideo::getDefaultWindowSize() const
+{
+	// the biggest integer multiple of 1280x720, that leaves some space on the display
+	const auto maximalSize = getMaximalWindowSize();
+	const cPosition limit (maximalSize.x() * 9 / 10, maximalSize.y() * 9 / 10);
+	const int width = defaultWindowUnitWidth;
+	const int height = defaultWindowUnitHeight;
+	const int factor = std::min (limit.x() / width, limit.y() / height);
+	if (factor >= 1)
+	{
+		return cPosition (width * factor, height * factor);
+	}
+	const double scale = std::min (static_cast<double> (limit.x()) / width, static_cast<double> (limit.y()) / height);
+	return cPosition (std::max (MINWIDTH, static_cast<int> (width * scale)), std::max (MINHEIGHT, static_cast<int> (height * scale)));
+}
+
+//------------------------------------------------------------------------------
+void cVideo::setViewArea (const cBox<cPosition>& area)
+{
+	if (buffer == nullptr) return;
+
+	const SDL_Rect bufferRect{0, 0, buffer->w, buffer->h};
+	const SDL_Rect rect = computeViewArea (toSdlRect (area), cPosition (buffer->w, buffer->h), cPosition (MINWIDTH, MINHEIGHT));
+
+	if (rect.w <= 0 || rect.h <= 0 || SDL_RectEquals (&rect, &bufferRect))
+		viewArea.reset();
+	else
+		viewArea = rect;
+}
+
+//------------------------------------------------------------------------------
+cPosition cVideo::windowToBuffer (const cPosition& position) const
+{
+	return windowToPicturePosition (position, presentation.source, presentation.destination, presentation.windowSize, presentation.outputSize);
+}
+
+//------------------------------------------------------------------------------
+void cVideo::updatePresentation()
+{
+	if (buffer == nullptr || sdlRenderer == nullptr || sdlWindow == nullptr) return;
+
+	sPresentation next;
+	next.source = viewArea.value_or (SDL_Rect{0, 0, buffer->w, buffer->h});
+
+	int outputWidth = 0;
+	int outputHeight = 0;
+	SDL_GetRendererOutputSize (sdlRenderer, &outputWidth, &outputHeight);
+	int windowWidth = 0;
+	int windowHeight = 0;
+	SDL_GetWindowSize (sdlWindow, &windowWidth, &windowHeight);
+	if (outputWidth <= 0 || outputHeight <= 0 || windowWidth <= 0 || windowHeight <= 0 || next.source.w <= 0 || next.source.h <= 0)
+	{
+		// e.g. minimized: keep the last presentation
+		return;
+	}
+	next.outputSize = cPosition (outputWidth, outputHeight);
+	next.windowSize = cPosition (windowWidth, windowHeight);
+
+	const auto scaling = computeViewScaling (cPosition (next.source.w, next.source.h), next.outputSize, sharpScalingAvailable, maximalTextureSize);
+	next.destination = scaling.destination;
+	next.prescale = scaling.prescale;
+	next.smooth = scaling.smooth;
+
+	if (!SDL_RectEquals (&next.source, &presentation.source) || !SDL_RectEquals (&next.destination, &presentation.destination) || next.windowSize != presentation.windowSize || next.outputSize != presentation.outputSize)
+	{
+		++presentationVersion;
+	}
+	presentation = next;
+}
+
+//------------------------------------------------------------------------------
+SDL_Texture* cVideo::getScaledTexture (int width, int height)
+{
+	if (scaledTexture)
+	{
+		int textureWidth = 0;
+		int textureHeight = 0;
+		SDL_QueryTexture (scaledTexture, nullptr, nullptr, &textureWidth, &textureHeight);
+		if (textureWidth == width && textureHeight == height) return scaledTexture;
+		SDL_DestroyTexture (scaledTexture);
+		scaledTexture = nullptr;
+	}
+	scaledTexture = SDL_CreateTexture (sdlRenderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, width, height);
+	if (scaledTexture == nullptr)
+	{
+		Log.warn (std::string ("cVideo: Could not create texture for scaling, using simple smooth scaling: ") + SDL_GetError());
+		sharpScalingAvailable = false;
+		return nullptr;
+	}
+	SDL_SetTextureBlendMode (scaledTexture, SDL_BLENDMODE_NONE);
+	return scaledTexture;
+}
+
+//------------------------------------------------------------------------------
 void cVideo::clearBuffer()
 {
 	SDL_FillRect (buffer, nullptr, toSdlColor (cRgbColor::black(), *buffer));
-}
-
-//------------------------------------------------------------------------------
-void cVideo::detectResolutions()
-{
-	const auto numVideoDislplays = SDL_GetNumVideoDisplays();
-	detectedResolutions.resize (numVideoDislplays);
-	for (int displayIndex = 0; displayIndex < numVideoDislplays; ++displayIndex)
-	{
-		const auto numDisplayModes = SDL_GetNumDisplayModes (displayIndex);
-
-		auto& resolutions = detectedResolutions[displayIndex];
-
-		resolutions.clear();
-
-		for (int displayModeIndex = 0; displayModeIndex < numDisplayModes; ++displayModeIndex)
-		{
-			SDL_DisplayMode mode;
-			SDL_GetDisplayMode (displayIndex, displayModeIndex, &mode);
-
-			// skip modes *below* the minimum mode
-			if (mode.w < MINWIDTH || mode.h < MINHEIGHT) continue;
-
-			resolutions.push_back (std::make_pair (mode.w, mode.h));
-		}
-		std::sort (resolutions.begin(), resolutions.end()); // lexicographic order
-		resolutions.erase (std::unique (resolutions.begin(), resolutions.end()), resolutions.end()); // make sure there are no double entries
-
-		for (size_t i = 0; i < resolutions.size(); ++i)
-		{
-			const auto& [w, h] = resolutions[i];
-			Log.info ("cVideo: Display" + std::to_string (displayIndex) + " is offering detected video mode " + std::to_string (i) + " (" + std::to_string (w) + "x" + std::to_string (h) + ")");
-		}
-	}
-}
-
-//------------------------------------------------------------------------------
-const std::vector<std::pair<int, int>>& cVideo::getDetectedResolutions() const
-{
-	const int displayIndex = sdlWindow ? SDL_GetWindowDisplayIndex (sdlWindow) : 0;
-
-	return detectedResolutions[displayIndex];
-}
-
-//------------------------------------------------------------------------------
-bool cVideo::haveMinMode() const
-{
-	if (std::ranges::any_of (getDetectedResolutions(), [] (const auto& resolution) { return resolution == std::pair<int, int>{MINWIDTH, MINHEIGHT}; }))
-	{
-		return true;
-	}
-	Log.error ("cVideo: Minimal needed video mode (" + std::to_string (MINWIDTH) + "x" + std::to_string (MINHEIGHT) + ") not detected. Probably bad!");
-	return false;
-}
-
-//------------------------------------------------------------------------------
-int cVideo::validateResolution (int width, int height) const
-{
-	const auto& resolutions = getDetectedResolutions();
-	for (size_t i = 0; i < resolutions.size(); i++)
-	{
-		if (resolutions[i] == std::pair<int, int>{width, height})
-		{
-			return static_cast<int> (i);
-		}
-	}
-	Log.warn ("cVideo: Configured video mode (" + std::to_string (width) + "x" + std::to_string (height) + ") not detected. Resume on own risk!");
-	return -1;
 }
 
 //------------------------------------------------------------------------------
@@ -370,6 +640,10 @@ void cVideo::keyPressed (cKeyboard& keyboard, SDL_Keycode key)
 		if (key == SDLK_RETURN)
 		{
 			setWindowMode (!getWindowMode(), true);
+
+			auto& settings = cSettings::getInstance();
+			settings.getVideoSettings().windowMode = getWindowMode();
+			settings.saveInFile();
 		}
 		else if (key == SDLK_c)
 		{
@@ -801,11 +1075,167 @@ void drawCircle (int iX, int iY, int iRadius, int iColor, SDL_Surface& surface)
 }
 
 //------------------------------------------------------------------------------
+sViewScaling computeViewScaling (const cPosition& pictureSize, const cPosition& outputSize, bool prescaleAvailable, const cPosition& maximalTextureSize)
+{
+	sViewScaling result;
+	if (pictureSize.x() <= 0 || pictureSize.y() <= 0 || outputSize.x() <= 0 || outputSize.y() <= 0) return result;
+
+	const double fittingScale = std::min (static_cast<double> (outputSize.x()) / pictureSize.x(), static_cast<double> (outputSize.y()) / pictureSize.y());
+	const double integerScale = std::floor (fittingScale);
+	if (integerScale >= 1 && integerScale >= fittingScale * integerScaleCoverage)
+	{
+		result.scale = integerScale;
+		result.smooth = false;
+	}
+	else
+	{
+		result.scale = fittingScale;
+		result.smooth = true;
+		if (fittingScale > 1 && prescaleAvailable)
+		{
+			int prescale = static_cast<int> (std::ceil (fittingScale));
+			if (maximalTextureSize.x() > 0 && maximalTextureSize.y() > 0)
+			{
+				prescale = std::min ({prescale, maximalTextureSize.x() / pictureSize.x(), maximalTextureSize.y() / pictureSize.y()});
+			}
+			result.prescale = prescale >= 2 ? prescale : 1;
+		}
+	}
+	const int width = std::clamp (static_cast<int> (std::lround (pictureSize.x() * result.scale)), 1, outputSize.x());
+	const int height = std::clamp (static_cast<int> (std::lround (pictureSize.y() * result.scale)), 1, outputSize.y());
+	result.destination = {(outputSize.x() - width) / 2, (outputSize.y() - height) / 2, width, height};
+	return result;
+}
+
+//------------------------------------------------------------------------------
+SDL_Rect computeViewArea (const SDL_Rect& windowsArea, const cPosition& bufferSize, const cPosition& minimalSize)
+{
+	const SDL_Rect bufferRect{0, 0, bufferSize.x(), bufferSize.y()};
+	SDL_Rect rect;
+	if (!SDL_IntersectRect (&windowsArea, &bufferRect, &rect))
+	{
+		return SDL_Rect{0, 0, 0, 0};
+	}
+	// small windows (dialogs) are shown in the size of a menu
+	const int width = std::min (std::max (rect.w, minimalSize.x()), bufferRect.w);
+	const int height = std::min (std::max (rect.h, minimalSize.y()), bufferRect.h);
+	rect.x = std::clamp (rect.x + rect.w / 2 - width / 2, 0, bufferRect.w - width);
+	rect.y = std::clamp (rect.y + rect.h / 2 - height / 2, 0, bufferRect.h - height);
+	rect.w = width;
+	rect.h = height;
+	return rect;
+}
+
+//------------------------------------------------------------------------------
+cPosition windowToPicturePosition (const cPosition& windowPosition, const SDL_Rect& source, const SDL_Rect& destination, const cPosition& windowSize, const cPosition& outputSize)
+{
+	if (destination.w <= 0 || destination.h <= 0 || windowSize.x() <= 0 || windowSize.y() <= 0)
+	{
+		return windowPosition;
+	}
+	// mouse positions are in window units, the picture is drawn in pixels: use the center of the pixel
+	const double pixelX = (windowPosition.x() + 0.5) * outputSize.x() / windowSize.x();
+	const double pixelY = (windowPosition.y() + 0.5) * outputSize.y() / windowSize.y();
+	const double x = source.x + (pixelX - destination.x) * source.w / destination.w;
+	const double y = source.y + (pixelY - destination.y) * source.h / destination.h;
+	return cPosition (static_cast<int> (std::floor (x)), static_cast<int> (std::floor (y)));
+}
+
+//------------------------------------------------------------------------------
+double computeUiScale (int uiScalePercent, const cPosition& outputSize, double displayScale)
+{
+	const auto pictureSize = [&] (double scale) {
+		return cPosition (static_cast<int> (std::floor (outputSize.x() / scale)), static_cast<int> (std::floor (outputSize.y() / scale)));
+	};
+	double scale = 1.;
+	if (uiScalePercent <= 0)
+	{
+		if (!(displayScale > 0.)) displayScale = 1.; // unknown (or not a number)
+		scale = std::max (1., std::round (displayScale * autoUiScalePerDisplayScale / uiScaleStep) * uiScaleStep);
+		while (scale > 1. && !isPictureAtLeast (pictureSize (scale), autoUiScaleMinimalWidth * autoUiScaleTolerance, autoUiScaleMinimalHeight * autoUiScaleTolerance))
+		{
+			scale -= uiScaleStep;
+		}
+	}
+	else
+	{
+		scale = uiScalePercent / 100.;
+	}
+	while (scale > 1. && !isPictureAtLeast (pictureSize (scale), MINWIDTH, MINHEIGHT))
+	{
+		scale -= uiScaleStep;
+	}
+	return std::max (1., scale);
+}
+
+//------------------------------------------------------------------------------
+cPosition computePictureSize (const cPosition& outputSize, double uiScale)
+{
+	const double scale = std::max (1., uiScale);
+	const int width = static_cast<int> (std::floor (outputSize.x() / scale));
+	const int height = static_cast<int> (std::floor (outputSize.y() / scale));
+	return cPosition (std::max (MINWIDTH, width), std::max (MINHEIGHT, height));
+}
+
+//------------------------------------------------------------------------------
+bool isUiScaleFitting (int uiScalePercent, const cPosition& outputSize)
+{
+	if (uiScalePercent <= 0) return true; // the automatic scale always fits
+	const double scale = uiScalePercent / 100.;
+	return computeUiScale (uiScalePercent, outputSize, 1.) == scale || scale <= 1.;
+}
+
+namespace
+{
+	//--------------------------------------------------------------------------
+	/** The automatic scale of the cursor in the menus: like the mouse pointer of the system. */
+	double computeAutoMenuCursorScale (double uiScale, double systemPointerScale)
+	{
+		return std::max (1., uiScale * cursorScalePerUiScale) * systemPointerScale;
+	}
+
+	//--------------------------------------------------------------------------
+	/** The automatic scale of the cursor on the map: like in the menus, but not bigger than the pictures of the game. */
+	double computeAutoMapCursorScale (double uiScale, double systemPointerScale)
+	{
+		return std::min (computeAutoMenuCursorScale (uiScale, systemPointerScale), uiScale);
+	}
+} // namespace
+
+//------------------------------------------------------------------------------
+double computeCursorScale (double uiScale, double systemPointerScale, eCursorScaleContext context, int cursorSizePercent)
+{
+	if (!(uiScale > 0.)) uiScale = 1.; // unknown (or not a number)
+	if (!(systemPointerScale >= 1.)) systemPointerScale = 1.;
+
+	const double menuScale = computeAutoMenuCursorScale (uiScale, systemPointerScale);
+	const double mapScale = computeAutoMapCursorScale (uiScale, systemPointerScale);
+	double scale = context == eCursorScaleContext::Map ? mapScale : menuScale;
+	if (cursorSizePercent > 0)
+	{
+		const double chosenMapScale = uiScale * cursorSizePercent / 100.;
+		scale = context == eCursorScaleContext::Map ? chosenMapScale : chosenMapScale * menuScale / mapScale;
+	}
+	return std::clamp (scale, minimalCursorScale, maximalCursorScale);
+}
+
+//------------------------------------------------------------------------------
+int computeAutoCursorSize (double uiScale, double systemPointerScale)
+{
+	if (!(uiScale > 0.)) uiScale = 1.;
+	if (!(systemPointerScale >= 1.)) systemPointerScale = 1.;
+	return static_cast<int> (std::lround (computeAutoMapCursorScale (uiScale, systemPointerScale) / uiScale * 100.));
+}
+
+//------------------------------------------------------------------------------
 void applySettings (cVideo& video, const sVideoSettings& videoSettings)
 {
-	auto resolution = videoSettings.resolution.value_or (cPosition (video.getMinW(), video.getMinH()));
-	video.setResolution (resolution.x(), resolution.y(), false);
+	// the size of the game picture follows the window and the scale of the user interface
+	// (videoSettings.resolution is not used any more)
+	video.setUiScale (videoSettings.uiScale);
+	video.setCursorSize (videoSettings.cursorSize);
 	video.setColDepth (videoSettings.colourDepth);
 	video.setWindowMode (videoSettings.windowMode);
 	video.setDisplayIndex (videoSettings.displayIndex);
+	video.setWindowGeometry (videoSettings.windowSize, videoSettings.windowMaximized);
 }

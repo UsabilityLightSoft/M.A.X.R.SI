@@ -19,9 +19,13 @@
 
 #include "input/mouse/mouse.h"
 
+#include "SDLutility/uniquesurface.h"
 #include "events/eventmanager.h"
 #include "events/mouseevents.h"
+#include "input/mouse/cursor/cursorscaling.h"
 #include "input/mouse/cursor/mousecursorsimple.h"
+#include "input/mouse/cursor/systemcursor.h"
+#include "output/video/video.h"
 
 #include <utility>
 
@@ -38,6 +42,7 @@ cMouse::cMouse()
 	signalConnectionManager.connect (cEventManager::getInstance().mouseMotionEvent, [this] (const cEventMouseMotion& event) { handleMouseMotionEvent (event); });
 	signalConnectionManager.connect (cEventManager::getInstance().mouseButtonEvent, [this] (const cEventMouseButton& event) { handleMouseButtonEvent (event); });
 	signalConnectionManager.connect (cEventManager::getInstance().mouseWheelEvent, [this] (const cEventMouseWheel& event) { handleMouseWheelEvent (event); });
+	signalConnectionManager.connect (Video.cursorScaleChanged, [this]() { updateSdlCursor(); });
 }
 
 //------------------------------------------------------------------------------
@@ -105,18 +110,41 @@ bool cMouse::setCursor (std::unique_ptr<cMouseCursor> cursor_, bool force)
 
 	if (!force && cursor != nullptr && *cursor_ == *cursor) return false;
 
-	auto cursorSurface = cursor_->getSurface();
-	auto hotPoint = cursor_->getHotPoint();
+	cursor = std::move (cursor_);
 
-	auto newSdlCursor = SdlCursorPtrType (SDL_CreateColorCursor (cursorSurface, hotPoint.x(), hotPoint.y()));
+	updateSdlCursor();
+
+	return true;
+}
+
+//------------------------------------------------------------------------------
+void cMouse::updateSdlCursor()
+{
+	if (cursor == nullptr) return;
+
+	auto cursorSurface = cursor->getSurface();
+	if (cursorSurface == nullptr) return;
+	auto hotPoint = cursor->getHotPoint();
+
+	// the image and its hot point in the size on the screen (cVideo::getCursorScale);
+	// a system, that enlarges the cursor by its pointer size itself, gets it smaller by that
+	double scale = Video.getCursorScale();
+	if (doesSystemEnlargeColorCursors()) scale /= Video.getSystemPointerScale();
+	const auto scaledSurface = makeScaledCursorSurface (*cursorSurface, scale);
+	SdlCursorPtrType newSdlCursor;
+	if (scaledSurface)
+	{
+		const auto scaledHotPoint = computeScaledCursorHotPoint (hotPoint, cPosition (cursorSurface->w, cursorSurface->h), cPosition (scaledSurface->w, scaledSurface->h));
+		newSdlCursor = SdlCursorPtrType (createSystemColorCursor (*scaledSurface, scaledHotPoint.x(), scaledHotPoint.y()));
+	}
+	if (newSdlCursor == nullptr)
+	{
+		newSdlCursor = SdlCursorPtrType (createSystemColorCursor (*cursorSurface, hotPoint.x(), hotPoint.y()));
+	}
 
 	SDL_SetCursor (newSdlCursor.get());
 
 	sdlCursor = std::move (newSdlCursor);
-
-	cursor = std::move (cursor_);
-
-	return true;
 }
 
 //------------------------------------------------------------------------------

@@ -30,6 +30,9 @@
 #include "ui/widgets/widget.h"
 #include "ui/widgets/window.h"
 
+#include <algorithm>
+#include <utility>
+
 //------------------------------------------------------------------------------
 cApplication::cApplication() :
 	frameCounter (std::make_shared<cFrameCounter>())
@@ -43,6 +46,7 @@ cApplication::cApplication() :
 				center (*modalWindow);
 			}
 		}
+		screenBufferRecreated = true;
 	});
 
 	addShortcut (cKeySequence (cKeyCombination (toEnumFlag (eKeyModifierType::Ctrl) | eKeyModifierType::Alt, SDLK_f)), [this]() {
@@ -86,6 +90,9 @@ void cApplication::execute()
 	{
 		eventManager.run();
 
+		// the game picture follows the window size and the scale of the user interface
+		Video.updatePictureSize();
+
 		std::erase_if (runnables, [] (const auto& runnable) { return runnable->wantsToTerminate(); });
 		for (const auto& runnable : runnables)
 		{
@@ -99,6 +106,9 @@ void cApplication::execute()
 			if (activeWindow != lastActiveWindow)
 			{
 				if (lastActiveWindow != nullptr) lastActiveWindow->handleDeactivated (*this, false);
+				// the cursor in the scale of the map, while the game (or the landing) is on the window stack
+				const bool gameMap = std::ranges::any_of (modalWindows, [] (const auto& window) { return window != nullptr && window->showsGameMap(); });
+				Video.setCursorScaleContext (gameMap ? eCursorScaleContext::Map : eCursorScaleContext::Menu);
 				activeWindow->handleActivated (*this, !lastClosed);
 				lastClosed = false;
 			}
@@ -121,11 +131,17 @@ void cApplication::execute()
 				//                - use non-busy waiting if there is nothing to be done
 				if (!cSettings::getInstance().shouldUseFastMode()) SDL_Delay (1);
 
+				if (std::exchange (screenBufferRecreated, false))
+				{
+					redrawWindowsBelow (*activeWindow);
+				}
 				activeWindow->draw (*cVideo::buffer, activeWindow->getArea());
 				lastActiveWindow = activeWindow;
 
 				if (shouldDrawFramesPerSecond) drawFramesPerSecond (frameCounter->getFramesPerSecond());
 
+				// menus smaller than the screen fill the window
+				Video.setViewArea (getVisibleWindowsArea());
 				Video.draw();
 				frameCounter->frameDrawn();
 			}
@@ -151,6 +167,47 @@ void cApplication::center (cWindow& window)
 	position.x() = (Video.getResolutionX() / 2 - window.getSize().x() / 2);
 	position.y() = (Video.getResolutionY() / 2 - window.getSize().y() / 2);
 	window.moveTo (position);
+}
+
+//------------------------------------------------------------------------------
+cBox<cPosition> cApplication::getVisibleWindowsArea() const
+{
+	cBox<cPosition> area;
+	bool empty = true;
+	for (auto it = modalWindows.rbegin(); it != modalWindows.rend(); ++it)
+	{
+		const auto& window = *it;
+		if (window == nullptr) continue;
+
+		if (empty)
+			area = window->getArea();
+		else
+			area.add (window->getArea());
+		empty = false;
+
+		if (window->getBackgroundType() == eWindowBackgrounds::Black) break;
+	}
+	return area;
+}
+
+//------------------------------------------------------------------------------
+void cApplication::redrawWindowsBelow (const cWindow& activeWindow)
+{
+	// the lowest visible window is the last one with a black background
+	auto first = modalWindows.begin();
+	for (auto it = modalWindows.begin(); it != modalWindows.end(); ++it)
+	{
+		if (*it != nullptr && (*it)->getBackgroundType() == eWindowBackgrounds::Black) first = it;
+	}
+	for (auto it = first; it != modalWindows.end(); ++it)
+	{
+		auto& window = *it;
+		if (window == nullptr) continue;
+
+		window->redrawBackground();
+		if (window.get() == &activeWindow) break;
+		window->draw (*cVideo::buffer, window->getArea());
+	}
 }
 
 //------------------------------------------------------------------------------

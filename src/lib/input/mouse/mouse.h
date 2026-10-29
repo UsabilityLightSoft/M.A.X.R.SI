@@ -135,6 +135,9 @@ private:
 	void handleMouseButtonEvent (const cEventMouseButton&);
 	void handleMouseWheelEvent (const cEventMouseWheel&);
 
+	/** Creates the system cursor from the current cursor, in its size on the screen (cVideo::getCursorScale). */
+	void updateSdlCursor();
+
 private:
 	struct SdlCursorDeleter
 	{

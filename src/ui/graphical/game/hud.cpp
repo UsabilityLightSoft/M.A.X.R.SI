@@ -20,6 +20,7 @@
 #include "hud.h"
 
 #include "SDLutility/tosdl.h"
+#include "game/data/gui/mapzoom.h"
 #include "game/data/units/unit.h"
 #include "game/logic/turncounter.h"
 #include "game/logic/turntimeclock.h"
@@ -37,6 +38,16 @@
 #include "ui/widgets/label.h"
 #include "ui/widgets/shortcut.h"
 #include "utility/language.h"
+
+#include <algorithm>
+
+namespace
+{
+	// values of the zoom slider: its logarithmic scale is fine enough for every tile size
+	constexpr int zoomSliderMaxValue = 1000;
+	// the zoom buttons go through the whole range in six presses
+	constexpr double zoomButtonStep = 1. / 6;
+} // namespace
 
 //------------------------------------------------------------------------------
 cHud::cHud (std::shared_ptr<cAnimationTimer> animationTimer)
@@ -124,8 +135,8 @@ cHud::cHud (std::shared_ptr<cAnimationTimer> animationTimer)
 	turnLabel = emplaceChild<cLabel> (cBox<cPosition> (cPosition (471, 7), cPosition (471 + 55, 7 + 10)), "", eUnicodeFontType::LatinNormal, eAlignmentType::CenterHorizontal);
 	turnTimeClockWidget = emplaceChild<cTurnTimeClockWidget> (cBox<cPosition> (cPosition (537, 7), cPosition (537 + 55, 7 + 10)));
 
-	zoomSlider = emplaceChild<cSlider> (cBox<cPosition> (cPosition (22, 275), cPosition (22 + 126, 275 + 15)), 0, 100, eOrientationType::Horizontal, eSliderHandleType::HudZoom, eSliderType::Invisible);
-	signalConnectionManager.connect (zoomSlider->valueChanged, [this]() { zoomChanged(); });
+	zoomSlider = emplaceChild<cSlider> (cBox<cPosition> (cPosition (22, 275), cPosition (22 + 126, 275 + 15)), 0, zoomSliderMaxValue, eOrientationType::Horizontal, eSliderHandleType::HudZoom, eSliderType::Invisible);
+	signalConnectionManager.connect (zoomSlider->valueChanged, [this]() { handleZoomSliderMoved(); });
 	auto zoomPlusButton = emplaceChild<cPushButton> (cBox<cPosition> (cPosition (2, 275), cPosition (2 + 15, 275 + 15)));
 	signalConnectionManager.connect (zoomPlusButton->clicked, [this]() { handleZoomPlusClicked(); });
 	auto zoomMinusButton = emplaceChild<cPushButton> (cBox<cPosition> (cPosition (152, 275), cPosition (152 + 15, 275 + 15)));
@@ -227,114 +238,191 @@ void cHud::draw (SDL_Surface& destination, const cBox<cPosition>& clipRect)
 	cWidget::draw (destination, clipRect);
 }
 
+namespace
+{
+	struct sHudImages
+	{
+		UniqueSurface left;
+		UniqueSurface top;
+		UniqueSurface right;
+		UniqueSurface bottom;
+		UniqueSurface logo;
+	};
+
+	//--------------------------------------------------------------------------
+	// the HUD is generated again for each size of the game picture (the window is resized):
+	// its images are read from disk only once
+	const sHudImages& getHudImages()
+	{
+		static const sHudImages images = []() {
+			const auto gfxPath = cSettings::getInstance().getGfxPath();
+			sHudImages result;
+			result.left = UniqueSurface (LoadPCX (gfxPath / "hud_left.pcx"));
+			result.top = UniqueSurface (LoadPCX (gfxPath / "hud_top.pcx"));
+			result.right = UniqueSurface (LoadPCX (gfxPath / "hud_right.pcx"));
+			result.bottom = UniqueSurface (LoadPCX (gfxPath / "hud_bottom.pcx"));
+			result.logo = UniqueSurface (LoadPCX (gfxPath / "logo.pcx"));
+			return result;
+		}();
+		return images;
+	}
+} // namespace
+
+//------------------------------------------------------------------------------
+int cHud::getChatBoxHeight (int pictureHeight)
+{
+	const int mapHeight = pictureHeight - panelTotalHeight;
+	return std::clamp (mapHeight * 15 / 100, 60, 100);
+}
+
+//------------------------------------------------------------------------------
+int cHud::getMessageListHeight (int pictureHeight)
+{
+	const int mapHeight = pictureHeight - panelTotalHeight;
+	return std::clamp (mapHeight / 4, 60, 200);
+}
+
 //------------------------------------------------------------------------------
 UniqueSurface cHud::generateSurface()
 {
 	UniqueSurface surface (SDL_CreateRGBSurface (0, Video.getResolutionX(), Video.getResolutionY(), Video.getColDepth(), 0, 0, 0, 0));
 
-	SDL_FillRect (surface.get(), nullptr, 0x00FF00FF);
+	// a picture larger than the images of the HUD (2380x1440): dark where no image is,
+	// not transparent (there were the remains of earlier pictures, the map does not reach there)
+	SDL_FillRect (surface.get(), nullptr, SDL_MapRGB (surface->format, 0, 0, 0));
+	// the map is seen through the hole of the HUD (and through the transparent pixels of its images)
+	SDL_Rect hole = {panelLeftWidth, panelTopHeight, surface->w - panelTotalWidth, surface->h - panelTotalHeight};
+	SDL_FillRect (surface.get(), &hole, 0x00FF00FF);
 	SDL_SetColorKey (surface.get(), SDL_TRUE, 0x00FF00FF);
 
-	const auto gfxPath = cSettings::getInstance().getGfxPath();
+	const auto& images = getHudImages();
 	{
-		UniqueSurface tmpSurface (LoadPCX (gfxPath / "hud_left.pcx"));
+		auto* tmpSurface = images.left.get();
 		if (tmpSurface != nullptr)
 		{
-			SDL_BlitSurface (tmpSurface.get(), nullptr, surface.get(), nullptr);
+			SDL_BlitSurface (tmpSurface, nullptr, surface.get(), nullptr);
 		}
 	}
 
 	SDL_Rect dest;
 	{
-		UniqueSurface tmpSurface (LoadPCX (gfxPath / "hud_top.pcx"));
+		auto* tmpSurface = images.top.get();
 		if (tmpSurface != nullptr)
 		{
 			SDL_Rect src = {0, 0, Uint16 (tmpSurface->w), Uint16 (tmpSurface->h)};
 			dest.x = panelLeftWidth;
 			dest.y = 0;
-			SDL_BlitSurface (tmpSurface.get(), &src, surface.get(), &dest);
+			SDL_BlitSurface (tmpSurface, &src, surface.get(), &dest);
 			src.x = tmpSurface->w - 19;
 			src.w = 18;
 			src.h = panelTopHeight;
 			dest.x = surface->w - panelTopHeight;
-			SDL_BlitSurface (tmpSurface.get(), &src, surface.get(), &dest);
+			SDL_BlitSurface (tmpSurface, &src, surface.get(), &dest);
 		}
 	}
 
 	{
-		UniqueSurface tmpSurface (LoadPCX (gfxPath / "hud_right.pcx"));
+		auto* tmpSurface = images.right.get();
 		if (tmpSurface != nullptr)
 		{
 			SDL_Rect src = {0, 0, Uint16 (tmpSurface->w), Uint16 (tmpSurface->h)};
 			dest.x = surface->w - panelRightWidth;
 			dest.y = panelTopHeight;
-			SDL_BlitSurface (tmpSurface.get(), &src, surface.get(), &dest);
+			SDL_BlitSurface (tmpSurface, &src, surface.get(), &dest);
 		}
 	}
 
 	{
-		UniqueSurface tmpSurface (LoadPCX (gfxPath / "hud_bottom.pcx"));
+		auto* tmpSurface = images.bottom.get();
 		if (tmpSurface != nullptr)
 		{
 			SDL_Rect src = {0, 0, Uint16 (tmpSurface->w), Uint16 (tmpSurface->h)};
 			dest.x = panelLeftWidth;
 			dest.y = surface->h - 24;
-			SDL_BlitSurface (tmpSurface.get(), &src, surface.get(), &dest);
+			SDL_BlitSurface (tmpSurface, &src, surface.get(), &dest);
 			src.x = tmpSurface->w - 41;
 			src.w = 23;
 			src.h = 24;
 			dest.x = surface->w - 23;
-			SDL_BlitSurface (tmpSurface.get(), &src, surface.get(), &dest);
+			SDL_BlitSurface (tmpSurface, &src, surface.get(), &dest);
 			src.x = tmpSurface->w - 17;
 			src.w = 16;
 			src.h = 22;
 			dest.x = panelLeftWidth - 16;
 			dest.y = surface->h - 22;
-			SDL_BlitSurface (tmpSurface.get(), &src, surface.get(), &dest);
+			SDL_BlitSurface (tmpSurface, &src, surface.get(), &dest);
 		}
 	}
 
 	if (Video.getResolutionY() > 480)
 	{
-		UniqueSurface tmpSurface (LoadPCX (gfxPath / "logo.pcx"));
+		auto* tmpSurface = images.logo.get();
 		if (tmpSurface != nullptr)
 		{
 			dest.x = 9;
 			dest.y = Video.getResolutionY() - panelTotalHeight - 15;
-			SDL_BlitSurface (tmpSurface.get(), nullptr, surface.get(), &dest);
+			SDL_BlitSurface (tmpSurface, nullptr, surface.get(), &dest);
 		}
 	}
 	return surface;
 }
 
 //------------------------------------------------------------------------------
-void cHud::setMinimalZoomFactor (float zoomFactor)
+void cHud::setMinimalZoomFactor (float minimalZoomFactor_)
 {
-	zoomSlider->setMaxValue ((int) std::ceil (100. - 100. * zoomFactor));
+	minimalZoomFactor = std::min (minimalZoomFactor_, 1.f);
+
+	const auto oldZoomFactor = zoomFactor;
+	zoomFactor = std::clamp (zoomFactor, minimalZoomFactor, 1.f);
+	updateZoomSlider();
+	if (zoomFactor != oldZoomFactor) zoomChanged();
 }
 
 //------------------------------------------------------------------------------
-void cHud::setZoomFactor (float zoomFactor)
+void cHud::setZoomFactor (float zoomFactor_)
 {
-	zoomSlider->setValue (static_cast<int> (100. - zoomFactor * 100));
+	const auto oldZoomFactor = zoomFactor;
+	zoomFactor = std::clamp (zoomFactor_, minimalZoomFactor, 1.f);
+	updateZoomSlider();
+	if (zoomFactor != oldZoomFactor) zoomChanged();
 }
 
 //------------------------------------------------------------------------------
 float cHud::getZoomFactor() const
 {
-	return 1.f - (float) zoomSlider->getValue() / 100;
+	return zoomFactor;
 }
 
 //------------------------------------------------------------------------------
-void cHud::increaseZoomFactor (double percent)
+void cHud::zoomIn (double fractionOfRange)
 {
-	zoomSlider->increase ((int) ((zoomSlider->getMaxValue() - zoomSlider->getMinValue()) * percent));
+	setZoomFactor (computeNextZoom (zoomFactor, minimalZoomFactor, fractionOfRange, true));
 }
 
 //------------------------------------------------------------------------------
-void cHud::decreaseZoomFactor (double percent)
+void cHud::zoomOut (double fractionOfRange)
 {
-	zoomSlider->decrease ((int) ((zoomSlider->getMaxValue() - zoomSlider->getMinValue()) * percent));
+	setZoomFactor (computeNextZoom (zoomFactor, minimalZoomFactor, fractionOfRange, false));
+}
+
+//------------------------------------------------------------------------------
+void cHud::handleZoomSliderMoved()
+{
+	if (updatingZoomSlider) return;
+
+	const auto oldZoomFactor = zoomFactor;
+	zoomFactor = computeZoomFromSliderValue (zoomSlider->getValue(), zoomSlider->getMaxValue(), minimalZoomFactor);
+	// without a range (the whole map fits at zoom factor 1) the handle goes back
+	if (minimalZoomFactor >= 1.f) updateZoomSlider();
+	if (zoomFactor != oldZoomFactor) zoomChanged();
+}
+
+//------------------------------------------------------------------------------
+void cHud::updateZoomSlider()
+{
+	updatingZoomSlider = true;
+	zoomSlider->setValue (computeSliderValueFromZoom (zoomFactor, zoomSlider->getMaxValue(), minimalZoomFactor));
+	updatingZoomSlider = false;
 }
 
 //------------------------------------------------------------------------------
@@ -576,13 +664,13 @@ void cHud::deactivateShortcuts()
 //------------------------------------------------------------------------------
 void cHud::handleZoomPlusClicked()
 {
-	zoomSlider->decrease ((zoomSlider->getMaxValue() - zoomSlider->getMinValue()) / 6);
+	zoomIn (zoomButtonStep);
 }
 
 //------------------------------------------------------------------------------
 void cHud::handleZoomMinusClicked()
 {
-	zoomSlider->increase ((zoomSlider->getMaxValue() - zoomSlider->getMinValue()) / 6);
+	zoomOut (zoomButtonStep);
 }
 
 //------------------------------------------------------------------------------

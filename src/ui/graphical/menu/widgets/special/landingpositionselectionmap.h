@@ -36,6 +36,7 @@ public:
 	cLandingPositionSelectionMap (const cBox<cPosition>& area, std::shared_ptr<cStaticMap>, bool fixedBridgeHead, const std::vector<sLandingUnit>&, std::shared_ptr<const cUnitsData>);
 
 	void draw (SDL_Surface& destination, const cBox<cPosition>& clipRect) override;
+	void handleResized (const cPosition& oldSize) override;
 	bool handleMouseMoved (cApplication&, cMouse&, const cPosition& offset) override;
 
 	cSignal<void (const cPosition&)> clickedTile;

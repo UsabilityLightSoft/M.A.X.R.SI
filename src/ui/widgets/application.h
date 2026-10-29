@@ -22,6 +22,8 @@
 
 #include "input/keyboard/keysequence.h"
 #include "input/mouse/mousebuttontype.h"
+#include "utility/box.h"
+#include "utility/position.h"
 #include "utility/signal/signalconnectionmanager.h"
 
 #include <SDL.h>
@@ -88,6 +90,18 @@ private:
 
 	void center (cWindow&);
 
+	/**
+	 * The part of the screen with visible windows: the windows above the last window
+	 * that hides everything below it.
+	 */
+	cBox<cPosition> getVisibleWindowsArea() const;
+
+	/**
+	 * The screen buffer has been recreated (another size): draws the visible windows below the active one again,
+	 * so that the active window gets its background (e.g. the shadow over the game) again.
+	 */
+	void redrawWindowsBelow (const cWindow& activeWindow);
+
 	cWindow* getActiveWindow();
 
 	cWidget* getMouseEventFirstTarget (const cPosition&);
@@ -132,6 +146,8 @@ private:
 	std::list<std::shared_ptr<cRunnable>> runnables;
 
 	bool shouldDrawFramesPerSecond = false;
+	/** The screen buffer has been recreated: all visible windows have to be drawn again. */
+	bool screenBufferRecreated = false;
 };
 
 //------------------------------------------------------------------------------

@@ -93,6 +93,26 @@ void drawRectangle (SDL_Surface& surface, const cBox<cPosition>& rectangle, cons
 }
 
 //------------------------------------------------------------------------------
+void drawShade (SDL_Surface& surface, const cBox<cPosition>& area, const cRgbColor& color)
+{
+	const auto size = area.getSize();
+	if (size.x() <= 0 || size.y() <= 0) return;
+
+	UniqueSurface shade (SDL_CreateRGBSurface (0, size.x(), size.y(), 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000));
+	if (shade == nullptr) return;
+	SDL_FillRect (shade.get(), nullptr, SDL_MapRGBA (shade->format, color.r, color.g, color.b, color.a));
+	SDL_SetSurfaceBlendMode (shade.get(), SDL_BLENDMODE_BLEND);
+	SDL_Rect destination{area.getMinCorner().x(), area.getMinCorner().y(), size.x(), size.y()};
+	SDL_BlitSurface (shade.get(), nullptr, &surface, &destination);
+}
+
+//------------------------------------------------------------------------------
+void drawDimmed (SDL_Surface& surface, const cBox<cPosition>& area)
+{
+	drawShade (surface, area, cRgbColor (0x18, 0x18, 0x18, 170));
+}
+
+//------------------------------------------------------------------------------
 void drawSelectionCorner (SDL_Surface& surface, const cBox<cPosition>& rectangle, const cRgbColor& color, int cornerSize)
 {
 	constexpr int selectionCornerLineThickness = 3;

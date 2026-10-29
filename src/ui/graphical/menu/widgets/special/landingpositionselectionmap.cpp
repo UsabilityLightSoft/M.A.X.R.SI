@@ -51,6 +51,18 @@ void cLandingPositionSelectionMap::draw (SDL_Surface& destination, const cBox<cP
 }
 
 //------------------------------------------------------------------------------
+void cLandingPositionSelectionMap::handleResized (const cPosition& oldSize)
+{
+	cClickableWidget::handleResized (oldSize);
+
+	// the whole map in the new size (the game picture has got another size)
+	if (getSize() != oldSize)
+	{
+		mapSurface = map->getGraphic().createBigSurface (getSize().x(), getSize().y());
+	}
+}
+
+//------------------------------------------------------------------------------
 bool cLandingPositionSelectionMap::handleClicked (cApplication&, cMouse& mouse, eMouseButtonType) /* override */
 {
 	cPosition mapPosition = (mouse.getPosition() - getPosition()) * map->getSize() / getSize();

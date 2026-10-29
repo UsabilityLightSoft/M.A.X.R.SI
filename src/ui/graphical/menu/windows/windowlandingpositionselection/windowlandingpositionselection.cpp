@@ -37,6 +37,7 @@
 #include "ui/graphical/menu/widgets/special/landingpositionselectionmap.h"
 #include "ui/graphical/menu/widgets/special/lobbychatboxlistviewitem.h"
 #include "ui/uidefines.h"
+#include "output/video/video.h"
 #include "ui/widgets/application.h"
 #include "ui/widgets/image.h"
 #include "ui/widgets/label.h"
@@ -59,7 +60,7 @@ cWindowLandingPositionSelection::cWindowLandingPositionSelection (std::shared_pt
 	circlesImage = emplaceChild<cImage> (cPosition (cHud::panelLeftWidth, cHud::panelTopHeight));
 	circlesImage->disable();
 
-	auto hudImage = addChild (std::move (hudImageOwned));
+	hudImage = addChild (std::move (hudImageOwned));
 
 	backButton = emplaceChild<cPushButton> (cPosition (35, hudImage->getEndPosition().y() - 40), ePushButtonType::Angular, lngPack.i18n ("Others~Back"), eUnicodeFontType::LatinNormal);
 	signalConnectionManager.connect (backButton->clicked, [this]() { backClicked(); });
@@ -70,7 +71,7 @@ cWindowLandingPositionSelection::cWindowLandingPositionSelection (std::shared_pt
 
 	if (withChatBox)
 	{
-		chatBox = emplaceChild<cChatBox<cLobbyChatBoxListViewItem, cChatBoxLandingPlayerListViewItem>> (cBox<cPosition> (cPosition (cHud::panelLeftWidth + 4, hudImage->getEndPosition().y() - cHud::panelBottomHeight - 12 - 100), hudImage->getEndPosition() - cPosition (cHud::panelRightWidth + 4, cHud::panelBottomHeight + 12)));
+		chatBox = emplaceChild<cChatBox<cLobbyChatBoxListViewItem, cChatBoxLandingPlayerListViewItem>> (cBox<cPosition> (cPosition (cHud::panelLeftWidth + 4, hudImage->getEndPosition().y() - cHud::panelBottomHeight - 12 - cHud::getChatBoxHeight (hudImage->getSize().y())), hudImage->getEndPosition() - cPosition (cHud::panelRightWidth + 4, cHud::panelBottomHeight + 12)));
 
 		signalConnectionManager.connect (chatBox->commandEntered, [this] (const std::string& message) {
 			onCommandEntered (message);
@@ -97,8 +98,34 @@ cWindowLandingPositionSelection::cWindowLandingPositionSelection (std::shared_pt
 	}
 
 	signalConnectionManager.connect (selectedPosition, [this] (const cPosition& position) { lastSelectedPosition = position; });
+	signalConnectionManager.connect (Video.resolutionChanged, [this]() { handleResolutionChange(); });
 
 	resize (hudImage->getSize());
+}
+
+//------------------------------------------------------------------------------
+void cWindowLandingPositionSelection::handleResolutionChange()
+{
+	hudImage->setImage (createHudSurface().get());
+	resize (hudImage->getSize());
+
+	const cBox<cPosition> mapArea (cPosition (cHud::panelLeftWidth, cHud::panelTopHeight), hudImage->getEndPosition() - cPosition (cHud::panelRightWidth, cHud::panelBottomHeight));
+	mapWidget->setArea (mapArea);
+	infoLabel->setArea (mapArea);
+	backButton->moveTo (cPosition (35, hudImage->getEndPosition().y() - 40));
+	if (chatBox)
+	{
+		chatBox->setArea (cBox<cPosition> (cPosition (cHud::panelLeftWidth + 4, hudImage->getEndPosition().y() - cHud::panelBottomHeight - 12 - cHud::getChatBoxHeight (hudImage->getSize().y())), hudImage->getEndPosition() - cPosition (cHud::panelRightWidth + 4, cHud::panelBottomHeight + 12)));
+	}
+	if (toggleChatBoxButton)
+	{
+		toggleChatBoxButton->moveTo (cPosition (35, hudImage->getEndPosition().y() - 65));
+	}
+	// the circles of the chosen landing position for the new map size (a running animation draws them itself)
+	if (circleAnimationState >= 1.f && circlesImage->getSize() != cPosition (0, 0))
+	{
+		updateLandingPositionCircles (lastSelectedPosition, 1.f);
+	}
 }
 
 //------------------------------------------------------------------------------

@@ -39,6 +39,7 @@
 #include <cassert>
 #include <forward_list>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -76,6 +77,9 @@ public:
 	unsigned int getGameTime() const;
 
 	uint32_t getChecksum() const;
+	/** the parts of the checksum (model members, players, units) as " name=crc" pairs:
+	 * written to the net log, when a client is out of sync, to find the diverging data */
+	std::string getChecksumReport() const;
 
 	void setUnitsData (std::shared_ptr<cUnitsData>);
 	std::shared_ptr<const cUnitsData> getUnitsData() const { return unitsData; }
@@ -324,11 +328,14 @@ public:
 		}
 		archive >> NVP (attackJobs);
 
+		// loaded into an existing model (a resync): the loaded units replace the old ones
+		neutralBuildings.clear();
 		archive >> NVP (neutralBuildings);
 		for (auto& building : neutralBuildings)
 		{
 			building->postLoad (*this);
 		}
+		neutralVehicles.clear();
 		archive >> NVP (neutralVehicles);
 		for (auto& vehicle : neutralVehicles)
 		{

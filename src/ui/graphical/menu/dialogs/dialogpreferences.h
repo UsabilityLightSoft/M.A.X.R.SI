@@ -24,6 +24,7 @@
 #include "utility/signal/signalconnectionmanager.h"
 
 #include <string>
+#include <vector>
 
 class cCheckBox;
 class cColorSelector;
@@ -53,7 +54,9 @@ private:
 	cLabel* colorLabel = nullptr;
 	cLabel* scrollSpeedLabel = nullptr;
 	cLabel* languageLabel = nullptr;
-	cLabel* resolutionLabel = nullptr;
+	cLabel* uiScaleLabel = nullptr;
+	cLabel* uiScaleHintLabel = nullptr;
+	cLabel* cursorSizeLabel = nullptr;
 
 	cPushButton* doneButton = nullptr;
 	cPushButton* cancelButton = nullptr;
@@ -85,7 +88,14 @@ private:
 	cCheckBox* windowCheckBox = nullptr;
 
 	cComboBox* languagesComboBox = nullptr;
-	cComboBox* resolutionsComboBox = nullptr;
+	cComboBox* uiScaleComboBox = nullptr;
+	/** The scale (percent, 0 = automatic) of each item of uiScaleComboBox. */
+	std::vector<int> uiScaleItemPercents;
+	bool updatingUiScaleItems = false;
+	cComboBox* cursorSizeComboBox = nullptr;
+	/** The size (percent, 0 = automatic) of each item of cursorSizeComboBox. */
+	std::vector<int> cursorSizeItemPercents;
+	bool updatingCursorSizeItems = false;
 
 	std::string storedLanguage;
 
@@ -96,6 +106,9 @@ private:
 	bool storedMusicMute;
 	bool storedEffectsMute;
 	bool storedVoicesMute;
+
+	int storedUiScale = 0;
+	int storedCursorSize = 0;
 
 	void loadValues();
 	void saveValues();
@@ -113,6 +126,17 @@ private:
 	void musicMuteChanged();
 	void effectsMuteChanged();
 	void voicesMuteChanged();
+
+	/** Fills the list of scales: the automatic one with its value for the current window; the values too big for the window dimmed. */
+	void updateUiScaleItems();
+	void selectUiScaleItem (int percent);
+	/** A scale has been chosen: applied at once (Done keeps it, Cancel restores the previous one). */
+	void uiScaleChanged();
+
+	/** Fills the list of cursor sizes: the automatic one with its value for the current scale. */
+	void updateCursorSizeItems();
+	/** A cursor size has been chosen: applied at once (Done keeps it, Cancel restores the previous one). */
+	void cursorSizeChanged();
 };
 
 #endif // ui_graphical_menu_dialogs_dialogpreferencesH

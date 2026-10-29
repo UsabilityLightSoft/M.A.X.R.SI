@@ -165,6 +165,12 @@ void cClient::sendSyncMessage (unsigned int gameTime, bool crcOK, unsigned int t
 }
 
 //------------------------------------------------------------------------------
+void cClient::requestModelResync() const
+{
+	sendNetMessage (cNetMessageRequestResync (activePlayer->getId()));
+}
+
+//------------------------------------------------------------------------------
 void cClient::runClientJobs()
 {
 	// run surveyor AI

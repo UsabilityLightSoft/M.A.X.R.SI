@@ -28,8 +28,14 @@
 
 class cImage;
 class cLabel;
+class cLobbyPlayerReadyButton;
 class cPlayerBasicData;
 
+/**
+ * A player in the list of the lobby: color, name and the ready dot.
+ * The ready dot can be clicked in a cell around it (the height of the row and some pixels left and right);
+ * with the list margins and distance of the lobby (see cWindowNetworkLobby) the dot stays where it was.
+ */
 class cLobbyPlayerListViewItem : public cAbstractListViewItem
 {
 public:
@@ -38,16 +44,26 @@ public:
 	const std::shared_ptr<cPlayerBasicData>& getPlayer() const;
 	void update();
 
+	/**
+	 * Whether the ready dot of this player can be changed here (the local player):
+	 * then the cell of the dot is highlighted, while the mouse is over it.
+	 */
+	void setReadyClickable (bool);
+
 	cSignal<void()> readyClicked;
 
 	void handleResized (const cPosition& oldSize) override;
+
+	/** Free pixels around the ready dot that belong to its cell: left and right, above and below. */
+	static constexpr int readyCellMarginX = 6;
+	static constexpr int readyCellMarginY = 2;
 
 private:
 	cSignalConnectionManager signalConnectionManager;
 
 	cLabel* nameLabel = nullptr;
 	cImage* colorImage = nullptr;
-	cImage* readyImage = nullptr;
+	cLobbyPlayerReadyButton* readyButton = nullptr;
 
 	std::shared_ptr<cPlayerBasicData> player;
 

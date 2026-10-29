@@ -242,6 +242,8 @@ public:
 	sGameOverStat& getGameOverStat() { return gameOverStat; }
 
 	uint32_t getChecksum (uint32_t crc) const;
+	/** the parts of the checksum as " p<id>.name=crc" pairs (see cModel::getChecksumReport) */
+	std::string getChecksumReport() const;
 
 	mutable cSignal<void()> creditsChanged;
 	mutable cSignal<void()> hasFinishedTurnChanged;
@@ -329,6 +331,11 @@ public:
 		dynamicUnitsData.clear();
 		archive & NVP (dynamicUnitsData);
 
+		// loaded into an existing player (a resync, see cModel::load): the loaded units replace the old ones.
+		// The sub bases refer to the old buildings: clear them first, the base is rebuilt after the load (refreshBase).
+		base.clear();
+		vehicles.clear();
+		buildings.clear();
 		archive & NVP (vehicles);
 		archive & NVP (buildings);
 

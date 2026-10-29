@@ -157,6 +157,9 @@ struct cOrder
 	int upgradeCost = 0;             // BuyUpgrades: цена по расчёту мозга (кредиты) — для журнала
 	bool allUnits = false;           // UpgradeBuilding: и все такие же здания подбазы
 	std::array<int, 3> mining{};     // SetMining: металл, нефть, золото в ход
+	// Р17 (огонь наугад, Владыка 26.10.2026): Attack по клетке без видимой цели — принудительная атака, как у человека; цель
+	// движку не передаётся (попадёт в то, что там на самом деле, — например, в невидимого диверсанта)
+	bool blindFire = false;
 
 	// аудит
 	std::string level;               // "micro" / "op" / "strategy"

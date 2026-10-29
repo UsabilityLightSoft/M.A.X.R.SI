@@ -20,6 +20,9 @@
 // maxr_ai_client — клиент ИИИ (шаг 15 PLAN.md): входит в сетевую игру MAXR как обычный
 // игрок (TCP/IP), сам проходит лобби, клан и высадку и играет мозгом ИИИ (rule, base2, llm)
 // в режиме «Turn based». Хост — окно игры («TCP/IP Host») или выделенный сервер.
+// Клан мозги rule и llm выбирают сами — тем же правилом, что ai_headless (ruleChooseClan: по карте и своей точке
+// высадки; Р17, п. 86 и 158 PLAN.md), base и base2 — The Chosen, как прежде; --clan задаёт клан вручную.
+// Имя в лобби — имя версии ИИИ (ai_version.h: rule — SI-R5.2-T), в чате — приветствие и где паспорт.
 // Ход — в несколько заходов (шаг 11), если хост их понимает (проба в первом ходу), иначе один.
 // Пишет в каталог партии: journal.jsonl, digest/, metrics.json, metrics_turns.jsonl (как
 // ai_headless), journal_human.jsonl — действия других игроков теми же приказами, снимки
@@ -38,12 +41,14 @@
 #include "ai_engine.h"
 #include "ai_llm_advisor.h"
 #include "ai_rule_brain.h"
+#include "ai_version.h"
 #include "crashreporter/debug.h"
 #include "defines.h"
 #include "game/connectionmanager.h"
 #include "game/data/gamesettings.h"
 #include "game/data/map/map.h"
 #include "game/data/model.h"
+#include "game/data/player/clans.h"
 #include "game/data/player/player.h"
 #include "game/data/player/playerbasicdata.h"
 #include "game/data/report/savedreportchat.h"
@@ -92,14 +97,17 @@ using Clock = std::chrono::steady_clock;
 
 std::string gNetLogPath; // свой net.log (cLog открывает файл один раз за процесс — при --loop общий)
 
+constexpr int kClanAuto = -2; // --clan auto: клан выбирает мозг (rule, llm — ruleChooseClan), прочие — The Chosen
+constexpr int kClanRandom = -1;
+
 //------------------------------------------------------------------------------
 struct sOptions
 {
 	std::string host = "127.0.0.1";
 	int port = DEFAULTPORT;
 	std::string brain = "rule";        // rule | base2 | base | llm
-	std::string name;                  // пусто — «AI <мозг>»
-	int clan = 0;                      // -1 — случайный
+	std::string name;                  // пусто — имя версии ИИИ (ai_version.h): SI-R5.2-T, SI-R2, …
+	int clan = kClanAuto;              // kClanAuto — по карте и высадке; kClanRandom — случайный; 0..7 — этот
 	std::string passes = "auto";       // auto — проба в первом ходу; 1..50 — как MAXR_PASSES
 	std::string outDir;                // пусто — <папка exe>/ai_games/<дата-время>_<имя>
 	int waitSec = 1800;                // сколько ждать, пока хост откроет игру
@@ -120,8 +128,9 @@ void printUsage()
 		"  --host <ip>        адрес хоста (по умолчанию 127.0.0.1)\n"
 		"  --port <n>         порт (58600)\n"
 		"  --brain <b>        rule (умолчание) | base2 | base | llm\n"
-		"  --name <имя>       имя в лобби (AI <мозг>)\n"
-		"  --clan <0..7|random>  клан (0 — The Chosen)\n"
+		"  --name <имя>       имя в лобби (по умолчанию — имя версии ИИИ: rule — SI-R5.2-T, паспорт si/AI_PASSPORT.md)\n"
+		"  --clan <auto|random|0..7>  клан: auto (умолчание) — rule и llm выбирают по карте и своей высадке, как\n"
+		"                     ai_headless (обычно 4 — Musashi; враг за водой и моря у базы нет — 0, The Chosen), base и base2 — 0\n"
 		"  --passes <auto|1..50> заходов за ход: auto — если хост понимает (проба), иначе 1\n"
 		"  --out <каталог>    куда писать журналы партии\n"
 		"  --wait <сек>       сколько ждать хоста (1800)\n"
@@ -152,7 +161,7 @@ bool parseArgs (int argc, char** argv, sOptions& o, std::string& err)
 		else if (a == "--clan")
 		{
 			const std::string v = value();
-			o.clan = (v == "random") ? -1 : std::atoi (v.c_str());
+			o.clan = v == "auto" ? kClanAuto : v == "random" ? kClanRandom : std::atoi (v.c_str());
 		}
 		else if (a == "--passes") o.passes = value();
 		else if (a == "--out") o.outDir = value();
@@ -185,9 +194,9 @@ bool parseArgs (int argc, char** argv, sOptions& o, std::string& err)
 			return false;
 		}
 	}
-	if (o.clan < -1 || o.clan > 7)
+	if (o.clan < kClanAuto || o.clan > 7)
 	{
-		err = "--clan: 0..7 or random";
+		err = "--clan: auto, random or 0..7";
 		return false;
 	}
 	if (o.port <= 0 || o.port > 65535)
@@ -195,7 +204,7 @@ bool parseArgs (int argc, char** argv, sOptions& o, std::string& err)
 		err = "--port: 1..65535";
 		return false;
 	}
-	if (o.name.empty()) o.name = "AI " + o.brain;
+	if (o.name.empty()) o.name = ai::aiVersion (o.brain).name;
 	return true;
 }
 
@@ -227,9 +236,27 @@ void say (const std::string& text)
 	Log.info ("ai_client: " + text);
 }
 
+// паспорт ИИИ — в чат коротко, без «https://» (окно игры ссылки не открывает)
+std::string passportText()
+{
+	const std::string url = ai::kAiPassportUrl;
+	const std::string scheme = "https://";
+	return url.rfind (scheme, 0) == 0 ? url.substr (scheme.size()) : url;
+}
+
 bool sameColor (const cRgbColor& a, const cRgbColor& b)
 {
 	return a.toLab().deltaE (b.toLab()) < 10.; // как lobbyutils.cpp
+}
+
+// имя клана из данных кланов игры (data/clans.json): 0 — «The Chosen», 4 — «Musashi»; кланы выключены — «-»
+std::string clanNameOf (const cClanData* clans, int clan)
+{
+	if (clan < 0) return "-";
+	if (clans != nullptr)
+		for (const auto& c : clans->getClans())
+			if (c.getClanID() == clan) return c.getDefaultName();
+	return "#" + std::to_string (clan);
 }
 
 const char* landingStateText (eLandingPositionState s)
@@ -244,6 +271,8 @@ const char* landingStateText (eLandingPositionState s)
 	}
 }
 
+// подписи типа игры в окне «Опции» — как в data/languages/en и ru/maxr.po (Option~Type_Turns, Option~Type_Simu,
+// Option~Type_HotSeat)
 std::string gameTypeText (eGameSettingsGameType t)
 {
 	switch (t)
@@ -251,6 +280,16 @@ std::string gameTypeText (eGameSettingsGameType t)
 		case eGameSettingsGameType::Turns: return "Turn based";
 		case eGameSettingsGameType::HotSeat: return "Hot Seat";
 		default: return "Simultaneous";
+	}
+}
+
+std::string gameTypeTextRu (eGameSettingsGameType t)
+{
+	switch (t)
+	{
+		case eGameSettingsGameType::Turns: return "По очереди";
+		case eGameSettingsGameType::HotSeat: return "ХотСит";
+		default: return "Одновременно";
 	}
 }
 
@@ -274,8 +313,10 @@ private:
 
 	void connectSignals();
 	void updateIdentity();
+	std::string savedGameAiName (int me) const;
 	void setupLobby();
 	void startPreparation();
+	void chooseClan (const cPosition& landingPoint);
 	void chooseLanding (eLandingPositionState);
 	void sendLanding (const cPosition&);
 	void landingStep();
@@ -290,6 +331,14 @@ private:
 	void probeStep();
 	void finishGame (const std::string& reason);
 	void chat (const std::string& text);
+	struct sNotReady
+	{
+		std::string key; // для «причина сменилась»
+		std::string ru;
+		std::string en;
+	};
+	std::vector<sNotReady> notReadyReasons() const;
+	void explainNotReady (const std::vector<sNotReady>& reasons);
 
 	sOptions opt;
 	std::string outDir;
@@ -309,13 +358,22 @@ private:
 	std::shared_ptr<cGameSettings> lobbySettings;
 	std::shared_ptr<cStaticMap> lobbyMap;
 	bool savedGameSelected = false;
-	std::string lastWarnedSettings;
+	cSaveGameInfo lobbySave;     // выбранное хостом сохранение (игроки — для имени, savedGameAiName)
+	std::string lastNotReadyKey; // причины «не готов», о которых уже сказано в чат (пусто — готов)
+	std::string mapDownload;     // карта, которую качаю у хоста
+	std::string mapDownloaded;   // карта скачана — хост должен выбрать её ещё раз
+	std::string mapMissing;      // карты нет и скачать нельзя (оригинальная карта M.A.X. или другая версия)
+	bool optionsReceived = false; // настройки и карта лобби пришли от сервера (до этого «не готов» не объяснять)
 	bool greeted = false;
 	int setupStage = 0; // --setup: 0 — карта, 1 — настройки, 2 — ждать игроков, 3 — старт запрошен
 	Clock::time_point setupAskedAt;
 
 	// подготовка
 	sInitPlayerData initPlayerData;
+	bool clanAuto = false;             // клан выбирает мозг по карте и своей точке высадки (chooseClan)
+	cPosition clanLanding {-1, -1};    // точка высадки, по которой выбран клан
+	std::string clanName;              // имя клана (data/clans.json) — журнал, client.json
+	std::string clanWhy;               // почему этот клан
 	ai_client::cLandingChooser landing;
 	int landingTries = 0;
 	cPosition landingPos;
@@ -384,6 +442,11 @@ void cAiClient::connectSignals()
 		state = eState::Lobby;
 		stateSince = Clock::now();
 		greeted = false;
+		optionsReceived = false;
+		lastNotReadyKey.clear();
+		mapDownload.clear();
+		mapDownloaded.clear();
+		mapMissing.clear();
 		setupStage = 0;
 		say ("подключён к " + opt.host + ":" + std::to_string (opt.port) + " как игрок " + std::to_string (lobby->getLocalPlayer().getNr()));
 	});
@@ -421,17 +484,42 @@ void cAiClient::connectSignals()
 		lobbySettings = settings;
 		lobbyMap = map;
 		savedGameSelected = save.number >= 0;
+		lobbySave = save;
+		optionsReceived = true;
+		if (lobbyMap && lobbyMap->isValid())
+		{
+			mapDownloaded.clear();
+			mapMissing.clear();
+		}
 		updateIdentity();
 	});
 	signals.connect (lobby->onNoMapNoReady, [this] (const std::filesystem::path& map) {
 		say ("нет карты " + utf8::to_string (map) + " — не готов");
 	});
+	// карта: качаю у хоста, скачана, нет и скачать нельзя — причина «не готов» (сигналы приходят до onOptionsChanged)
 	signals.connect (lobby->onMapDownloadRequest, [this] (const std::filesystem::path& map) {
 		say ("карты " + utf8::to_string (map) + " нет — качаю у хоста");
-		chat (opt.name + ": no map " + utf8::to_string (map) + ", downloading. Select the map again when done.");
+		mapDownload = utf8::to_string (map);
+		mapDownloaded.clear();
 	});
 	signals.connect (lobby->onDownloadMapFinished, [this] (std::shared_ptr<cStaticMap>) {
-		say ("карта скачана — попросите хоста выбрать её ещё раз");
+		say ("карта скачана — хост должен выбрать её ещё раз");
+		mapDownloaded = mapDownload;
+		mapDownload.clear();
+		updateIdentity();
+	});
+	signals.connect (lobby->onDownloadMapCancelled, [this]() {
+		say ("скачивание карты прервано");
+		mapDownload.clear();
+		updateIdentity();
+	});
+	signals.connect (lobby->onMissingOriginalMap, [this] (const std::filesystem::path& map) {
+		say ("нет оригинальной карты M.A.X. " + utf8::to_string (map) + " — скачать её нельзя");
+		mapMissing = utf8::to_string (map);
+	});
+	signals.connect (lobby->onIncompatibleMap, [this] (const std::filesystem::path& map, const std::filesystem::path&) {
+		say ("карта " + utf8::to_string (map) + " у меня другой версии");
+		mapMissing = utf8::to_string (map);
 	});
 	signals.connect (lobby->onChatMessage, [] (const std::string& player, const std::string& message) {
 		say ("чат: " + player + ": " + message);
@@ -441,6 +529,15 @@ void cAiClient::connectSignals()
 		for (const auto& p : notReady) who += (who.empty() ? "" : ", ") + p.getName();
 		say (std::string ("старт не принят: ") + (missingSettings ? "нет настроек или карты; " : "") + (who.empty() ? "" : "не готовы: " + who));
 		if (setupStage == 3) setupStage = 2;
+		// каждая неудачная попытка старта, где не готов я, — причина и путь в меню (отказ не готовым игрокам шлёт сервер
+		// лобби нашей сборки — cLobbyServer::handleAskToFinishLobby; хост авторов шлёт его только тому, кто нажал «OK»)
+		const int me = lobby->getLocalPlayer().getNr();
+		if (std::none_of (notReady.begin(), notReady.end(), [me] (const cPlayerBasicData& p) { return p.getNr() == me; })) return;
+		const auto reasons = notReadyReasons();
+		if (reasons.empty())
+			chat ("Я уже готов - нажмите \"OK\" ещё раз. / I am ready now - press OK again.");
+		else
+			explainNotReady (reasons);
 	});
 	signals.connect (lobby->onStartGamePreparation, [this]() { startPreparation(); });
 	signals.connect (lobby->onPlayerAbortGamePreparation, [this] (const std::string& player) {
@@ -457,15 +554,25 @@ void cAiClient::connectSignals()
 }
 
 //------------------------------------------------------------------------------
+// Имя отправителя окно игры ставит само («SI-R5.2-T: …») — в тексте его нет. Себе сервер чат не пересылает:
+// сказанное — в журнал клиента (say).
 void cAiClient::chat (const std::string& text)
 {
+	bool sent = false;
 	if (state == eState::Game && client)
 	{
 		if (const cPlayer* me = client->getModel().getPlayer (playerId))
+		{
 			client->report (std::make_unique<cSavedReportChat> (*me, std::string (text)));
+			sent = true;
+		}
 	}
 	else if (lobby && lobby->isConnectedToServer() && lobby->getLocalPlayer().getNr() >= 0)
+	{
 		lobby->sendChatMessage (std::string (text));
+		sent = true;
+	}
+	if (sent) say ("в чат: " + text);
 }
 
 //------------------------------------------------------------------------------
@@ -478,9 +585,28 @@ void cAiClient::updateIdentity()
 		return std::any_of (lobbyPlayers.begin(), lobbyPlayers.end(), [&] (const cPlayerBasicData& p) { return p.getNr() != me && pred (p); });
 	};
 
-	std::string name = opt.name;
-	for (int k = 2; others ([&] (const cPlayerBasicData& p) { return p.getName() == name; }) && k < 20; ++k)
+	// два ИИИ одной версии в одной игре: «SI-R5.2-T» и «SI-R5.2-T 2» — номер по порядку подключения (номеру игрока в
+	// лобби), чтобы оба клиента считали одинаково и не менялись именами по кругу
+	const auto sameBase = [&] (const std::string& n) {
+		if (n == opt.name) return true;
+		if (n.size() <= opt.name.size() + 1 || n.compare (0, opt.name.size() + 1, opt.name + " ") != 0) return false;
+		return n.find_first_not_of ("0123456789", opt.name.size() + 1) == std::string::npos;
+	};
+	int rank = 0;
+	for (const auto& p : lobbyPlayers)
+		if (p.getNr() < me && sameBase (p.getName())) ++rank;
+	std::string name = rank == 0 ? opt.name : opt.name + " " + std::to_string (rank + 1);
+	for (int k = rank + 2; others ([&] (const cPlayerBasicData& p) { return p.getName() == name && p.getNr() < me; }) && k < 20; ++k)
 		name = opt.name + " " + std::to_string (k);
+	if (savedGameSelected)
+	{
+		const std::string saved = savedGameAiName (me);
+		if (!saved.empty())
+		{
+			if (saved != lobby->getLocalPlayer().getName()) say ("сохранение: в нём ИИИ «" + saved + "» - беру это имя (хост узнаёт игроков сохранения по имени)");
+			name = saved;
+		}
+	}
 
 	cRgbColor color = lobby->getLocalPlayer().getColor();
 	if (lobby->getLocalPlayer().getName() != name || others ([&] (const cPlayerBasicData& p) { return sameColor (p.getColor(), color); }))
@@ -500,22 +626,9 @@ void cAiClient::updateIdentity()
 		}
 	}
 
-	const bool haveMap = lobbyMap && lobbyMap->isValid() && lobbyMap->getSize().x() > 0;
-	const bool turnBased = lobbySettings && lobbySettings->gameType == eGameSettingsGameType::Turns;
-	const bool ready = (haveMap && turnBased) || savedGameSelected;
-
-	if (lobbySettings && !turnBased && !savedGameSelected)
-	{
-		const std::string key = gameTypeText (lobbySettings->gameType);
-		if (key != lastWarnedSettings)
-		{
-			lastWarnedSettings = key;
-			say ("тип игры «" + key + "» — ИИИ играет только в «Turn based»: не готов");
-			chat (name + ": I play only Game Type 'Turn based' (now: " + key + "). Options -> Game Type -> Turn based.");
-		}
-	}
-	else
-		lastWarnedSettings.clear();
+	// готов, когда есть карта и тип игры «По очереди» (или выбрано сохранение)
+	const auto reasons = notReadyReasons();
+	const bool ready = reasons.empty();
 
 	const auto& local = lobby->getLocalPlayer();
 	if (local.getName() != name || !sameColor (local.getColor(), color) || local.isReady() != ready)
@@ -524,10 +637,98 @@ void cAiClient::updateIdentity()
 		lobby->changeLocalPlayerProperties (std::string (name), color, ready);
 		if (ready && !wasReady && lobbyMap) say ("готов: карта " + utf8::to_string (lobbyMap->getFilename()) + ", Turn based");
 	}
-	if (!greeted && me >= 0)
+	if (me < 0) return;
+	if (!greeted)
 	{
 		greeted = true;
-		chat (name + " (brain " + opt.brain + ") joined. I play Game Type 'Turn based' only.");
+		chat ("Привет! Я ИИИ " + name + ", играю только \"По очереди\". / Hi! I am the AI " + name + ", I play Turn based only.");
+		chat ("Паспорт / passport: " + passportText());
+	}
+	// не готов — почему и что нажать: при входе в лобби и каждый раз, когда причина сменилась (хост сменил настройки
+	// или карту); стал готов после объяснения — сказать и это. Настройки лобби сервер шлёт сразу после входа — до них
+	// причины нет
+	if (!optionsReceived) return;
+	std::string key;
+	for (const auto& r : reasons)
+		key += r.key + ";";
+	if (key == lastNotReadyKey) return;
+	const bool explained = !lastNotReadyKey.empty();
+	lastNotReadyKey = key;
+	if (!reasons.empty())
+		explainNotReady (reasons);
+	else if (explained && !savedGameSelected && lobbyMap)
+		chat ("Готов: карта \"" + utf8::to_string (lobbyMap->getFilename()) + "\", \"По очереди\" - жмите \"OK\". / Ready: map "
+			+ utf8::to_string (lobbyMap->getFilename()) + ", Turn based - press OK.");
+}
+
+//------------------------------------------------------------------------------
+// Хост выбрал сохранение: сервер узнаёт игроков сохранения по имени (lobbyserver.cpp, byPlayerName), а ИИИ в нём
+// может зваться иначе — старые партии «AI rule», прежние версии «SI-…». Своего имени (opt.name, «… 2») в сохранении
+// нет — взять первое имя ИИИ из сохранения (isSiAiPlayerName, не побеждённого), не занятое игроком лобби с меньшим
+// номером (два ИИИ расходятся по порядку подключения). Пусто — имя по обычным правилам.
+std::string cAiClient::savedGameAiName (int me) const
+{
+	const auto inSave = [this] (const std::string& n) {
+		return std::any_of (lobbySave.players.begin(), lobbySave.players.end(), [&] (const cPlayerBasicData& p) { return p.getName() == n; });
+	};
+	if (inSave (opt.name)) return {};
+	for (const auto& p : lobbySave.players)
+	{
+		if (p.isDefeated() || !isSiAiPlayerName (p.getName())) continue;
+		const bool taken = std::any_of (lobbyPlayers.begin(), lobbyPlayers.end(), [&] (const cPlayerBasicData& o) {
+			return o.getNr() != me && o.getNr() < me && o.getName() == p.getName();
+		});
+		if (!taken) return p.getName();
+	}
+	return {};
+}
+
+//------------------------------------------------------------------------------
+// Почему не готов: причина и путь в меню подписями игры — data/languages/ru и en/maxr.po: «Выбор карты» / Choose planet
+// (Title~Choose_Planet), «Опции» / Options (Title~Options), «Тип игры:» / Game Type: (Title~Game_Type), «По очереди» /
+// Turn based (Option~Type_Turns), «Одновременно» / Simultaneous (Option~Type_Simu), «OK» (Others~OK). Стрелка — «->»,
+// тире — «-»: в шрифтах игры (ISO 8859-1, -2, -5) нет «→» и «—». Кавычки в чате — прямые: «» окно игры рисует
+// квадратиками (Р16, снимок ui_scale/56; так же правка 42). Пусто — готов.
+std::vector<cAiClient::sNotReady> cAiClient::notReadyReasons() const
+{
+	std::vector<sNotReady> r;
+	if (savedGameSelected) return r;
+	const bool haveMap = lobbyMap && lobbyMap->isValid() && lobbyMap->getSize().x() > 0;
+	if (!haveMap)
+	{
+		if (!mapDownload.empty())
+			r.push_back ({"download " + mapDownload,
+				"Не готов: качаю у хоста карту \"" + mapDownload + "\". Когда скачается, выберите её ещё раз: \"Выбор карты\" -> \"" + mapDownload + "\" -> \"OK\".",
+				"Not ready: downloading the map " + mapDownload + " from the host. When done, select it again: Choose planet -> " + mapDownload + " -> OK."});
+		else if (!mapDownloaded.empty())
+			r.push_back ({"downloaded " + mapDownloaded,
+				"Не готов: карта \"" + mapDownloaded + "\" скачана - выберите её ещё раз: \"Выбор карты\" -> \"" + mapDownloaded + "\" -> \"OK\".",
+				"Not ready: the map " + mapDownloaded + " is downloaded - select it again: Choose planet -> " + mapDownloaded + " -> OK."});
+		else if (!mapMissing.empty())
+			r.push_back ({"missing " + mapMissing,
+				"Не готов: у меня нет карты \"" + mapMissing + "\", скачать её нельзя - выберите другую: \"Выбор карты\" -> карта -> \"OK\".",
+				"Not ready: I have no map " + mapMissing + " and cannot download it - select another one: Choose planet -> map -> OK."});
+		else
+			r.push_back ({"map", "Не готов: карта не выбрана - \"Выбор карты\" -> карта -> \"OK\".", "Not ready: no map selected - Choose planet -> map -> OK."});
+	}
+	if (!lobbySettings)
+		r.push_back ({"settings", "Не готов: нет настроек игры - \"Опции\" -> \"Тип игры:\" -> \"По очереди\" -> \"OK\".",
+			"Not ready: no game settings - Options -> Game Type: -> Turn based -> OK."});
+	else if (lobbySettings->gameType != eGameSettingsGameType::Turns)
+		r.push_back ({"type " + gameTypeText (lobbySettings->gameType),
+			"Не готов: тип игры \"" + gameTypeTextRu (lobbySettings->gameType) + "\" - я играю только \"По очереди\": \"Опции\" -> \"Тип игры:\" -> \"По очереди\" -> \"OK\".",
+			"Not ready: Game Type " + gameTypeText (lobbySettings->gameType) + " - I play Turn based only: Options -> Game Type: -> Turn based -> OK."});
+	return r;
+}
+
+//------------------------------------------------------------------------------
+// в чат — по-русски и по-английски, каждая причина
+void cAiClient::explainNotReady (const std::vector<sNotReady>& reasons)
+{
+	for (const auto& r : reasons)
+	{
+		chat (r.ru);
+		chat (r.en);
 	}
 }
 
@@ -588,10 +789,38 @@ void cAiClient::startPreparation()
 
 	std::uint32_t seed = opt.seed != 0 ? opt.seed : static_cast<std::uint32_t> (std::time (nullptr)) ^ static_cast<std::uint32_t> (lobby->getLocalPlayer().getNr() * 7919);
 	initPlayerData = sInitPlayerData();
-	if (settings.clansEnabled)
-		initPlayerData.clan = opt.clan >= 0 ? opt.clan : static_cast<int> (seed % 8);
-	else
+	clanAuto = false;
+	clanLanding = cPosition (-1, -1);
+	if (!settings.clansEnabled)
+	{
 		initPlayerData.clan = -1;
+		clanWhy = "clans are off in the game settings";
+	}
+	else if (opt.clan >= 0)
+	{
+		initPlayerData.clan = opt.clan;
+		clanWhy = "--clan " + std::to_string (opt.clan);
+	}
+	else if (opt.clan == kClanRandom)
+	{
+		initPlayerData.clan = static_cast<int> (seed % 8);
+		clanWhy = "--clan random";
+	}
+	else if (opt.brain == "rule" || opt.brain == "llm")
+	{
+		// клан — по карте и своей точке высадки (chooseClan — когда точка выбрана). Бесплатный набор высадки у кланов 0–6
+		// один и тот же (computeInitialLandingUnits; другой — только у Axis Inc., 7, правило его не берёт): набор и точку
+		// можно считать до клана
+		clanAuto = true;
+		initPlayerData.clan = 0;
+		clanWhy = "not chosen yet";
+	}
+	else
+	{
+		initPlayerData.clan = 0;
+		clanWhy = "the brain " + opt.brain + " does not choose a clan: The Chosen, as before";
+	}
+	clanName = clanNameOf (prep.clanData.get(), initPlayerData.clan);
 	// бесплатный стартовый набор (как ai_headless); кредиты остаются на улучшения за золото
 	for (const auto& [unitId, cargo] : computeInitialLandingUnits (initPlayerData.clan, settings, *prep.unitsData))
 		initPlayerData.landingUnits.push_back ({unitId, static_cast<unsigned int> (cargo)});
@@ -599,19 +828,46 @@ void cAiClient::startPreparation()
 	const bool fixed = settings.bridgeheadType == eGameSettingsBridgeheadType::Definite;
 	landing.init (*prep.staticMap, *prep.unitsData, fixed, initPlayerData.landingUnits, seed);
 	landingTries = 0;
-	say ("подготовка: клан " + std::to_string (initPlayerData.clan) + ", юнитов высадки " + std::to_string (initPlayerData.landingUnits.size())
-		+ "; высадка: " + landing.describe());
+	say ("подготовка: " + (clanAuto ? std::string ("клан — по карте и точке высадки") : "клан " + std::to_string (initPlayerData.clan) + " " + clanName + " (" + clanWhy + ")")
+		+ ", юнитов высадки " + std::to_string (initPlayerData.landingUnits.size()) + "; высадка: " + landing.describe());
 
 	lobby->enterLandingSelection();
 	const auto p = landing.first();
 	if (!p)
 	{
 		say ("ОШИБКА: на карте нет годной точки высадки");
-		chat (opt.name + ": no valid landing place on this map.");
+		chat ("На этой карте мне негде высадиться. / No valid landing place on this map.");
 		return;
 	}
+	chooseClan (*p);
 	say ("высадка: (" + std::to_string (p->x()) + "," + std::to_string (p->y()) + ")");
 	sendLanding (*p);
+}
+
+//------------------------------------------------------------------------------
+// Р17 (п. 86 и 158 PLAN.md): клан — тем же правилом, что у ai_headless для мозга rule (ruleChooseClan): по карте (её видно в
+// лобби до игры, как человеку) и своей точке высадки; клан врага не виден и не учитывается. Сервер узнаёт клан только из
+// initNewGame на старте партии, поэтому сменилась точка (рядом другой игрок) — клан выбирается по новой: человек тоже может
+// вернуться из высадки к выбору клана. Правило даёт только кланы 0–6 — набор высадки, посчитанный до клана, тот же.
+void cAiClient::chooseClan (const cPosition& landingPoint)
+{
+	if (!clanAuto || landingPoint == clanLanding) return;
+	const auto& prep = lobby->getLobbyPreparationData();
+	if (!prep.staticMap) return;
+	const ai::sClanChoice choice = ai::ruleChooseClan (*prep.staticMap, landingPoint);
+	const int clan = choice.clan >= 0 && choice.clan <= 6 ? choice.clan : 0; // MAXR_CLAN=0 (опыт «по месту») — The Chosen, как до Р17
+	const bool again = clanLanding.x() >= 0;
+	const bool changed = again && clan != initPlayerData.clan;
+	clanLanding = landingPoint;
+	initPlayerData.clan = clan;
+	clanName = clanNameOf (prep.clanData.get(), clan);
+	clanWhy = choice.why;
+	const std::string where = "(" + std::to_string (landingPoint.x()) + "," + std::to_string (landingPoint.y()) + "): ";
+	if (again && !changed)
+		say ("клан по итоговой точке высадки " + where + "тот же — " + std::to_string (clan) + " " + clanName);
+	else
+		say (std::string (changed ? "клан другой — по итоговой точке высадки " : "клан по карте и точке высадки ") + where + std::to_string (clan) + " "
+			+ clanName + " — " + clanWhy);
 }
 
 //------------------------------------------------------------------------------
@@ -768,6 +1024,8 @@ void cAiClient::startGameFromLobby()
 	const auto ms = [&t0]() { return std::to_string (std::chrono::duration_cast<std::chrono::milliseconds> (Clock::now() - t0).count()); };
 	Log.info ("ai_client: START_GAME received");
 	auto c = std::make_shared<cClient> (connectionManager);
+	// данные юнитов — до игроков, как на сервере (правка 46): иначе до высадки последнего игрока «OUT OF SYNC»
+	if (!savedGameSelected) c->setPreparationData (lobby->getLobbyPreparationData());
 	c->setPlayers (lobbyPlayers, lobby->getLocalPlayer().getNr());
 	if (savedGameSelected)
 	{
@@ -776,7 +1034,6 @@ void cAiClient::startGameFromLobby()
 	}
 	else
 	{
-		c->setPreparationData (lobby->getLobbyPreparationData());
 		Log.info ("ai_client: client created in " + ms() + " ms");
 		startGame (c, true, true);
 	}
@@ -825,7 +1082,11 @@ void cAiClient::startGame (std::shared_ptr<cClient> c, bool newGame, bool tapped
 		if (loser.getId() == playerId && !gameOver) finishGame ("defeated");
 	});
 
-	if (newGame) client->initNewGame (initPlayerData);
+	if (newGame)
+	{
+		chooseClan (initPlayerData.landingPosition); // точка высадки — итоговая
+		client->initNewGame (initPlayerData);
+	}
 
 	// заходы: числом — сразу; auto — проба в первом своём ходу (хост авторов AiPass не понимает)
 	if (opt.passes == "auto")
@@ -981,7 +1242,7 @@ void cAiClient::gameStep()
 	if (myTurnReady() && !saidHello)
 	{
 		saidHello = true;
-		chat (lobby->getLocalPlayer().getName() + ": good luck! (brain " + opt.brain + ")");
+		chat ("Удачи! / Good luck! " + lobby->getLocalPlayer().getName() + " - паспорт / passport: " + passportText());
 	}
 	engine->run();
 }
@@ -1004,10 +1265,19 @@ void cAiClient::finishGame (const std::string& reason)
 	j["name"] = lobby->getLocalPlayer().getName();
 	j["player"] = playerId;
 	j["brain"] = opt.brain;
+	j["aiVersion"] = ai::aiVersion (opt.brain).toJson();
 	j["host"] = opt.host + ":" + std::to_string (opt.port);
 	j["version"] = std::string (PACKAGE_VERSION " " PACKAGE_REV);
 	j["map"] = model.getMap() ? utf8::to_string (model.getMap()->getFilename()) : std::string();
-	j["clan"] = initPlayerData.clan;
+	// клан — из модели (что принял сервер; у загруженной партии — из сохранения), выбор — как решал клиент
+	const cPlayer* mePlayer = model.getPlayer (playerId);
+	const int modelClan = mePlayer != nullptr ? mePlayer->getClan() : initPlayerData.clan;
+	j["clan"] = modelClan;
+	j["clanName"] = clanNameOf (&ClanDataGlobal, modelClan);
+	if (clanWhy.empty())
+		j["clanChoice"] = {{"why", "a saved game or a reconnect: the clan comes from the game"}};
+	else
+		j["clanChoice"] = {{"clan", initPlayerData.clan}, {"why", clanWhy}, {"auto", clanAuto}};
 	j["landing"] = {{"x", landingPos.x()}, {"y", landingPos.y()}, {"state", landingState}, {"tries", landingTries}};
 	j["passes"] = passesInfo;
 	j["maxPasses"] = maxPasses;
@@ -1041,7 +1311,7 @@ void cAiClient::finishGame (const std::string& reason)
 
 	say ("партия окончена (" + reason + ") на ходу " + std::to_string (turn) + "; итоги — " + outDir);
 	if (reason == "won" || reason == "lost" || reason == "defeated")
-		chat (lobby->getLocalPlayer().getName() + ": gg");
+		chat ("gg");
 }
 
 //------------------------------------------------------------------------------
@@ -1057,7 +1327,8 @@ int cAiClient::run()
 	connectSignals();
 	waitStart = Clock::now();
 
-	say ("клиент ИИИ: мозг " + opt.brain + ", ищу хост " + opt.host + ":" + std::to_string (opt.port) + " (" PACKAGE_VERSION " " PACKAGE_REV ")");
+	say ("клиент ИИИ " + ai::aiVersion (opt.brain).name + ": мозг " + opt.brain + ", имя в лобби «" + opt.name + "», ищу хост " + opt.host + ":"
+		+ std::to_string (opt.port) + " (" PACKAGE_VERSION " " PACKAGE_REV ")");
 	while (true)
 	{
 		if (stop.load())
@@ -1148,9 +1419,18 @@ try
 	do
 	{
 		std::string outDir = opt.outDir;
-		if (outDir.empty() || !firstGame)
-			outDir = utf8::to_string (exeDir / "ai_games" / (timeStamp ("%Y-%m-%d_%H-%M-%S") + "_" + safeName (opt.name)));
 		std::error_code ec;
+		if (outDir.empty() || !firstGame)
+		{
+			// два клиента, запущенные в одну секунду с одним именем (ярлык «двух ИИИ»: оба — имя версии), — разные папки:
+			// create_directory создаёт папку, только если её ещё нет (второй берёт «_2»)
+			const auto base = exeDir / "ai_games" / (timeStamp ("%Y-%m-%d_%H-%M-%S") + "_" + safeName (opt.name));
+			std::filesystem::create_directories (base.parent_path(), ec);
+			auto dir = base;
+			for (int k = 2; !std::filesystem::create_directory (dir, ec) && k < 100; ++k)
+				dir = base.parent_path() / (base.filename().string() + "_" + std::to_string (k));
+			outDir = utf8::to_string (dir);
+		}
 		std::filesystem::create_directories (outDir, ec);
 		if (firstGame)
 		{

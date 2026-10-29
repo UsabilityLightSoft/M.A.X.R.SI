@@ -74,6 +74,9 @@ enum class eRole
 	AirTransport,// авиатранспорт: возит наземные машины и пехоту (3)
 	AirOther,    // прочие самолёты
 	Apc,         // БМП: возит пехоту и коммандос, под водой скрыта (видит только корвет)
+	// Р7 (п. 113, 117): корабли поддержки — по способностям
+	SeaSupply,   // грузовое судно: без оружия, пополняет боезапас кораблей в море (металл в трюме)
+	SeaMineLayer,// морской минный заградитель: мины у своей верфи (мина бьёт подлодку)
 	Other
 };
 constexpr int kRoleCount = static_cast<int> (eRole::Other) + 1;
@@ -84,7 +87,8 @@ inline bool isArmyRole (eRole r) { return r == eRole::Tank || r == eRole::Assaul
 // поддержка: стоит за строем и бьёт с предельной дальности
 inline bool isSupportRole (eRole r) { return r == eRole::Assault || r == eRole::Artillery || r == eRole::Missile; }
 // шаг 13, часть 2: корабль (флот)
-inline bool isNavalRole (eRole r) { return r == eRole::Corvette || r == eRole::NavalGun || r == eRole::Submarine || r == eRole::SeaTransport || r == eRole::NavalOther; }
+inline bool isNavalRole (eRole r) { return r == eRole::Corvette || r == eRole::NavalGun || r == eRole::Submarine || r == eRole::SeaTransport || r == eRole::NavalOther
+	|| r == eRole::SeaSupply || r == eRole::SeaMineLayer; }
 // шаг 13, часть 3: самолёт (авиация)
 inline bool isAirRole (eRole r) { return r == eRole::Awac || r == eRole::Bomber || r == eRole::Fighter || r == eRole::AirTransport || r == eRole::AirOther; }
 

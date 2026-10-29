@@ -167,7 +167,7 @@ void cServer::sendGuiInfoToClients (int saveGameNumber, [[maybe_unused]] int pla
 		cSavegame savegame;
 		savegame.loadGuiInfo (this, saveGameNumber);
 	}
-	catch (std::runtime_error& e)
+	catch (const std::exception& e)
 	{
 		NetLog.error ((std::string) " Server: Loading GuiInfo from savegame failed: " + e.what());
 	}
@@ -302,7 +302,10 @@ void cServer::run (const cNetMessage& message)
 		case eNetMessageType::GAMETIME_SYNC_CLIENT:
 		{
 			const auto& syncMessage = static_cast<const cNetMessageSyncClient&> (message);
-			gameTimer.handleSyncMessage (syncMessage, model.getGameTime());
+			if (gameTimer.handleSyncMessage (syncMessage, model.getGameTime()))
+			{
+				NetLog.error (" Server: player " + std::to_string (syncMessage.playerNr) + " is out of sync @" + std::to_string (syncMessage.gameTime) + ", server checksum parts @" + std::to_string (model.getGameTime()) + ":" + model.getChecksumReport());
+			}
 			break;
 		}
 		case eNetMessageType::REPORT:
