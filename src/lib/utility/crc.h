@@ -43,7 +43,9 @@
 	for (const char* i = data; i != data + dataSize; ++i)
 	{
 		checksum = checksum << 1 | checksum >> 31; // Rotate left by one.
-		checksum += *i;
+		// as signed char: the signedness of char depends on the platform (unsigned on Linux on ARM),
+		// and the bytes from 128 to 255 have to give the same checksum everywhere
+		checksum += static_cast<signed char> (*i);
 	}
 	return checksum;
 }
