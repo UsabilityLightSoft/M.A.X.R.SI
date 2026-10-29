@@ -63,7 +63,17 @@ public:
 	void setZoomFactor (float zoomFactor, bool center);
 	float getZoomFactor() const;
 
+	/**
+	 * The farthest zoom: the whole map fits into the widget on both axes.
+	 * A map smaller than the widget is centered, the empty space around it is dark.
+	 */
 	float computeMinimalZoomFactor() const;
+
+	/** Screen position of the left upper corner of the map (of tile 0, 0). */
+	cPosition getMapScreenOrigin() const;
+	/** The part of the widget showing the map (like getArea(), the end position belongs to it). */
+	cBox<cPosition> getMapScreenArea() const;
+	bool isOverMap (const cPosition& screenPosition) const;
 
 	void setMapView (std::shared_ptr<const cMapView>);
 	const cMapView& getMapView() const;
@@ -80,6 +90,7 @@ public:
 	 * The scrolling is save, which means if the offset is to large
 	 * the new offset position will be adjusted in such a way that the
 	 * displayed area will not go out of the map range.
+	 * A map smaller than the widget stays centered.
 	 *
 	 * @param offset The offset in pixels to scroll. Can be negative.
 	 */
@@ -183,6 +194,7 @@ protected:
 	//
 	// draw methods
 	//
+	void drawBackground();
 	void drawTerrain();
 	void drawGrid();
 	void drawEffects (bool bottom);
@@ -194,6 +206,7 @@ protected:
 	void drawVehicles();
 	void drawConnectors();
 	void drawPlanes();
+	void drawUnitMarks();
 
 	void drawResources();
 
@@ -214,15 +227,12 @@ protected:
 	bool shouldDrawUnit (const cUnit&, const cPosition& visitingPosition, const std::pair<cPosition, cPosition>& tileDrawingRange);
 
 	//
-	// position handling methods
-	//
-	cPosition computeMaximalPixelOffset() const;
-
-	//
 	// drawing helper methods
 	//
 	cPosition zoomSize (const cPosition& size, float zoomFactor) const;
 	cPosition getZoomedTileSize() const;
+	/** Screen distance from the left upper corner of the map to the one of the widget (negative, if the map is centered). */
+	cPosition getZoomedMapOffset() const;
 	cPosition getZoomedStartTilePixelOffset() const;
 	std::pair<cPosition, cPosition> computeTileDrawingRange() const;
 

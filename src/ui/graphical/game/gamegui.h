@@ -100,6 +100,7 @@ public:
 	void handleActivated (cApplication&, bool firstTime) override;
 	void handleDeactivated (cApplication&, bool removed) override;
 	bool wantsCentered() const override;
+	bool showsGameMap() const override { return true; }
 
 protected:
 	std::unique_ptr<cMouseCursor> makeDefaultCursor() const override;

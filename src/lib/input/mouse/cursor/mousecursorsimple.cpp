@@ -75,8 +75,25 @@ cPosition cMouseCursorSimple::getHotPoint() const
 		case eMouseCursorSimpleType::Repair:
 		case eMouseCursorSimpleType::Activate:
 			return cPosition (12, 12);
-		default:
+		case eMouseCursorSimpleType::Hand:
 			return cPosition (0, 0);
+		default:
+			break;
+	}
+	// scroll arrows: at the tip, so that the whole arrow is visible at the edge of the screen
+	const auto* surface = getSurface();
+	const int last = surface ? surface->w - 1 : 17;
+	const int lastY = surface ? surface->h - 1 : 17;
+	switch (type)
+	{
+		case eMouseCursorSimpleType::ArrowLeftDown: return cPosition (0, lastY);
+		case eMouseCursorSimpleType::ArrowDown: return cPosition (last / 2, lastY);
+		case eMouseCursorSimpleType::ArrowRightDown: return cPosition (last, lastY);
+		case eMouseCursorSimpleType::ArrowLeft: return cPosition (0, lastY / 2);
+		case eMouseCursorSimpleType::ArrowRight: return cPosition (last, lastY / 2);
+		case eMouseCursorSimpleType::ArrowUp: return cPosition (last / 2, 0);
+		case eMouseCursorSimpleType::ArrowRightUp: return cPosition (last, 0);
+		default: return cPosition (0, 0);
 	}
 }
 

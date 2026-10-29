@@ -59,8 +59,15 @@
 #include "utility/random.h"
 #include "utility/string/utf-8.h"
 
+#include <cmath>
 #include <iomanip>
 #include <sstream>
+
+namespace
+{
+	// a notch of the mouse wheel or a press of a zoom key: a twentieth of the whole zoom range
+	constexpr double wheelZoomStep = 0.05;
+} // namespace
 
 //------------------------------------------------------------------------------
 cGameGui::cGameGui (std::shared_ptr<const cStaticMap> staticMap_, std::shared_ptr<cSoundManager> soundManager_, std::shared_ptr<cAnimationTimer> animationTimer_, std::shared_ptr<const cFrameCounter> frameCounter) :
@@ -460,6 +467,13 @@ void cGameGui::restoreState (const cGameGuiState& state)
 //------------------------------------------------------------------------------
 void cGameGui::updateHudCoordinates (const cPosition& tilePosition)
 {
+	// no tile under the mouse (beside the map): no coordinates instead of "0-1-0-1"
+	if (tilePosition.x() < 0 || tilePosition.y() < 0)
+	{
+		hud->setCoordinatesText ("");
+		return;
+	}
+
 	std::stringstream coordsString;
 	coordsString << std::setw (3) << std::setfill ('0') << tilePosition.x() << "-" << std::setw (3) << std::setfill ('0') << tilePosition.y();
 	hud->setCoordinatesText (coordsString.str());
@@ -631,37 +645,31 @@ bool cGameGui::handleMouseMoved (cApplication& application, cMouse& mouse, const
 //------------------------------------------------------------------------------
 bool cGameGui::handleMouseWheelMoved (cApplication&, cMouse& mouse, const cPosition& amount) /* override */
 {
-	const auto oldZoomFactor = gameMap->getZoomFactor();
-	bool consumed = false;
-	if (amount.y() > 0)
-	{
-		hud->decreaseZoomFactor (0.05);
-		consumed = true;
-	}
-	else if (amount.y() < 0)
-	{
-		hud->increaseZoomFactor (0.05);
-		consumed = true;
-	}
+	if (amount.y() == 0) return false;
 
-	// scroll so that the zoom has been performed to center the mouse
+	const auto oldZoomFactor = gameMap->getZoomFactor();
+	const auto oldPixelOffset = gameMap->getPixelOffset();
+
+	if (amount.y() > 0)
+		hud->zoomIn (wheelZoomStep);
+	else
+		hud->zoomOut (wheelZoomStep);
+
+	// zoom to the mouse: the point of the map under the mouse stays under it
+	// (computed from the offset before the zoom: the map may have been centered or kept in its limits meanwhile)
 	const auto newZoomFactor = gameMap->getZoomFactor();
 	if (newZoomFactor != oldZoomFactor)
 	{
-		cPosition scrollOffset;
+		const cPosition mouseOffset = mouse.getPosition() - gameMap->getPosition();
+		const double mapX = oldPixelOffset.x() + mouseOffset.x() / static_cast<double> (oldZoomFactor);
+		const double mapY = oldPixelOffset.y() + mouseOffset.y() / static_cast<double> (oldZoomFactor);
+		const cPosition newPixelOffset (static_cast<int> (std::lround (mapX - mouseOffset.x() / static_cast<double> (newZoomFactor))),
+		                                static_cast<int> (std::lround (mapY - mouseOffset.y() / static_cast<double> (newZoomFactor))));
 
-		const auto oldScreenPixelX = gameMap->getSize().x() / oldZoomFactor;
-		const auto newScreenPixelX = gameMap->getSize().x() / newZoomFactor;
-		scrollOffset.x() = (int) ((oldScreenPixelX - newScreenPixelX) * (mouse.getPosition().x() - gameMap->getPosition().x()) / gameMap->getSize().x() - (oldScreenPixelX - newScreenPixelX) / 2);
-
-		const auto oldScreenPixelY = gameMap->getSize().y() / oldZoomFactor;
-		const auto newScreenPixelY = gameMap->getSize().y() / newZoomFactor;
-		scrollOffset.y() = (int) ((oldScreenPixelY - newScreenPixelY) * (mouse.getPosition().y() - gameMap->getPosition().y()) / gameMap->getSize().y() - (oldScreenPixelY - newScreenPixelY) / 2);
-
-		gameMap->scroll (scrollOffset);
+		gameMap->scroll (newPixelOffset - gameMap->getPixelOffset());
 	}
 
-	return consumed;
+	return true;
 }
 
 //------------------------------------------------------------------------------
@@ -868,6 +876,15 @@ void cGameGui::initShortcuts()
 	auto scrollUp = [this]() { gameMap->scroll (cPosition (0, -cSettings::getInstance().getScrollSpeed())); };
 	addShortcut (KeysList.keyScroll8b, scrollUp);
 	addShortcut (KeysList.keyScroll8a, scrollUp);
+
+	// zoom to the center of the map area, a step like a notch of the mouse wheel
+	auto zoomIn = [this]() { hud->zoomIn (wheelZoomStep); };
+	addShortcut (KeysList.keyZoomIna, zoomIn);
+	addShortcut (KeysList.keyZoomInb, zoomIn);
+
+	auto zoomOut = [this]() { hud->zoomOut (wheelZoomStep); };
+	addShortcut (KeysList.keyZoomOuta, zoomOut);
+	addShortcut (KeysList.keyZoomOutb, zoomOut);
 
 	addShortcut (KeysList.keyChat, [this]() {
 		hud->setChatActive (true);

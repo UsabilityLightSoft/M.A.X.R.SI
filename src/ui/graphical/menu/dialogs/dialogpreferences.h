@@ -56,6 +56,7 @@ private:
 	cLabel* languageLabel = nullptr;
 	cLabel* uiScaleLabel = nullptr;
 	cLabel* uiScaleHintLabel = nullptr;
+	cLabel* cursorSizeLabel = nullptr;
 
 	cPushButton* doneButton = nullptr;
 	cPushButton* cancelButton = nullptr;
@@ -91,6 +92,10 @@ private:
 	/** The scale (percent, 0 = automatic) of each item of uiScaleComboBox. */
 	std::vector<int> uiScaleItemPercents;
 	bool updatingUiScaleItems = false;
+	cComboBox* cursorSizeComboBox = nullptr;
+	/** The size (percent, 0 = automatic) of each item of cursorSizeComboBox. */
+	std::vector<int> cursorSizeItemPercents;
+	bool updatingCursorSizeItems = false;
 
 	std::string storedLanguage;
 
@@ -103,6 +108,7 @@ private:
 	bool storedVoicesMute;
 
 	int storedUiScale = 0;
+	int storedCursorSize = 0;
 
 	void loadValues();
 	void saveValues();
@@ -126,6 +132,11 @@ private:
 	void selectUiScaleItem (int percent);
 	/** A scale has been chosen: applied at once (Done keeps it, Cancel restores the previous one). */
 	void uiScaleChanged();
+
+	/** Fills the list of cursor sizes: the automatic one with its value for the current scale. */
+	void updateCursorSizeItems();
+	/** A cursor size has been chosen: applied at once (Done keeps it, Cancel restores the previous one). */
+	void cursorSizeChanged();
 };
 
 #endif // ui_graphical_menu_dialogs_dialogpreferencesH

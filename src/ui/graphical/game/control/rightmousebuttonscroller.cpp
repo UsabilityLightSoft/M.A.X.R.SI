@@ -168,16 +168,9 @@ void cRightMouseButtonScrollerWidget::handleLooseMouseFocus (cApplication&) /* o
 //------------------------------------------------------------------------------
 cPosition cRightMouseButtonScrollerWidget::getCursorCenter (cMouse& mouse) const
 {
-	auto position = mouse.getPosition();
-	const auto cursor = mouse.getCursor();
-	if (cursor)
-	{
-		position -= cursor->getHotPoint();
-		const auto cursorSurface = cursor->getSurface();
-		if (cursorSurface)
-		{
-			position += cPosition (cursorSurface->w / 2, cursorSurface->h / 2);
-		}
-	}
-	return position;
+	// The position of the mouse is the hot point of the cursor.
+	// (The center of the cursor image moved with each change of the cursor:
+	// from the round cursor to an arrow by (8, 9), so that scrolling to the right went down as well;
+	// and the image is drawn in the scale of the cursor, not in the scale of the picture.)
+	return mouse.getPosition();
 }

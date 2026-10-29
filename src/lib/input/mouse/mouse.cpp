@@ -22,7 +22,9 @@
 #include "SDLutility/uniquesurface.h"
 #include "events/eventmanager.h"
 #include "events/mouseevents.h"
+#include "input/mouse/cursor/cursorscaling.h"
 #include "input/mouse/cursor/mousecursorsimple.h"
+#include "input/mouse/cursor/systemcursor.h"
 #include "output/video/video.h"
 
 #include <utility>
@@ -30,25 +32,6 @@
 namespace
 {
 	constexpr std::chrono::milliseconds doubleClickTime{500};
-
-	//--------------------------------------------------------------------------
-	/**
-	 * Enlarges the cursor image by an integer factor (pixels as they are),
-	 * so that the cursor has the size of the scaled picture.
-	 */
-	UniqueSurface makeScaledCursorSurface (SDL_Surface& surface, int scale)
-	{
-		UniqueSurface converted (SDL_ConvertSurfaceFormat (&surface, SDL_PIXELFORMAT_ARGB8888, 0));
-		if (converted == nullptr || scale <= 1) return converted;
-
-		UniqueSurface scaled (SDL_CreateRGBSurfaceWithFormat (0, converted->w * scale, converted->h * scale, 32, SDL_PIXELFORMAT_ARGB8888));
-		if (scaled == nullptr) return converted;
-		// the conversion has turned the color key into transparent pixels: copy all pixels as they are
-		SDL_SetColorKey (converted.get(), SDL_FALSE, 0);
-		SDL_SetSurfaceBlendMode (converted.get(), SDL_BLENDMODE_NONE);
-		if (SDL_BlitScaled (converted.get(), nullptr, scaled.get(), nullptr) != 0) return converted;
-		return scaled;
-	}
 } // namespace
 
 //------------------------------------------------------------------------------
@@ -143,9 +126,21 @@ void cMouse::updateSdlCursor()
 	if (cursorSurface == nullptr) return;
 	auto hotPoint = cursor->getHotPoint();
 
-	const int scale = Video.getCursorScale();
+	// the image and its hot point in the size on the screen (cVideo::getCursorScale);
+	// a system, that enlarges the cursor by its pointer size itself, gets it smaller by that
+	double scale = Video.getCursorScale();
+	if (doesSystemEnlargeColorCursors()) scale /= Video.getSystemPointerScale();
 	const auto scaledSurface = makeScaledCursorSurface (*cursorSurface, scale);
-	auto newSdlCursor = scaledSurface ? SdlCursorPtrType (SDL_CreateColorCursor (scaledSurface.get(), hotPoint.x() * scale, hotPoint.y() * scale)) : SdlCursorPtrType (SDL_CreateColorCursor (cursorSurface, hotPoint.x(), hotPoint.y()));
+	SdlCursorPtrType newSdlCursor;
+	if (scaledSurface)
+	{
+		const auto scaledHotPoint = computeScaledCursorHotPoint (hotPoint, cPosition (cursorSurface->w, cursorSurface->h), cPosition (scaledSurface->w, scaledSurface->h));
+		newSdlCursor = SdlCursorPtrType (createSystemColorCursor (*scaledSurface, scaledHotPoint.x(), scaledHotPoint.y()));
+	}
+	if (newSdlCursor == nullptr)
+	{
+		newSdlCursor = SdlCursorPtrType (createSystemColorCursor (*cursorSurface, hotPoint.x(), hotPoint.y()));
+	}
 
 	SDL_SetCursor (newSdlCursor.get());
 

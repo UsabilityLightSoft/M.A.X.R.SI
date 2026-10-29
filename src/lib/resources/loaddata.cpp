@@ -1597,7 +1597,7 @@ void cVoiceData::load (const std::filesystem::path& directory)
 //------------------------------------------------------------------------------
 void cOtherData::loadWayPoints()
 {
-	for (int i = 0; i < 60; i++)
+	for (int i = 0; i < 64; i++)
 	{
 		WayPointPfeile[0][i] = CreatePfeil (26, 11, 51, 36, 14, 48, PFEIL_COLOR, 64 - i);
 		WayPointPfeile[1][i] = CreatePfeil (14, 14, 49, 14, 31, 49, PFEIL_COLOR, 64 - i);

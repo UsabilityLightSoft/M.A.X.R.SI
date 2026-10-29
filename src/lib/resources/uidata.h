@@ -280,8 +280,9 @@ public:
 	void loadWayPoints();
 
 public:
-	UniqueSurface WayPointPfeile[8][60];
-	UniqueSurface WayPointPfeileSpecial[8][60];
+	// index: 64 - tile size; for every tile size of the map zoom (64 down to 1 pixel)
+	UniqueSurface WayPointPfeile[8][64];
+	UniqueSurface WayPointPfeileSpecial[8][64];
 };
 
 extern cGraphicsData GraphicsData;

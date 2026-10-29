@@ -22,6 +22,7 @@
 #include "SDLutility/tosdl.h"
 #include "SDLutility/uniquesurface.h"
 #include "input/keyboard/keyboard.h"
+#include "input/mouse/cursor/systemcursor.h"
 #include "output/video/unifonts.h"
 #include "resources/pcx.h"
 #include "resources/uidata.h"
@@ -64,6 +65,11 @@ namespace
 	constexpr double autoUiScaleTolerance = 0.9;
 	/** The scales of the user interface are multiples of this step. */
 	constexpr double uiScaleStep = 0.5;
+	/** The mouse cursor in the menus is this part of the scale of the user interface (but at least 1, see computeCursorScale). */
+	constexpr double cursorScalePerUiScale = 2. / 3.;
+	/** The cursor is not made smaller or bigger than this (pixels of the window per pixel of the cursor image). */
+	constexpr double minimalCursorScale = 0.5;
+	constexpr double maximalCursorScale = 16.;
 	/** The screen buffer is recreated for a new window size not more often than this (milliseconds). */
 	constexpr Uint32 pictureSizeUpdateInterval = 150;
 	/** The default size of a window that is not maximized is a multiple of this size. */
@@ -226,6 +232,40 @@ double cVideo::getAutoUiScaleFactor() const
 }
 
 //------------------------------------------------------------------------------
+void cVideo::setCursorSize (int percent)
+{
+	cursorSize = std::max (0, percent);
+	updateCursorScale();
+}
+
+//------------------------------------------------------------------------------
+int cVideo::getAutoCursorSize() const
+{
+	return computeAutoCursorSize (uiScaleFactor, systemPointerScale);
+}
+
+//------------------------------------------------------------------------------
+void cVideo::setCursorScaleContext (eCursorScaleContext context)
+{
+	if (cursorScaleContext == context) return;
+	cursorScaleContext = context;
+	updateCursorScale();
+}
+
+//------------------------------------------------------------------------------
+void cVideo::updateCursorScale()
+{
+	// the pointer size may have been changed in the system meanwhile
+	systemPointerScale = readSystemPointerScale();
+	const double newCursorScale = computeCursorScale (uiScaleFactor, systemPointerScale, cursorScaleContext, cursorSize);
+	if (std::abs (newCursorScale - cursorScale) > 1e-9)
+	{
+		cursorScale = newCursorScale;
+		cursorScaleChanged();
+	}
+}
+
+//------------------------------------------------------------------------------
 cPosition cVideo::getOutputSize() const
 {
 	int width = 0;
@@ -271,6 +311,9 @@ bool cVideo::applyPictureSize (bool force)
 	const auto displayScale = getDisplayScale();
 	uiScaleFactor = computeUiScale (uiScale, outputSize, displayScale);
 	const auto size = computePictureSize (outputSize, uiScaleFactor);
+
+	// the cursor follows the scale of the user interface at once (also when the picture keeps its size)
+	updateCursorScale();
 
 	if (!force && buffer != nullptr && buffer->w == size.x() && buffer->h == size.y())
 	{
@@ -442,6 +485,10 @@ void cVideo::handleWindowEvent (const SDL_WindowEvent& event)
 			pictureSizeOutdated = true;
 			break;
 #endif
+		case SDL_WINDOWEVENT_FOCUS_GAINED:
+			// the pointer size of the system may have been changed in its settings
+			updateCursorScale();
+			break;
 		default:
 			break;
 	}
@@ -536,13 +583,6 @@ void cVideo::updatePresentation()
 		++presentationVersion;
 	}
 	presentation = next;
-
-	const int newCursorScale = std::max (1, static_cast<int> (std::lround (scaling.scale * windowWidth / outputWidth)));
-	if (newCursorScale != cursorScale)
-	{
-		cursorScale = newCursorScale;
-		cursorScaleChanged();
-	}
 }
 
 //------------------------------------------------------------------------------
@@ -1145,12 +1185,55 @@ bool isUiScaleFitting (int uiScalePercent, const cPosition& outputSize)
 	return computeUiScale (uiScalePercent, outputSize, 1.) == scale || scale <= 1.;
 }
 
+namespace
+{
+	//--------------------------------------------------------------------------
+	/** The automatic scale of the cursor in the menus: like the mouse pointer of the system. */
+	double computeAutoMenuCursorScale (double uiScale, double systemPointerScale)
+	{
+		return std::max (1., uiScale * cursorScalePerUiScale) * systemPointerScale;
+	}
+
+	//--------------------------------------------------------------------------
+	/** The automatic scale of the cursor on the map: like in the menus, but not bigger than the pictures of the game. */
+	double computeAutoMapCursorScale (double uiScale, double systemPointerScale)
+	{
+		return std::min (computeAutoMenuCursorScale (uiScale, systemPointerScale), uiScale);
+	}
+} // namespace
+
+//------------------------------------------------------------------------------
+double computeCursorScale (double uiScale, double systemPointerScale, eCursorScaleContext context, int cursorSizePercent)
+{
+	if (!(uiScale > 0.)) uiScale = 1.; // unknown (or not a number)
+	if (!(systemPointerScale >= 1.)) systemPointerScale = 1.;
+
+	const double menuScale = computeAutoMenuCursorScale (uiScale, systemPointerScale);
+	const double mapScale = computeAutoMapCursorScale (uiScale, systemPointerScale);
+	double scale = context == eCursorScaleContext::Map ? mapScale : menuScale;
+	if (cursorSizePercent > 0)
+	{
+		const double chosenMapScale = uiScale * cursorSizePercent / 100.;
+		scale = context == eCursorScaleContext::Map ? chosenMapScale : chosenMapScale * menuScale / mapScale;
+	}
+	return std::clamp (scale, minimalCursorScale, maximalCursorScale);
+}
+
+//------------------------------------------------------------------------------
+int computeAutoCursorSize (double uiScale, double systemPointerScale)
+{
+	if (!(uiScale > 0.)) uiScale = 1.;
+	if (!(systemPointerScale >= 1.)) systemPointerScale = 1.;
+	return static_cast<int> (std::lround (computeAutoMapCursorScale (uiScale, systemPointerScale) / uiScale * 100.));
+}
+
 //------------------------------------------------------------------------------
 void applySettings (cVideo& video, const sVideoSettings& videoSettings)
 {
 	// the size of the game picture follows the window and the scale of the user interface
 	// (videoSettings.resolution is not used any more)
 	video.setUiScale (videoSettings.uiScale);
+	video.setCursorSize (videoSettings.cursorSize);
 	video.setColDepth (videoSettings.colourDepth);
 	video.setWindowMode (videoSettings.windowMode);
 	video.setDisplayIndex (videoSettings.displayIndex);
