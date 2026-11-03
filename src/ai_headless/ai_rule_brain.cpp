@@ -1764,6 +1764,12 @@ std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 		eco_.update (model, *player, econ.metalMaxProd, turn);
 		// Р7 (п. 104): умный геолог — центр базы, зона врага, жилы
 		survey_.update (model, *player, world_, defense_.baseCenter(), turn);
+		// И1: бульдозер — память обломков, сверка расчистки, нужды (до оперативки: производство и ремонтники за металлом)
+		if (bulldozerOn())
+		{
+			const cMapView view (model.getMap(), sharedPlayerOf (model, playerId));
+			bulldozers_.update (model, *player, view, world_, roles_, econ.sb, defense_.baseCenter(), comp_.armyCount(), turn);
+		}
 		// Р22: машины с путём из прошлых ходов — пересмотр до решений хода (отпущенные решаются как свободные)
 		reviewOrders (playerId, model);
 	}
@@ -1837,10 +1843,18 @@ std::vector<cOrder> cRuleBrain::decideTurn (int playerId, const cModel& model)
 	// в память намерений (что и зачем машине велено — для пересмотра в следующем ходу)
 	review_.finish (orders, playerId);
 	review_.note (model, orders, world_.turn(), 1);
+	// И1: стройка на расчищенной клетке, ремонт и перезарядка металлом бульдозера — в сводку
+	if (bulldozerOn())
+		if (const cPlayer* player = model.getPlayer (playerId); player != nullptr && !player->isDefeated)
+		{
+			bulldozers_.noteOrders (model, *player, orders);
+			bulldozers_.noteSummary();
+		}
 	// шаг 11: второй заход — когда есть чем стрелять: после движения и выстрелов этого захода
 	// могут найтись цели, которые оставшиеся выстрелы убьют наверняка, и обнаруженные диверсанты
 	wantPass_ = !minesToggled_.empty() || navy_.wantsPass() // шаг 13: минёр включил закладку — выключить в следующем заходе; флот — выгрузка
-		|| air_.wantsPass() || commando_.wantsPass();          // шаг 13, ч. 3: второй выстрел, отход, налёт; коммандос подошёл — действовать
+		|| air_.wantsPass() || commando_.wantsPass()           // шаг 13, ч. 3: второй выстрел, отход, налёт; коммандос подошёл — действовать
+		|| (bulldozerOn() && bulldozers_.wantsPass());         // И1: бульдозер доехал — расчистить или отдать металл
 	if (const cPlayer* player = model.getPlayer (playerId); player != nullptr && !player->isDefeated)
 		for (const auto& v : player->getVehicles())
 			if (v->getStaticUnitData().canAttack > 0 && v->data.getShotsMax() > 0 && !v->isDisabled() && !v->isUnitLoaded())
@@ -1868,6 +1882,7 @@ std::vector<nlohmann::json> cRuleBrain::takeJournalEvents()
 	for (auto& e : survey_.takeEvents()) events.push_back (std::move (e)); // Р7: геолог
 	for (auto& e : tactics_.takeEvents()) events.push_back (std::move (e)); // Р17: тактика заходов
 	for (auto& e : review_.takeEvents()) events.push_back (std::move (e)); // Р22: пересмотр приказов
+	for (auto& e : bulldozers_.takeEvents()) events.push_back (std::move (e)); // И1: бульдозер
 	for (auto& e : extraEvents_) events.push_back (std::move (e));
 	extraEvents_.clear();
 	return events;
@@ -2104,6 +2119,13 @@ std::vector<cOrder> cRuleBrain::decidePass (int playerId, const cModel& model, i
 {
 	auto out = decidePassOrders (playerId, model, pass);
 	review_.note (model, out, world_.turn(), pass); // Р22: приказы захода — в память намерений
+	// И1: ремонт и перезарядка металлом бульдозера в заходе — в сводку
+	if (bulldozerOn())
+		if (const cPlayer* player = model.getPlayer (playerId); player != nullptr && !player->isDefeated)
+		{
+			bulldozers_.noteOrders (model, *player, out);
+			bulldozers_.noteSummary();
+		}
 	return out;
 }
 
@@ -2134,7 +2156,10 @@ std::vector<cOrder> cRuleBrain::decidePassOrders (int playerId, const cModel& mo
 	// шаг 13, часть 3: коммандос подошёл — выключить или захватить; авиация — налёт, второй выстрел, отход, высадка
 	for (auto& o : commando_.planPass (model, *player, view, world_, pass)) out.push_back (std::move (o));
 	for (auto& o : air_.planPass (model, *player, view, world_, roles_, commando_, pass)) out.push_back (std::move (o));
-	const bool modulesWant = air_.wantsPass() || commando_.wantsPass();
+	// И1: бульдозер доехал — расчистить обломки или отдать металл; получатели — ремонт и перезарядка соседей
+	if (bulldozerOn())
+		for (auto& o : bulldozers_.planPass (model, *player, view, world_, roles_, findMainSubBase (*player), pass)) out.push_back (std::move (o));
+	const bool modulesWant = air_.wantsPass() || commando_.wantsPass() || (bulldozerOn() && bulldozers_.wantsPass());
 	std::vector<sEnemy> enemies;
 	collectVisibleEnemies (*player, model, view, enemies);
 
@@ -3165,6 +3190,8 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 		if (stored >= cap) continue;
 		if (const cBuilding* src = refillSource (*player, main, v))
 			refills.push_back ({&v, src, cap - stored});
+		else if (stored * 3 < cap && bulldozerOn() && (vr == eRole::Repair || vr == eRole::Supply) && bulldozers_.feedsNear (v))
+			bulldozers_.noteRepairerHeld(); // И1: бульдозер с металлом рядом — не ехать на базу, металл подвезёт он
 		else if (stored * 3 < cap)
 		{
 			// Р24: ремонтник, снабженец, минёр — прежний слой (Builder — только стройщикам)
@@ -3377,8 +3404,26 @@ void cRuleBrain::operationalDecisions (int playerId, const cModel& model, std::v
 			}
 			return sID();
 		}
+		// И1 (в): бульдозер малой фабрике — в журнал, в счёт состава
+		auto orderBulldozer = [&] (const char* why) {
+			comp_.noteQueued (roles_, bulldozers_.type());
+			bulldozers_.noteQueued();
+			extraEvents_.push_back ({{"event", "bulldozer"}, {"level", "operational"}, {"what", "build bulldozer"}, {"why", why},
+				{"have", comp_.countType (bulldozers_.type()) - 1}, {"wantedBase", bulldozers_.counts().wantedBase},
+				{"wantedField", bulldozers_.counts().wantedField}, {"baseRubble", bulldozers_.counts().baseRubble},
+				{"onResource", bulldozers_.counts().onResource}, {"fieldMetal", bulldozers_.counts().fieldMetal}});
+			return bulldozers_.type();
+		};
+		// И1 (в): обломки на месте шахты у базы, а бульдозера нет — раньше прочих нужд малой фабрики (ПВО при угрозе с воздуха — раньше)
+		if (kind == "SmallGroundVehicle" && bulldozerOn() && bulldozers_.type() != sID() && comp_.count (eRole::AntiAir) >= comp_.needs().antiAir
+			&& bulldozers_.urgent (comp_.countType (bulldozers_.type())))
+			return orderBulldozer ("rubble on a mine site");
 		const sID t = kind == "SmallGroundVehicle" ? comp_.nextSmall (roles_, kind) : comp_.nextBig (roles_, kind);
 		if (t != sID()) comp_.noteQueued (roles_, t);
+		// И1 (в): малой фабрике больше нечего строить, а бульдозер нужен (обломки у базы, металл поля у армии)
+		if (t == sID() && kind == "SmallGroundVehicle" && bulldozerOn() && bulldozers_.type() != sID()
+			&& bulldozers_.toBuild (comp_.countType (bulldozers_.type())) > 0)
+			return orderBulldozer ("small factory has nothing else to build");
 		return t;
 	};
 	auto listOf = [] (const cBuilding& b) {
@@ -4413,6 +4458,11 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 		return true;
 	};
 
+	// И1: бульдозеры — расчистка у базы, металл с поля боя ремонтнику и грузовику, у хвоста армии (ai_bulldozer); их клетки — в
+	// escortReserved раньше ремонтников и грузовиков, приказы оперативки (отогнан с площадки) — не перебиваются
+	if (bulldozerOn())
+		bulldozers_.plan (model, *player, view, world_, roles_, findMainSubBase (*player), armyRear, armyOut, escortReserved, out);
+
 	for (const auto& vehicle : player->getVehicles())
 	{
 		if (!isIdle (*vehicle, review_)) continue;
@@ -4420,8 +4470,9 @@ void cRuleBrain::microDecisions (int playerId, const cModel& model, std::vector<
 
 		const auto& sd = vehicle->getStaticUnitData();
 		const eRole role = roles_.roleOf (*vehicle);
-		// шаг 13, часть 3: самолёты и коммандос — приказы дали свои модули (ai_air, ai_commando)
+		// шаг 13, часть 3: самолёты и коммандос — приказы дали свои модули (ai_air, ai_commando); И1 — бульдозеры (ai_bulldozer)
 		if (air_.claimed (vehicle->getId()) || commando_.claimed (vehicle->getId()) || isAirRole (role)) continue;
+		if (bulldozerOn() && bulldozers_.claimed (vehicle->getId())) continue;
 
 		// --- боевой юнит ---
 		if (isCombatUnit (*vehicle))

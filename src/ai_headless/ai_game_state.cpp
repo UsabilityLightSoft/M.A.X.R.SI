@@ -4,6 +4,8 @@
 
 #include "ai_game_state.h"
 
+#include "ai_bulldozer.h"
+
 #include "game/data/base/base.h"
 #include "game/data/map/map.h"
 #include "game/data/miningresource.h"
@@ -354,6 +356,18 @@ nlohmann::json buildGameStateDigest (const cModel& model, int viewpointPlayerId)
 		if (!b->isRubble() && (viewpoint == nullptr || viewpoint->canSeeUnit (*b, *map))) buildings.push_back (buildingJson (*b, model));
 	j["units"] = std::move (units);
 	j["buildings"] = std::move (buildings);
+
+	// И1: видимые обломки (ничьи здания-обломки, на них не строят): клетка — левый верх, металл при расчистке бульдозером,
+	// 2×2 — big. MAXR_BULLDOZER=0 — раздела нет (digest как до И1)
+	if (bulldozerOn())
+	{
+		nlohmann::json rubble = nlohmann::json::array();
+		for (const auto& b : model.getNeutralBuildings())
+			if (b->isRubble() && (viewpoint == nullptr || viewpoint->canSeeUnit (*b, *map)))
+				rubble.push_back ({{"x", b->getPosition().x()}, {"y", b->getPosition().y()}, {"value", b->getRubbleValue()},
+					{"big", b->getIsBig()}});
+		j["rubble"] = std::move (rubble);
+	}
 
 	// --- разведанные ресурсы viewpoint-игрока ---
 	if (viewpoint)

@@ -31,6 +31,7 @@ constexpr sExperimentKnob kExperimentKnobs[] = {
 	{"MAXR_BUILD_GUARD", false}, // Р24 (п. 165): опыт «позвать защитника» стройщику под лёгкой угрозой
 	{"MAXR_BUILD_LIGHT", false}, // Р24 (п. 165): стройщик под лёгкой угрозой (ходов врага; 0 — выкл.)
 	{"MAXR_BUILD_TURBO", false}, // Р24 (п. 165): опыт «турбо-стройка» под лёгкой угрозой
+	{"MAXR_BULLDOZER", true}, // И1: бульдозер (0 — как до И1)
 	{"MAXR_CMD_TRAIN", false},
 	{"MAXR_CMD_TRAIN_RANK", false},
 	{"MAXR_CMD_TURN", false},
