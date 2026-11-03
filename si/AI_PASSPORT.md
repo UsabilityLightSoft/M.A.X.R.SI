@@ -1,4 +1,4 @@
-# AI player passport — SI-R5.2-T (M.A.X.R.SI)
+# AI player passport — SI-R5.3-T (M.A.X.R.SI)
 
 *Русский текст — ниже.*
 
@@ -15,15 +15,15 @@ greeting in the game chat, in the journal (event `aiVersion`) and in `metrics.js
 | Advisor (if any) | `+L<model>` (a local model, LM Studio) / `+C<model>` (online): `+Lgemma4-12b` |
 | `~x` at the end | experiment switches of the rules are set (`MAXR_NAVY=0` and others): not the version of this passport; the journal lists them |
 
-Examples: now `SI-R5.2-T`; with the advisor — `SI-R5.2-T+Lgemma4-12b`; the frozen champions — `SI-R1` … `SI-R5`; a
+Examples: now `SI-R5.3-T`; with the advisor — `SI-R5.3-T+Lgemma4-12b`; the frozen champions — `SI-R1` … `SI-R5`; a
 future tactics network after imitation — `SI-H6.0-I40k`.
 
 | | |
 |---|---|
-| Version | **SI-R5.2-T** — brain `rule`: generation 5 (champion `base5`, frozen 28.10.2026), build 2 — the surveyor explores near the map centre too, the builder does not leave its building because of a light threat (28.10.2026); build 1 — re-examines all its orders every turn; as strong as `SI-R5`; tuned by tournaments |
+| Version | **SI-R5.3-T** — brain `rule`: generation 5 (champion `base5`, frozen 28.10.2026), build 3 — a bulldozer clears the rubble that blocks building sites and gathers metal from the battlefield for repairs and reloads (03.11.2026); build 2 — the surveyor explores near the map centre too, the builder does not leave its building because of a light threat (28.10.2026); build 1 — re-examines all its orders every turn; as strong as `SI-R5.2-T`; tuned by tournaments |
 | Made of | hand-written rules only: strategy → operations → micro; deterministic |
 | Neural networks | none yet (planned: own small tactics and strategy nets trained on AI games) |
-| LLM | not used by default; optional advisor brain `llm` (a local model via an OpenAI-compatible API) — `SI-R5.2-T+L<model>` |
+| LLM | not used by default; optional advisor brain `llm` (a local model via an OpenAI-compatible API) — `SI-R5.3-T+L<model>` |
 | Learned from | nothing learned; rules tuned by AI-vs-AI tournaments; 0 human games so far |
 | Plays | through fog of war, by the same rules as a human; "Turn based" mode only; joins a normal network game as a player (`maxr_ai_client`); in the lobby it says in the chat why it is not ready and what to press |
 | Tested on | 5 remake maps (Mushroom, Lava, Delta, Donuts, Three Isles), 5 generated maps up to 250×250 (`Gen_*`) and 2 generated sea maps with bases at the coast (`Gen_Coast`, `Gen_Gulf`) |
@@ -54,15 +54,23 @@ the centre of a large map explores in rings around the base instead of standing 
 surveyor leaves the metal to an early army). A builder does not leave its building because of a threat that cannot
 kill it within two enemy turns (in a saved game of a human the big factory is built from turn 13 instead of running
 away from one scout). Against `SI-R5` — D 0.516 in the full tournament (0.515 by material), 0.497 on the large maps,
-0.629 with the landings near the map centre: not weaker than `SI-R5.1-T`. In the game of this build: the map zoom goes
+0.629 with the landings near the map centre: not weaker than `SI-R5.1-T`. **New in build 5.3:** a bulldozer of the base
+clears the rubble that blocks a building site — a mine on a found resource at once (before the other needs of a small
+factory, besides anti-air) — and, in a long fight, gathers metal from the battlefield: to a hungry repairman or an ammo
+truck nearby (they repair and reload neighbours with it) or to the base depot; a small factory builds 1–3 bulldozers
+when it has nothing else to do. Against `SI-R5` — D 0.522 in the full tournament (0.520 by material, ±0.017): not weaker
+than `SI-R5.2-T` (0.516). With the experience off (`MAXR_BULLDOZER=0`) the games are byte for byte the same as without it
+(10/10 control games against the frozen etalons). In the game of this build: the map zoom goes
 out until the whole map is on the screen; the cursor follows the interface scale and is about one cell in a game,
 Windows no longer enlarges it by its pointer size, "Settings" → "Cursor" sets its size (Auto, 50–200%); the ready mark
 in the lobby is clicked in a cell around it; on 23 maps (`Gen_*` and the 16 maps 112 and 250) nothing can be built only
-on single bushes and wrecks, equally at both bases; fixes 10b, 15b and 50.
+on single bushes and wrecks, equally at both bases; fixes 10b, 15b, 50 and 51.
 
 **Cannot yet:** simultaneous turns.
 
-**Engine of this build:** fixes 01–50 (01–12, 15 and 16 are also offered upstream). Recent: 50 — the same checksum
+**Engine of this build:** fixes 01–51 (01–12, 15 and 16 are also offered upstream). Recent: 51 — the checksum of a map
+from 129 to 255 cells covers all its cells on every platform (the size bytes of the header were read as signed `char`:
+on x86 a 250×250 map was summed over 108 bytes of 187 500); 50 — the same checksum
 of the bytes from 128 on every platform (Linux on ARM has an unsigned `char` and went out of sync with the other
 platforms at once); 49 — the ready mark in the lobby is clicked in a cell around it; 48 — the hot spots of the attack,
 steal and disable cursors in their centre, of the scroll arrows at their tip; 47 — the map zoom out to the whole map;
@@ -95,6 +103,7 @@ same best score; a stolen vehicle is noticed at the next turn of its owner; disa
 | `SI-R5` = `SI-R5.0-T` | — | `base5` | 28.10.2026 | against `SI-R4`: D = 0.738 on 10 maps, 0.713 with the 2 sea maps by the game verdict; by material — 0.678 and 0.649; mostly from the clan choice (`SI-R4` does not choose a clan) |
 | `SI-R5.1-T` | — | `rule` | — | against `SI-R5`: D = 0.510 in the full tournament, 0.482 and 0.516 on the large maps — equal; re-examines its orders every turn |
 | `SI-R5.2-T` | — | `rule` | — | against `SI-R5`: D = 0.516 in the full tournament (0.515 by material), 0.497 on the large maps, 0.629 with the landings near the map centre — not weaker than `SI-R5.1-T`; the surveyor explores near the map centre, the builder keeps building under a light threat |
+| `SI-R5.3-T` | — | `rule` | — | against `SI-R5`: D = 0.522 in the full tournament (0.520 by material) — not weaker than `SI-R5.2-T`; a bulldozer clears rubble from building sites and brings metal from the battlefield for repairs and reloads |
 
 D is the share of strength in a tournament on both sides of each map (0.5 — equal; ≥ 0.53 — stronger). `SI-R3` builds
 no eco-spheres, so against it the verdict by points is too generous; the verdict by material (as before generation 4) is
@@ -102,7 +111,7 @@ the strict measure.
 
 ---
 
-# Паспорт ИИИ — SI-R5.2-T (M.A.X.R.SI)
+# Паспорт ИИИ — SI-R5.3-T (M.A.X.R.SI)
 
 ИИИ (ИИ Игрока) носит **говорящее имя**: `SI-<тип><поколение>.<сборка>-<обучение>[+<советник>]`, латиницей (лобби
 игры, имена файлов, GitHub). Поколение N — N-й «чемпион», замороженная версия, которая обыграла прежнего чемпиона в
@@ -117,15 +126,15 @@ the strict measure.
 | Советник (если есть) | `+L<модель>` (модель на ПК, LM Studio) / `+C<модель>` (онлайн): `+Lgemma4-12b` |
 | `~x` в конце | заданы выключатели опытов правил (`MAXR_NAVY=0` и другие): это не версия из паспорта; какие — в журнале |
 
-Примеры: сейчас `SI-R5.2-T`; с советником — `SI-R5.2-T+Lgemma4-12b`; замороженные чемпионы — `SI-R1` … `SI-R5`; будущая
+Примеры: сейчас `SI-R5.3-T`; с советником — `SI-R5.3-T+Lgemma4-12b`; замороженные чемпионы — `SI-R1` … `SI-R5`; будущая
 сеть-тактик после подражания — `SI-H6.0-I40k`.
 
 | | |
 |---|---|
-| Версия | **SI-R5.2-T** — мозг `rule`: поколение 5 (чемпион `base5`, заморожен 28.10.2026), сборка 2 — геолог разведывает и у центра карты, стройщик не бросает стройку из-за лёгкой угрозы (28.10.2026); сборка 1 — пересматривает приказы каждый ход; по силе — как `SI-R5`; настроен турнирами |
+| Версия | **SI-R5.3-T** — мозг `rule`: поколение 5 (чемпион `base5`, заморожен 28.10.2026), сборка 3 — бульдозер расчищает обломки, что мешают стройке, и собирает металл с поля боя — на ремонт и перезарядку (03.11.2026); сборка 2 — геолог разведывает и у центра карты, стройщик не бросает стройку из-за лёгкой угрозы (28.10.2026); сборка 1 — пересматривает приказы каждый ход; по силе — как `SI-R5.2-T`; настроен турнирами |
 | Из чего | только правила, написанные вручную: стратегия → операции → микро; детерминирован |
 | Нейросети | пока нет (в плане — свои маленькие сети тактики и стратегии, обученные на партиях ИИИ) |
-| LLM | по умолчанию нет; по желанию — мозг-советник `llm` (локальная модель через API, совместимый с OpenAI) — `SI-R5.2-T+L<модель>` |
+| LLM | по умолчанию нет; по желанию — мозг-советник `llm` (локальная модель через API, совместимый с OpenAI) — `SI-R5.3-T+L<модель>` |
 | На чём учился | ничему не учился; правила настроены турнирами ИИИ против ИИИ; партий с человеком — 0 |
 | Как играет | сквозь туман войны, по тем же правилам, что человек; только режим «По очереди»; входит в обычную сетевую игру как игрок (`maxr_ai_client`); в лобби говорит в чат, почему не готов и что нажать |
 | Где проверен | 5 карт ремейка (Mushroom, Lava, Delta, Donuts, Three Isles), 5 сгенерированных карт до 250×250 (`Gen_*`) и 2 сгенерированные морские карты с базами у берега (`Gen_Coast`, `Gen_Gulf`) |
@@ -154,15 +163,23 @@ the strict measure.
 вместо 1.3); на тесной карте при враге совсем рядом — как раньше (там стоящий геолог оставляет металл ранней армии).
 Стройщик не бросает стройку из-за угрозы, которая не убьёт его за два хода врага (в сохранённой партии человека большая
 фабрика строится с 13-го хода, а не стройщик уходит от одного скаута). Против `SI-R5` — D 0.516 в полном турнире (0.515 по
-материалу), 0.497 на больших картах, 0.629 при высадке у центра карты: не слабее `SI-R5.1-T`. В игре этой сборки: масштаб
+материалу), 0.497 на больших картах, 0.629 при высадке у центра карты: не слабее `SI-R5.1-T`. **Новое в сборке 5.3:**
+бульдозер у базы расчищает обломки, что мешают стройке, — шахту на найденном ресурсе сразу (раньше прочих нужд малой
+фабрики, кроме ПВО) — а в затяжном бою собирает металл с поля боя: голодному ремонтнику или грузовику боеприпасов рядом
+(те чинят и перезаряжают соседей этим металлом) или в склад базы; малая фабрика строит 1–3 бульдозера, когда ей больше
+нечего строить. Против `SI-R5` — D 0.522 в полном турнире (0.520 по материалу, ±0.017): не слабее `SI-R5.2-T` (0.516).
+С выключенным опытом (`MAXR_BULLDOZER=0`) партии побайтно как без него (контроль 10/10 против замороженных эталонов).
+В игре этой сборки: масштаб
 карты — до «вся карта на экране»; курсор следует масштабу интерфейса и в партии — около клетки, Windows больше не
 увеличивает его по «Размеру указателя», размер — «Настройки» → «Курсор» («Авто», 50–200 %); точка готовности в лобби
 нажимается ячейкой вокруг неё; на 23 картах (`Gen_*` и 16 карт 112 и 250) строить нельзя только на одиночных кустах и
-обломках, поровну у обеих баз; правки 10b, 15b и 50.
+обломках, поровну у обеих баз; правки 10b, 15b, 50 и 51.
 
 **Пока не умеет:** одновременные ходы.
 
-**Движок этой сборки:** правки 01–50 (01–12, 15 и 16 предложены и авторам). Последние: 50 — сумма байт от 128
+**Движок этой сборки:** правки 01–51 (01–12, 15 и 16 предложены и авторам). Последние: 51 — сумма карты от 129 до 255
+клеток — по всем её клеткам на всех платформах (байты размера в заголовке читались знаковым `char`: на x86 карта 250×250
+суммировалась по 108 байтам из 187 500); 50 — сумма байт от 128
 одинакова на всех платформах (на Linux ARM `char` беззнаковый, и партия с другой платформой расходилась сразу); 49 — точка
 готовности в лобби нажимается ячейкой вокруг неё; 48 — горячие точки курсоров прицела, кражи, отключения — в центре,
 стрелок прокрутки — на острие; 47 — масштаб карты до «вся карта на экране»; 10b, 15b — правки 10 и 15 доработаны по
@@ -190,6 +207,8 @@ the strict measure.
 материалу; прирост — в основном от выбора клана: `SI-R4` клан не выбирает) → `SI-R5.1-T` (`rule`, 28.10.2026: пересмотр
 приказов каждый ход; против пятого D = 0.510 в полном турнире, 0.482 и 0.516 на больших картах — на равных) →
 `SI-R5.2-T` (`rule`, 28.10.2026: геолог разведывает и у центра карты, стройщик не бросает стройку из-за лёгкой угрозы;
-против пятого D = 0.516 в полном турнире, 0.497 на больших картах, 0.629 при высадке у центра). D — доля
+против пятого D = 0.516 в полном турнире, 0.497 на больших картах, 0.629 при высадке у центра) → `SI-R5.3-T` (`rule`,
+03.11.2026: бульдозер расчищает обломки под стройку и везёт металл с поля боя на ремонт и перезарядку; против пятого
+D = 0.522 в полном турнире, 0.520 по материалу). D — доля
 силы в турнире за обе стороны каждой карты (0.5 — поровну; от 0.53 — сильнее). `SI-R3` эко-сфер не строит, поэтому
 против него вердикт по очкам щедрее; строгое мерило — вердикт по материалу, как до поколения 4.

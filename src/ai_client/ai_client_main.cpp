@@ -22,7 +22,7 @@
 // в режиме «Turn based». Хост — окно игры («TCP/IP Host») или выделенный сервер.
 // Клан мозги rule и llm выбирают сами — тем же правилом, что ai_headless (ruleChooseClan: по карте и своей точке
 // высадки; Р17, п. 86 и 158 PLAN.md), base и base2 — The Chosen, как прежде; --clan задаёт клан вручную.
-// Имя в лобби — имя версии ИИИ (ai_version.h: rule — SI-R5.2-T), в чате — приветствие и где паспорт.
+// Имя в лобби — имя версии ИИИ (ai_version.h: rule — SI-R5.3-T), в чате — приветствие и где паспорт.
 // Ход — в несколько заходов (шаг 11), если хост их понимает (проба в первом ходу), иначе один.
 // Пишет в каталог партии: journal.jsonl, digest/, metrics.json, metrics_turns.jsonl (как
 // ai_headless), journal_human.jsonl — действия других игроков теми же приказами, снимки
@@ -106,7 +106,7 @@ struct sOptions
 	std::string host = "127.0.0.1";
 	int port = DEFAULTPORT;
 	std::string brain = "rule";        // rule | base2 | base | llm
-	std::string name;                  // пусто — имя версии ИИИ (ai_version.h): SI-R5.2-T, SI-R2, …
+	std::string name;                  // пусто — имя версии ИИИ (ai_version.h): SI-R5.3-T, SI-R2, …
 	int clan = kClanAuto;              // kClanAuto — по карте и высадке; kClanRandom — случайный; 0..7 — этот
 	std::string passes = "auto";       // auto — проба в первом ходу; 1..50 — как MAXR_PASSES
 	std::string outDir;                // пусто — <папка exe>/ai_games/<дата-время>_<имя>
@@ -128,7 +128,7 @@ void printUsage()
 		"  --host <ip>        адрес хоста (по умолчанию 127.0.0.1)\n"
 		"  --port <n>         порт (58600)\n"
 		"  --brain <b>        rule (умолчание) | base2 | base | llm\n"
-		"  --name <имя>       имя в лобби (по умолчанию — имя версии ИИИ: rule — SI-R5.2-T, паспорт si/AI_PASSPORT.md)\n"
+		"  --name <имя>       имя в лобби (по умолчанию — имя версии ИИИ: rule — SI-R5.3-T, паспорт si/AI_PASSPORT.md)\n"
 		"  --clan <auto|random|0..7>  клан: auto (умолчание) — rule и llm выбирают по карте и своей высадке, как\n"
 		"                     ai_headless (обычно 4 — Musashi; враг за водой и моря у базы нет — 0, The Chosen), base и base2 — 0\n"
 		"  --passes <auto|1..50> заходов за ход: auto — если хост понимает (проба), иначе 1\n"
@@ -554,7 +554,7 @@ void cAiClient::connectSignals()
 }
 
 //------------------------------------------------------------------------------
-// Имя отправителя окно игры ставит само («SI-R5.2-T: …») — в тексте его нет. Себе сервер чат не пересылает:
+// Имя отправителя окно игры ставит само («SI-R5.3-T: …») — в тексте его нет. Себе сервер чат не пересылает:
 // сказанное — в журнал клиента (say).
 void cAiClient::chat (const std::string& text)
 {
@@ -585,7 +585,7 @@ void cAiClient::updateIdentity()
 		return std::any_of (lobbyPlayers.begin(), lobbyPlayers.end(), [&] (const cPlayerBasicData& p) { return p.getNr() != me && pred (p); });
 	};
 
-	// два ИИИ одной версии в одной игре: «SI-R5.2-T» и «SI-R5.2-T 2» — номер по порядку подключения (номеру игрока в
+	// два ИИИ одной версии в одной игре: «SI-R5.3-T» и «SI-R5.3-T 2» — номер по порядку подключения (номеру игрока в
 	// лобби), чтобы оба клиента считали одинаково и не менялись именами по кругу
 	const auto sameBase = [&] (const std::string& n) {
 		if (n == opt.name) return true;
