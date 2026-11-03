@@ -55,6 +55,9 @@ enum class eOrderType
 	// шаг 11 (новые приказы П2) — в конце списка
 	Disable,        // unitId (коммандос) + unitId2 (цель на соседней клетке) — выключить (cActionStealDisable)
 	Steal,          // unitId (коммандос) + unitId2 (машина на соседней клетке) — захватить
+	// И1 (бульдозер, механика Владыки 28.10.2026) — в конце списка
+	Clear,          // unitId (бульдозер на клетке с обломками) + position (клетка, для журнала) — расчистить: металл обломков —
+	                // в груз бульдозера, клетку снова можно застраивать (cActionClear: малые — 1 ход, большие — 4)
 };
 
 // шаг 11: что машина делает с unitId2 приказа Move в конце пути (cEndMoveAction движка)
@@ -105,6 +108,7 @@ inline const char* toString (eOrderType t)
 		case eOrderType::SetMining: return "SetMining";
 		case eOrderType::Disable: return "Disable";
 		case eOrderType::Steal: return "Steal";
+		case eOrderType::Clear: return "Clear";
 		default: return "None";
 	}
 }

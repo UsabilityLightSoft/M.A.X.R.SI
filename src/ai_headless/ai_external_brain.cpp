@@ -163,7 +163,8 @@ const std::pair<const char*, eOrderType> kTypes[] = {
 	{"ToggleSentry", eOrderType::ToggleSentry}, {"ToggleManualFire", eOrderType::ToggleManualFire},
 	{"ToggleLayMines", eOrderType::ToggleLayMines}, {"ToggleCollectMines", eOrderType::ToggleCollectMines},
 	{"Load", eOrderType::Load}, {"ActivateUnit", eOrderType::ActivateUnit}, {"FinishBuild", eOrderType::FinishBuild},
-	{"Disable", eOrderType::Disable}, {"Steal", eOrderType::Steal}};
+	{"Disable", eOrderType::Disable}, {"Steal", eOrderType::Steal},
+	{"Clear", eOrderType::Clear}}; // И1: бульдозер расчищает обломки под собой
 
 // JSON внешней программы → cOrder. false — приказ не разобран (why — почему).
 bool convertJ (const nlohmann::json& j, int playerId, const cModel& model, const cMapView& view, cOrder& o, std::string& why)
