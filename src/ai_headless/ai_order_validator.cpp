@@ -325,6 +325,27 @@ sValidationResult validateOrder (const cModel& model, const cOrder& o)
 					: ": нельзя (нужно: соседняя клетка, выстрел, цель чужая, не выключена, не в воздухе)"));
 			return r;
 		}
+		// --- И1: бульдозер расчищает обломки под собой (cActionClear) ---
+		case eOrderType::Clear:
+		{
+			auto* v = dynamic_cast<cVehicle*> (unit);
+			if (v == nullptr) return fail (r, "Clear: юнит — не машина");
+			if (!v->getStaticData().canClearArea) return fail (r, "Clear: машина не расчищает (только бульдозер)");
+			if (v->isUnitMoving()) return fail (r, "Clear: машина едет");
+			if (v->isUnitClearing()) return fail (r, "Clear: уже расчищает");
+			if (v->isUnitBuildingABuilding()) return fail (r, "Clear: машина строит");
+			const cMapView view (map, sharedPlayer (model, o.playerId));
+			const cBuilding* rubble = view.getField (v->getPosition()).getRubble();
+			if (rubble == nullptr) return fail (r, "Clear: под машиной нет обломков");
+			if (rubble->getIsBig())
+				for (const cPosition& off : {cPosition (0, 0), cPosition (1, 0), cPosition (0, 1), cPosition (1, 1)})
+				{
+					const cPosition c = rubble->getPosition() + off;
+					if (c != v->getPosition() && !view.possiblePlace (*v, c))
+						return fail (r, "Clear: большие обломки — их клетки заняты (бульдозер встаёт на все четыре)");
+				}
+			return r;
+		}
 		default:
 			return fail (r, "неизвестный тип приказа");
 	}

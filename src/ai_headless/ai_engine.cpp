@@ -763,6 +763,14 @@ void cAiEngine::executeOrder (cClient& client, const cOrder& o)
 			return;
 		}
 
+		// --- И1: бульдозер расчищает обломки под собой ---
+		case eOrderType::Clear:
+		{
+			auto* v = model.getVehicleFromID (o.unitId);
+			if (v != nullptr) client.startClearRubbles (*v);
+			return;
+		}
+
 		default:
 			return;
 	}
