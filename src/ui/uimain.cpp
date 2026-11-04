@@ -55,7 +55,8 @@ static int initSound()
 		Log.warn ("Could not init SDL_INIT_AUDIO");
 		Log.warn ("Sound won't be available!");
 		Log.warn (SDL_GetError());
-		cSettings::getInstance().setSoundEnabled (false);
+		// Do not persist the failure: the device may be busy or unplugged right now
+		// and work on the next start. The old code latched sound off forever.
 		return -1;
 	}
 
@@ -68,7 +69,7 @@ static int initSound()
 		Log.warn ("Could not init SDL_mixer:");
 		Log.warn (e.what());
 		Log.warn ("Sound won't be available!");
-		cSettings::getInstance().setSoundEnabled (false);
+		// Do not persist the failure: retry on the next start.
 		return -1;
 	}
 	Log.info ("Sound started");

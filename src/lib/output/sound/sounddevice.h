@@ -39,6 +39,9 @@ public:
 	void initialize (int frequency, int chunkSize);
 	void close();
 
+	/** True after a successful Mix_OpenAudio and before close. */
+	bool isAvailable() const { return available; }
+
 	cSoundChannel* getFreeSoundEffectChannel();
 	cSoundChannel* getFreeVoiceChannel();
 
@@ -68,6 +71,8 @@ private:
 	using SaveSdlMixMusicPointer = std::unique_ptr<Mix_Music, SdlMixMusikDeleter>;
 
 	SaveSdlMixMusicPointer musicStream;
+
+	bool available = false;
 
 	cSoundChannelGroup soundEffectChannelGroup;
 	cSoundChannelGroup voiceChannelGroup;

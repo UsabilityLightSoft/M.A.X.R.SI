@@ -61,10 +61,12 @@ void musicFinishedHookCallback()
 //------------------------------------------------------------------------------
 void cSoundDevice::initialize (int frequency, int chunkSize)
 {
+	available = false;
 	if (Mix_OpenAudio (frequency, AUDIO_S16, 2, chunkSize) != 0)
 	{
 		throw std::runtime_error (Mix_GetError());
 	}
+	available = true;
 
 	Mix_AllocateChannels (soundEffectGroupSize + voiceGroupSize);
 
@@ -81,13 +83,16 @@ void cSoundDevice::initialize (int frequency, int chunkSize)
 //------------------------------------------------------------------------------
 void cSoundDevice::close()
 {
+	if (!available) return;
+
 	Mix_CloseAudio();
+	available = false;
 }
 
 //------------------------------------------------------------------------------
 cSoundChannel* cSoundDevice::getFreeSoundEffectChannel()
 {
-	if (!cSettings::getInstance().isSoundEnabled() || cSettings::getInstance().isSoundMute()) return nullptr;
+	if (!available || !cSettings::getInstance().isSoundEnabled() || cSettings::getInstance().isSoundMute()) return nullptr;
 
 	return &soundEffectChannelGroup.getFreeChannel();
 }
@@ -95,7 +100,7 @@ cSoundChannel* cSoundDevice::getFreeSoundEffectChannel()
 //------------------------------------------------------------------------------
 cSoundChannel* cSoundDevice::getFreeVoiceChannel()
 {
-	if (!cSettings::getInstance().isSoundEnabled() || cSettings::getInstance().isVoiceMute()) return nullptr;
+	if (!available || !cSettings::getInstance().isSoundEnabled() || cSettings::getInstance().isVoiceMute()) return nullptr;
 
 	return &voiceChannelGroup.getFreeChannel();
 }
@@ -127,7 +132,7 @@ bool cSoundDevice::playVoice (const cSoundChunk& chunk)
 //------------------------------------------------------------------------------
 void cSoundDevice::startMusic (const std::filesystem::path& fileName)
 {
-	if (!cSettings::getInstance().isSoundEnabled() || cSettings::getInstance().isMusicMute()) return;
+	if (!available || !cSettings::getInstance().isSoundEnabled() || cSettings::getInstance().isMusicMute()) return;
 
 	musicStream = SaveSdlMixMusicPointer (Mix_LoadMUS (utf8::to_string (fileName).c_str()));
 	if (!musicStream)
@@ -155,18 +160,24 @@ void cSoundDevice::stopMusic()
 //------------------------------------------------------------------------------
 void cSoundDevice::setSoundEffectVolume (int volume)
 {
+	if (!available) return;
+
 	soundEffectChannelGroup.setVolume (volume);
 }
 
 //------------------------------------------------------------------------------
 void cSoundDevice::setVoiceVolume (int volume)
 {
+	if (!available) return;
+
 	voiceChannelGroup.setVolume (volume);
 }
 
 //------------------------------------------------------------------------------
 void cSoundDevice::setMusicVolume (int volume)
 {
+	if (!available) return;
+
 	Mix_VolumeMusic (volume);
 }
 

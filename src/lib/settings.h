@@ -291,7 +291,11 @@ private:
 
 	struct sSoundSettings
 	{
-		/** sound enabled */
+		/**
+		 * Sound is enabled. This is not a user setting: it is kept in memory only.
+		 * A failed start of the audio device (busy, unplugged, ...) must not disable
+		 * sound forever; the next start tries again.
+		 */
 		bool enabled = true;
 		/** volume music */
 		int musicVol = 128;
@@ -317,7 +321,8 @@ private:
 		{
 			// clang-format off
 			// See https://github.com/llvm/llvm-project/issues/44312
-			archive & NVP (enabled);
+			// "enabled" is deliberately not stored: it used to stay false after one
+			// failed audio start, and the preferences dialog had no way to turn it back on.
 			archive & NVP (musicVol);
 			archive & NVP (soundVol);
 			archive & NVP (voiceVol);

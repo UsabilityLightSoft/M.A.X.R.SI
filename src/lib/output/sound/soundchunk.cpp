@@ -19,12 +19,17 @@
 
 #include "output/sound/soundchunk.h"
 
+#include "output/sound/sounddevice.h"
 #include "utility/log.h"
 #include "utility/string/utf-8.h"
 
 //------------------------------------------------------------------------------
 void cSoundChunk::load (const std::filesystem::path& fileName)
 {
+	// Without an open audio device Mix_LoadWAV fails for every file and floods the
+	// log; the chunks stay empty and playSoundEffect/playVoice do nothing anyway.
+	if (!cSoundDevice::getInstance().isAvailable()) return;
+
 	sdlSound = SaveSdlMixChunkPointer (Mix_LoadWAV (utf8::to_string (fileName).c_str()));
 	if (sdlSound == nullptr)
 	{
