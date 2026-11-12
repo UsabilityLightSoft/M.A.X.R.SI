@@ -1,0 +1,47 @@
+name: exp-v9-pitfalls
+
+on:
+  push:
+    branches:
+      - 'exp/v9-pitfalls'
+
+jobs:
+  gcc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: g++ --version
+      - name: const auto& from a call with a temporary bound to a const reference parameter, -Wall -Werror (expected to fail)
+        run: |
+          if g++ -std=c++20 -Wall -Wextra -Werror -c exp/dangling_byref.cpp -o /tmp/a.o; then echo "UNEXPECTED: compiled"; exit 1; fi
+          echo "EXPECTED: refused"
+      - name: the same parameter by value (expected to compile)
+        run: g++ -std=c++20 -Wall -Wextra -Werror -c exp/dangling_byvalue.cpp -o /tmp/b.o
+      - name: by reference without -Wall, as the CMake build (expected to compile)
+        run: g++ -std=c++20 -c exp/dangling_byref.cpp -o /tmp/c.o
+      - name: shadowed local and uintmax_t to size_t with -Wall -Wextra -Werror (expected to compile)
+        run: |
+          g++ -std=c++20 -Wall -Wextra -Werror -c exp/shadow.cpp -o /tmp/d.o
+          g++ -std=c++20 -Wall -Wextra -Werror -c exp/filesize.cpp -o /tmp/e.o
+
+  msvc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: shadowed local, x86 /W4 /WX (expected to fail with C4456)
+        shell: pwsh
+        run: |
+          cmd /c exp\msvc.cmd x86 exp\shadow.cpp
+          if ($LASTEXITCODE -eq 0) { "UNEXPECTED: compiled"; exit 1 }
+          "EXPECTED: refused"; exit 0
+      - name: uintmax_t to size_t, x86 /W4 /WX (expected to fail)
+        shell: pwsh
+        run: |
+          cmd /c exp\msvc.cmd x86 exp\filesize.cpp
+          if ($LASTEXITCODE -eq 0) { "UNEXPECTED: compiled"; exit 1 }
+          "EXPECTED: refused"; exit 0
+      - name: uintmax_t to size_t, x64 /W4 /WX (expected to compile)
+        shell: pwsh
+        run: |
+          cmd /c exp\msvc.cmd x64 exp\filesize.cpp
+          exit $LASTEXITCODE
